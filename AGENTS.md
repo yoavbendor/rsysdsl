@@ -40,6 +40,9 @@ cargo run -q -p sysml-cli -- audit --files target/my_system.sysml --stdlib --str
 
 # 5. Export ASPICE bidirectional traceability matrix (Markdown or CSV)
 cargo run -q -p sysml-cli -- trace-matrix --files target/my_system.sysml --format markdown
+
+# 6. Generate a standalone interactive offline HTML viewer (opens directly in Chrome/Edge; 0 VS Code extensions or internet)
+cargo run -q -p sysml-cli -- view target/my_system.sysml --view interconnection -o target/my_system.html
 ```
 
 ---

@@ -343,3 +343,109 @@ fn cli_safety_report_builtin_and_files_passes() {
     assert_eq!(fval["single_point_fault_count"], 0);
     assert_eq!(fval["dual_channel_cut_set_count"], 1);
 }
+
+#[test]
+fn cli_view_generates_standalone_html_for_files_and_builtin_models() {
+    let dir = tempfile::tempdir().unwrap();
+
+    // 1. Built-in embedded-flight-controller with --view state (dark default theme)
+    let fc_html_path = dir.path().join("fc.html");
+    let fc_out = Command::new(bin_path())
+        .args([
+            "view",
+            "--model",
+            "embedded-flight-controller",
+            "--view",
+            "state",
+            "-o",
+        ])
+        .arg(&fc_html_path)
+        .output()
+        .expect("run rsysdsl view built-in model");
+    assert_eq!(
+        fc_out.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&fc_out.stderr)
+    );
+    let fc_json: serde_json::Value =
+        serde_json::from_slice(&fc_out.stdout).expect("stdout must be valid JSON");
+    assert_eq!(fc_json["ok"], true);
+    assert_eq!(fc_json["view"], "state");
+    assert_eq!(fc_json["theme"], "dark");
+    assert!(fc_html_path.exists());
+    let fc_html = std::fs::read_to_string(&fc_html_path).unwrap();
+    assert!(fc_html.contains("<!DOCTYPE html>"));
+    assert!(fc_html.contains("SysMLDiagramRuntime.mount"));
+    assert!(fc_html.contains("\"currentView\":\"state\""));
+    assert!(fc_html.contains("ControllerMode"));
+    assert!(fc_html.contains("data-theme=\"dark\""));
+
+    // 2. Lift a .sysml file and render interconnection (ibd) view in light theme
+    let demo_sysml_path = dir.path().join("demo.sysml");
+    std::fs::write(
+        &demo_sysml_path,
+        r#"package ThermalDemo {
+    port def TempPort {
+        out item t : Real;
+    }
+    part def Sensor {
+        port out_p : TempPort;
+    }
+    part def Controller {
+        port in_p : ~TempPort;
+    }
+    part def Monitor {
+        part s : Sensor;
+        part c : Controller;
+        connection link connect s.out_p to c.in_p;
+    }
+}
+"#,
+    )
+    .unwrap();
+
+    let demo_html_path = dir.path().join("demo.html");
+    let demo_out = Command::new(bin_path())
+        .arg("view")
+        .arg(&demo_sysml_path)
+        .args(["--view", "interconnection", "--theme", "light", "-o"])
+        .arg(&demo_html_path)
+        .output()
+        .expect("run rsysdsl view on .sysml file");
+    assert_eq!(
+        demo_out.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&demo_out.stderr)
+    );
+    let demo_json: serde_json::Value =
+        serde_json::from_slice(&demo_out.stdout).expect("stdout must be valid JSON");
+    assert_eq!(demo_json["ok"], true);
+    assert_eq!(demo_json["view"], "ibd");
+    assert_eq!(demo_json["theme"], "light");
+    let demo_html = std::fs::read_to_string(&demo_html_path).unwrap();
+    assert!(demo_html.contains("data-theme=\"light\""));
+    assert!(demo_html.contains("\"currentView\":\"ibd\""));
+    assert!(demo_html.contains("ThermalDemo"));
+    assert!(demo_html.contains("s.out_p"));
+
+    // 3. --json-snapshot prints valid ViewerSnapshot JSON with "command": "update"
+    let snap_out = Command::new(bin_path())
+        .arg("view")
+        .arg(&demo_sysml_path)
+        .args(["--view", "interconnection", "--json-snapshot"])
+        .output()
+        .expect("run rsysdsl view --json-snapshot");
+    assert_eq!(
+        snap_out.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&snap_out.stderr)
+    );
+    let snap_json: serde_json::Value =
+        serde_json::from_slice(&snap_out.stdout).expect("snapshot must be valid JSON");
+    assert_eq!(snap_json["command"], "update");
+    assert_eq!(snap_json["currentView"], "ibd");
+}
+

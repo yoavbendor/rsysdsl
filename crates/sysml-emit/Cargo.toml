@@ -7,8 +7,9 @@ repository.workspace = true
 description = "Deterministic 1:1 SysML v2 textual emitter, Open-MBEE validator with OMG stdlib, traceability audit, and ASPICE matrix generator"
 
 [features]
-default = ["validate"]
+default = ["validate", "viewer"]
 validate = ["dep:sysmlv2-syntax", "dep:sysmlv2-model"]
+viewer = []
 
 [dependencies]
 sysml-ir = { workspace = true }

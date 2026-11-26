@@ -8,6 +8,7 @@ pub mod safety_report;
 pub mod trace;
 #[cfg(feature = "validate")]
 pub mod validate;
+pub mod viewer;
 
 #[cfg(feature = "validate")]
 pub use audit::{
@@ -27,4 +28,10 @@ pub use trace::{
 pub use validate::{
     discover_omg_stdlib, validate_sysml_source, validate_sysml_source_with_stdlib,
     validate_sysml_units, validate_sysml_units_with_lib, ValidationDiagnostic, ValidationReport,
+};
+#[cfg(feature = "viewer")]
+pub use viewer::render_standalone_html;
+pub use viewer::{
+    build_viewer_snapshot, ViewerElement, ViewerOptions, ViewerRelationship, ViewerSnapshot,
+    ViewerTheme, ViewerView,
 };
