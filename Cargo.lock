@@ -491,6 +491,7 @@ dependencies = [
  "apollo11-model",
  "apollo11-sim",
  "clap",
+ "embedded-flight-controller",
  "serde",
  "serde_json",
  "sysml-emit",

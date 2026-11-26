@@ -12,8 +12,9 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use sysml_emit::{
-    audit_model_with_lib, audit_units_with_lib, build_trace_matrix, discover_omg_stdlib,
-    emit_model, render_trace_matrix_csv, render_trace_matrix_markdown, validate_sysml_units,
+    audit_model_with_lib, audit_units_with_lib, build_safety_report, build_trace_matrix,
+    discover_omg_stdlib, emit_model, iso26262_metadata_package, render_safety_report_markdown,
+    render_trace_matrix_csv, render_trace_matrix_markdown, validate_sysml_units,
     validate_sysml_units_with_lib,
 };
 use sysml_lift::{
@@ -153,6 +154,25 @@ enum Commands {
         #[arg(long)]
         strict: bool,
     },
+
+    /// Generate an ISO 26262 Safety, FMEA Ranking & Minimal Fault Cut-Set report (JSON or Markdown).
+    SafetyReport {
+        /// Built-in model name (ignored when `--files` is provided).
+        #[arg(long, default_value = "embedded-flight-controller")]
+        model: String,
+
+        /// Optional `.sysml` input files to lift and analyze directly.
+        #[arg(long, num_args = 1..)]
+        files: Vec<PathBuf>,
+
+        /// Output format: json or markdown.
+        #[arg(long, value_enum, default_value = "json")]
+        format: SafetyFormat,
+
+        /// Optional file path to write the rendered report.
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -167,6 +187,12 @@ enum TraceFormat {
     Json,
     Markdown,
     Csv,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum SafetyFormat {
+    Json,
+    Markdown,
 }
 
 fn print_json<T: Serialize>(val: &T, pretty: bool) {
@@ -244,16 +270,94 @@ fn main() -> ExitCode {
             lib,
             strict,
         } => cmd_validate(&files, stdlib, lib, strict, cli.pretty),
+        Commands::SafetyReport {
+            model,
+            files,
+            format,
+            output,
+        } => cmd_safety_report(&model, &files, format, output, cli.pretty),
     }
 }
 
 fn resolve_builtin_model(model_name: &str) -> Result<sysml_ir::Model, String> {
     match model_name {
         "apollo11-model" => Ok(apollo11_model::build_apollo11_model()),
+        "embedded-flight-controller" => Ok(sysml_ir::Model::new(vec![
+            iso26262_metadata_package(),
+            embedded_flight_controller::flight_controller::sysml_package(),
+        ])),
         other => Err(format!(
-            "unknown model '{other}' (available: apollo11-model)"
+            "unknown model '{other}' (available: apollo11-model, embedded-flight-controller)"
         )),
     }
+}
+
+fn cmd_safety_report(
+    model_name: &str,
+    files: &[PathBuf],
+    format: SafetyFormat,
+    output: Option<PathBuf>,
+    pretty: bool,
+) -> ExitCode {
+    let (label, model) = if !files.is_empty() {
+        let units = match read_units(files) {
+            Ok(u) => u,
+            Err(e) => {
+                eprintln!("error: {e}");
+                return ExitCode::from(2);
+            }
+        };
+        let lifted = lift_sysml_units(&units);
+        if !lifted.parse_errors.is_empty() {
+            for err in &lifted.parse_errors {
+                eprintln!("parse error: {err}");
+            }
+            return ExitCode::from(2);
+        }
+        let label = if files.len() == 1 {
+            files[0].display().to_string()
+        } else {
+            format!("{} files", files.len())
+        };
+        (label, lifted.model)
+    } else {
+        let model = match resolve_builtin_model(model_name) {
+            Ok(m) => m,
+            Err(e) => {
+                eprintln!("error: {e}");
+                return ExitCode::from(2);
+            }
+        };
+        (model_name.to_string(), model)
+    };
+
+    let report = build_safety_report(label, &model);
+    let rendered = match format {
+        SafetyFormat::Json => {
+            let text = if pretty {
+                serde_json::to_string_pretty(&report)
+            } else {
+                serde_json::to_string(&report)
+            };
+            match text {
+                Ok(s) => format!("{s}\n"),
+                Err(e) => {
+                    eprintln!("error: failed to serialize safety report: {e}");
+                    return ExitCode::from(2);
+                }
+            }
+        }
+        SafetyFormat::Markdown => render_safety_report_markdown(&report),
+    };
+
+    if let Some(path) = &output {
+        if let Err(e) = fs::write(path, &rendered) {
+            eprintln!("error: failed to write '{}': {e}", path.display());
+            return ExitCode::from(2);
+        }
+    }
+    print!("{rendered}");
+    ExitCode::SUCCESS
 }
 
 fn cmd_emit(model_name: &str, output: Option<PathBuf>, raw: bool, pretty: bool) -> ExitCode {

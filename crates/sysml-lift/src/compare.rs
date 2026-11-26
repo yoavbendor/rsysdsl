@@ -47,6 +47,8 @@ pub struct SemanticGraph {
     pub calc_defs: BTreeSet<String>,
     pub analysis_defs: BTreeSet<String>,
     pub analysis_usages: BTreeSet<String>,
+    pub portions: BTreeSet<String>,
+    pub views: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -199,6 +201,9 @@ fn extract_pkg(pkg: &Package, prefix: &str, g: &mut SemanticGraph) {
                         req.type_name.as_deref().unwrap_or("")
                     ));
                 }
+                for po in &pu.portions {
+                    record_portion(&qp, po, g);
+                }
             }
             PackageMember::PortDef(p) => {
                 let qp = format!("{qpkg}::{}", p.name);
@@ -299,7 +304,7 @@ fn extract_pkg(pkg: &Package, prefix: &str, g: &mut SemanticGraph) {
                     ));
                 }
             }
-            PackageMember::CalcDef(c) => {
+            PackageMember::CalcDef(c) | PackageMember::CalcUsage(c) => {
                 let qc = format!("{qpkg}::{}", c.name);
                 let pnames = c
                     .params
@@ -309,6 +314,15 @@ fn extract_pkg(pkg: &Package, prefix: &str, g: &mut SemanticGraph) {
                     .join(",");
                 g.calc_defs
                     .insert(format!("{qc}({pnames}) = {}", norm_ws(&c.result_expr)));
+            }
+            PackageMember::AttributeDef(a) => {
+                let qa = format!("{qpkg}::{}", a.name);
+                for sub in &a.attributes {
+                    record_attr(&qa, sub, g);
+                }
+            }
+            PackageMember::AttributeUsage(a) => {
+                record_attr(&qpkg, a, g);
             }
             PackageMember::AnalysisDef(a) => {
                 let qa = format!("{qpkg}::{}", a.name);
@@ -327,8 +341,50 @@ fn extract_pkg(pkg: &Package, prefix: &str, g: &mut SemanticGraph) {
                     g.constraints.insert(format!("{qa}: {}", norm_ws(c)));
                 }
             }
+            PackageMember::ViewUsage(v) => {
+                g.views.insert(format!("{qpkg}::{}", v.name));
+            }
             _ => {}
         }
+    }
+}
+
+fn record_portion(owner: &str, p: &PortionUsage, g: &mut SemanticGraph) {
+    let kind = match p.kind {
+        PortionKind::Timeslice => "timeslice",
+        PortionKind::Snapshot => "snapshot",
+    };
+    let qp = format!("{owner}.{}", norm_simple_ref(&p.name));
+    g.portions.insert(format!("{kind}:{qp}"));
+    for c in &p.assert_constraints {
+        g.constraints.insert(format!("{qp}: {}", norm_ws(c)));
+    }
+    for a in &p.attributes {
+        record_attr(&qp, a, g);
+    }
+    for sub in &p.parts {
+        let sname = sub
+            .name
+            .as_deref()
+            .or_else(|| sub.redefines.first().map(|s| s.as_str()))
+            .unwrap_or("_");
+        let qs = format!("{qp}.{}", norm_simple_ref(sname));
+        for a in &sub.attributes {
+            record_attr(&qs, a, g);
+        }
+        for perf in &sub.performs {
+            g.perform_actions.insert(format!(
+                "{qs} perform {}",
+                perf.references
+                    .as_deref()
+                    .or(perf.name.as_deref())
+                    .map(norm_simple_ref)
+                    .unwrap_or_default()
+            ));
+        }
+    }
+    for child in &p.portions {
+        record_portion(&qp, child, g);
     }
 }
 
@@ -345,7 +401,11 @@ fn record_attr(owner: &str, a: &AttributeUsage, g: &mut SemanticGraph) {
         (Some(v), None) => format!("={}", norm_ws(v)),
         _ => String::new(),
     };
-    g.attributes.insert(format!("{owner}.{key}{val}"));
+    let qa = format!("{owner}.{key}");
+    g.attributes.insert(format!("{qa}{val}"));
+    for sub in &a.nested_attributes {
+        record_attr(&qa, sub, g);
+    }
 }
 
 fn diff_set(name: &str, orig: &BTreeSet<String>, reemit: &BTreeSet<String>) -> CategoryDiff {
@@ -397,6 +457,8 @@ pub fn compare_sysml_roundtrip(
         diff_set("calc_defs", &og.calc_defs, &rg.calc_defs),
         diff_set("analysis_defs", &og.analysis_defs, &rg.analysis_defs),
         diff_set("analysis_usages", &og.analysis_usages, &rg.analysis_usages),
+        diff_set("portions", &og.portions, &rg.portions),
+        diff_set("views", &og.views, &rg.views),
     ];
 
     let total_original_facts: usize = categories.iter().map(|c| c.original_count).sum();

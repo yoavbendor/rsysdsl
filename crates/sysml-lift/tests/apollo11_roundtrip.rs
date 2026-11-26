@@ -245,15 +245,18 @@ fn gate2_and_gate3_full_apollo11_corpus_audit() {
         "Parse errors on Apollo 11 corpus: {:?}",
         lifted.parse_errors
     );
-    assert!(
-        lifted.unsupported.len() <= 32,
-        "Expected <= 32 unsupported constructs across full 28-file Apollo 11 corpus, got {}",
-        lifted.unsupported.len()
+    assert_eq!(
+        lifted.unsupported.len(),
+        0,
+        "Expected 0 unsupported constructs across full 28-file Apollo 11 corpus (100.0%), got: {:#?}",
+        lifted.unsupported
     );
-    assert_eq!(lifted.stats.calc_defs, 14);
+    assert_eq!(lifted.stats.calc_defs, 15);
     assert_eq!(lifted.stats.analysis_defs, 3);
     assert_eq!(lifted.stats.analysis_usages, 5);
     assert_eq!(lifted.stats.comments, 3);
+    assert!(lifted.stats.portions >= 60);
+    assert_eq!(lifted.stats.views, 1);
     assert!(lifted.stats.refinements >= 42);
 
     let reemitted = emit_model(&lifted.model);
@@ -270,7 +273,11 @@ fn gate2_and_gate3_full_apollo11_corpus_audit() {
         "Full Apollo 11 corpus IR round-trip mismatch:\n{}",
         serde_json::to_string_pretty(&diff).unwrap()
     );
-    assert!(diff.total_original_facts >= 2600);
+    assert!(diff.total_original_facts >= 2800);
+    eprintln!(
+        "FULL 28-FILE APOLLO 11 CORPUS: 0 unsupported (100.0%), {} / {} semantic facts matched, stats={:?}",
+        diff.total_original_facts, diff.total_reemitted_facts, lifted.stats
+    );
 }
 
 fn collect_sysml_files(base: &Path, dir: &Path, out: &mut Vec<String>) {

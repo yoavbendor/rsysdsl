@@ -49,6 +49,8 @@ pub struct LiftStats {
     pub calc_defs: usize,
     pub analysis_defs: usize,
     pub analysis_usages: usize,
+    pub portions: usize,
+    pub views: usize,
     pub unsupported_count: usize,
 }
 
@@ -478,11 +480,23 @@ impl LifterCtx {
                     is_abstract: def.prefix.is_abstract,
                     doc: None,
                     specializes: specs,
+                    attributes: Vec::new(),
                 };
                 if let Some(body) = &def.body {
                     for m in body {
-                        if let ast::MemberKind::Doc(d) = &m.kind {
-                            append_doc(&mut ad.doc, &d.body);
+                        match &m.kind {
+                            ast::MemberKind::Doc(d) => append_doc(&mut ad.doc, &d.body),
+                            ast::MemberKind::Usage(u)
+                                if u.kind == ast::UsageKind::Attribute
+                                    || u.kind == ast::UsageKind::Default =>
+                            {
+                                self.stats.attributes += 1;
+                                let mut au = lift_attribute_usage(u);
+                                au.is_private = matches!(m.visibility, Some(ast::Visibility::Private));
+                                au.is_keywordless = u.kind == ast::UsageKind::Default;
+                                ad.attributes.push(au);
+                            }
+                            _ => {}
                         }
                     }
                 }
@@ -661,16 +675,18 @@ impl LifterCtx {
                                 rd.attributes.push(lift_attribute_usage(u));
                             }
                             ast::MemberKind::Usage(u) if u.kind == ast::UsageKind::Metadata => {
-                                // Extract `@Rationale { text = "..."; }`
+                                // Extract `@Rationale { text = "..."; }` or `@SafetyGoal { ... }`
                                 if let Some(txt) = extract_rationale_text(u) {
                                     rd.rationale = Some(txt);
+                                } else if let Some(sg) = extract_safety_goal_meta(u) {
+                                    rd.safety_goal = Some(sg);
                                 } else {
                                     self.record_unsupported(
                                         file,
                                         pkg_name,
                                         &name,
                                         "metadata_usage",
-                                        "non-Rationale metadata annotation",
+                                        "unsupported requirement metadata annotation",
                                         mline,
                                     );
                                 }
@@ -714,9 +730,14 @@ impl LifterCtx {
             }
             ast::DefKind::Calc => {
                 self.stats.calc_defs += 1;
-                Some(PackageMember::CalcDef(
-                    self.lift_calc_def(file, pkg_name, &name, lines, def),
-                ))
+                Some(PackageMember::CalcDef(self.lift_calc_body(
+                    file,
+                    pkg_name,
+                    def.id.short_name.as_ref().map(|n| n.value.clone()),
+                    &name,
+                    lines,
+                    def.body.as_deref(),
+                )))
             }
             ast::DefKind::Analysis => {
                 self.stats.analysis_defs += 1;
@@ -738,19 +759,21 @@ impl LifterCtx {
         }
     }
 
-    fn lift_calc_def(
+    fn lift_calc_body(
         &mut self,
         file: &str,
         pkg_name: &str,
+        short_name: Option<String>,
         name: &str,
         lines: &LineIndex,
-        def: &ast::Definition,
+        body: Option<&[ast::Member]>,
     ) -> CalcDef {
         let mut cd = CalcDef {
+            short_name,
             name: name.to_string(),
             ..Default::default()
         };
-        if let Some(body) = &def.body {
+        if let Some(body) = body {
             for m in body {
                 let mline = lines.line_col(m.span.start).line as usize;
                 match &m.kind {
@@ -992,6 +1015,38 @@ impl LifterCtx {
                     self.lift_analysis_usage(file, pkg_name, &name, lines, u),
                 ))
             }
+            ast::UsageKind::Attribute => {
+                self.stats.attributes += 1;
+                Some(PackageMember::AttributeUsage(lift_attribute_usage(u)))
+            }
+            ast::UsageKind::Calc => {
+                self.stats.calc_defs += 1;
+                Some(PackageMember::CalcUsage(self.lift_calc_body(
+                    file,
+                    pkg_name,
+                    u.declaration.id.short_name.as_ref().map(|n| n.value.clone()),
+                    &name,
+                    lines,
+                    u.body.as_deref(),
+                )))
+            }
+            ast::UsageKind::View => {
+                self.stats.views += 1;
+                let (ty, _) = first_typed_by(&u.declaration);
+                let mut doc = None;
+                if let Some(body) = &u.body {
+                    for m in body {
+                        if let ast::MemberKind::Doc(d) = &m.kind {
+                            append_doc(&mut doc, &d.body);
+                        }
+                    }
+                }
+                Some(PackageMember::ViewUsage(ViewUsage {
+                    name,
+                    type_name: ty,
+                    doc,
+                }))
+            }
             other => {
                 self.record_unsupported(
                     file,
@@ -1072,6 +1127,23 @@ impl LifterCtx {
                 ast::UsageKind::Satisfy => {
                     self.stats.satisfy_links += 1;
                     pd.satisfies.push(lift_satisfy(u));
+                    LastMemberKind::Other
+                }
+                ast::UsageKind::Metadata => {
+                    if let Some(fmea) = extract_fmea_meta(u) {
+                        pd.fmea.push(fmea);
+                    } else if let Some(decomp) = extract_asil_decomp_meta(u) {
+                        pd.asil_decompositions.push(decomp);
+                    } else {
+                        self.record_unsupported(
+                            file,
+                            pkg_name,
+                            part_name,
+                            "part_member:Metadata",
+                            "unsupported part metadata annotation",
+                            line,
+                        );
+                    }
                     LastMemberKind::Other
                 }
                 ast::UsageKind::Default => {
@@ -1170,6 +1242,114 @@ impl LifterCtx {
         }
     }
 
+    fn lift_portion_usage(
+        &mut self,
+        file: &str,
+        pkg_name: &str,
+        parent: &str,
+        lines: &LineIndex,
+        is_then: bool,
+        kind: PortionKind,
+        u: &ast::Usage,
+    ) -> PortionUsage {
+        self.stats.portions += 1;
+        let name = u
+            .declaration
+            .id
+            .name
+            .as_ref()
+            .map(|n| n.value.clone())
+            .unwrap_or_else(|| "unnamed".to_string());
+        let label = format!("{parent}.{name}");
+        let mut po = PortionUsage {
+            kind,
+            is_then,
+            name,
+            type_names: all_typed_by(&u.declaration),
+            subsets: all_subsets(&u.declaration),
+            doc: None,
+            assert_constraints: Vec::new(),
+            attributes: Vec::new(),
+            parts: Vec::new(),
+            performs: Vec::new(),
+            portions: Vec::new(),
+        };
+        if let Some(body) = &u.body {
+            for m in body {
+                let line = lines.line_col(m.span.start).line as usize;
+                match &m.kind {
+                    ast::MemberKind::Doc(d) => append_doc(&mut po.doc, &d.body),
+                    ast::MemberKind::Usage(sub) => {
+                        if let Some(p) = sub.prefix.portion {
+                            let child_kind = match p {
+                                ast::PortionKind::Timeslice => PortionKind::Timeslice,
+                                ast::PortionKind::Snapshot => PortionKind::Snapshot,
+                            };
+                            po.portions.push(self.lift_portion_usage(
+                                file,
+                                pkg_name,
+                                &label,
+                                lines,
+                                m.leading_then,
+                                child_kind,
+                                sub,
+                            ));
+                            continue;
+                        }
+                        match sub.kind {
+                            ast::UsageKind::Attribute => {
+                                self.stats.attributes += 1;
+                                po.attributes.push(lift_attribute_usage(sub));
+                            }
+                            ast::UsageKind::Part => {
+                                self.stats.part_usages += 1;
+                                po.parts.push(
+                                    self.lift_part_usage(file, pkg_name, &label, lines, sub),
+                                );
+                            }
+                            ast::UsageKind::Perform => {
+                                self.stats.perform_actions += 1;
+                                po.performs.push(lift_perform_action(sub));
+                            }
+                            ast::UsageKind::AssertConstraint => {
+                                if let Some(expr) = extract_constraint_expr(sub) {
+                                    po.assert_constraints.push(expr);
+                                }
+                            }
+                            ast::UsageKind::Default => {
+                                self.stats.attributes += 1;
+                                let mut attr = lift_attribute_usage(sub);
+                                attr.is_keywordless = true;
+                                po.attributes.push(attr);
+                            }
+                            other => {
+                                self.record_unsupported(
+                                    file,
+                                    pkg_name,
+                                    &label,
+                                    format!("portion_member:{other:?}"),
+                                    "unsupported portion member usage",
+                                    line,
+                                );
+                            }
+                        }
+                    }
+                    other => {
+                        self.record_unsupported(
+                            file,
+                            pkg_name,
+                            &label,
+                            member_kind_label(other),
+                            "unsupported portion member",
+                            line,
+                        );
+                    }
+                }
+            }
+        }
+        po
+    }
+
     fn lift_part_usage(
         &mut self,
         file: &str,
@@ -1201,6 +1381,7 @@ impl LifterCtx {
             performs: Vec::new(),
             connections: Vec::new(),
             requirements: Vec::new(),
+            portions: Vec::new(),
         };
 
         if let Some(body) = &u.body {
@@ -1214,19 +1395,19 @@ impl LifterCtx {
                     }
                     ast::MemberKind::Usage(sub) => {
                         if let Some(p) = sub.prefix.portion {
-                            self.record_unsupported(
+                            let kind = match p {
+                                ast::PortionKind::Timeslice => PortionKind::Timeslice,
+                                ast::PortionKind::Snapshot => PortionKind::Snapshot,
+                            };
+                            pu.portions.push(self.lift_portion_usage(
                                 file,
                                 pkg_name,
                                 &label,
-                                format!("portion:{p:?}"),
-                                sub.declaration
-                                    .id
-                                    .name
-                                    .as_ref()
-                                    .map(|n| n.value.clone())
-                                    .unwrap_or_else(|| format!("{p:?}")),
-                                line,
-                            );
+                                lines,
+                                m.leading_then,
+                                kind,
+                                sub,
+                            ));
                             last_kind = LastMemberKind::Other;
                             continue;
                         }
@@ -1638,10 +1819,21 @@ fn lift_direction(d: ast::FeatureDirection) -> Direction {
 fn lift_attribute_usage(u: &ast::Usage) -> AttributeUsage {
     let (ty, _) = first_typed_by(&u.declaration);
     let mut doc = None;
+    let mut nested_attributes = Vec::new();
     if let Some(body) = &u.body {
         for m in body {
-            if let ast::MemberKind::Doc(d) = &m.kind {
-                append_doc(&mut doc, &d.body);
+            match &m.kind {
+                ast::MemberKind::Doc(d) => append_doc(&mut doc, &d.body),
+                ast::MemberKind::Usage(sub)
+                    if sub.kind == ast::UsageKind::Attribute
+                        || sub.kind == ast::UsageKind::Default =>
+                {
+                    let mut au = lift_attribute_usage(sub);
+                    au.is_private = matches!(m.visibility, Some(ast::Visibility::Private));
+                    au.is_keywordless = sub.kind == ast::UsageKind::Default;
+                    nested_attributes.push(au);
+                }
+                _ => {}
             }
         }
     }
@@ -1670,7 +1862,10 @@ fn lift_attribute_usage(u: &ast::Usage) -> AttributeUsage {
     };
 
     AttributeUsage {
+        short_name: u.declaration.id.short_name.as_ref().map(|n| n.value.clone()),
         name: u.declaration.id.name.as_ref().map(|n| n.value.clone()),
+        is_private: false,
+        is_nonunique: u.declaration.is_nonunique,
         type_name: ty,
         subsets: all_subsets(&u.declaration),
         redefines: all_redefines(&u.declaration),
@@ -1680,6 +1875,7 @@ fn lift_attribute_usage(u: &ast::Usage) -> AttributeUsage {
         unit,
         doc,
         is_keywordless: false,
+        nested_attributes,
     }
 }
 
@@ -1959,27 +2155,82 @@ fn extract_rationale_text(u: &ast::Usage) -> Option<String> {
     if ty.as_deref() != Some("Rationale") {
         return None;
     }
+    extract_metadata_fields(u).get("text").cloned()
+}
+
+fn extract_metadata_fields(u: &ast::Usage) -> std::collections::BTreeMap<String, String> {
+    let mut map = std::collections::BTreeMap::new();
     if let Some(body) = &u.body {
         for m in body {
             if let ast::MemberKind::Usage(sub) = &m.kind {
-                if sub
+                let key = sub
                     .declaration
                     .id
                     .name
                     .as_ref()
-                    .map(|n| n.value.as_str())
-                    == Some("text")
-                {
-                    if let Some(fv) = &sub.value {
-                        if let ast::ExprKind::Literal(ast::Literal::String(s)) = &fv.expr.kind {
-                            return Some(s.clone());
-                        }
-                    }
+                    .map(|n| n.value.trim_matches('\'').to_string());
+                if let (Some(k), Some(fv)) = (key, &sub.value) {
+                    let val = match &fv.expr.kind {
+                        ast::ExprKind::Literal(ast::Literal::String(s)) => s.clone(),
+                        ast::ExprKind::Literal(ast::Literal::Integer(i)) => i.to_string(),
+                        _ => print_expr_source(&fv.expr, Dialect::Sysml),
+                    };
+                    map.insert(k, val);
                 }
             }
         }
     }
-    None
+    map
+}
+
+fn extract_safety_goal_meta(u: &ast::Usage) -> Option<SafetyGoalMeta> {
+    let (ty, _) = first_typed_by(&u.declaration);
+    let simple = ty.as_deref()?.rsplit("::").next()?;
+    if simple != "SafetyGoal" {
+        return None;
+    }
+    let fields = extract_metadata_fields(u);
+    Some(SafetyGoalMeta {
+        asil: fields.get("asil").cloned().unwrap_or_default(),
+        safe_state: fields.get("safeState").cloned().unwrap_or_default(),
+        ftti_ms: fields
+            .get("fttiMs")
+            .and_then(|s| s.parse::<u32>().ok())
+            .unwrap_or(0),
+    })
+}
+
+fn extract_fmea_meta(u: &ast::Usage) -> Option<FmeaEntry> {
+    let (ty, _) = first_typed_by(&u.declaration);
+    let simple = ty.as_deref()?.rsplit("::").next()?;
+    if simple != "FMEA" {
+        return None;
+    }
+    let fields = extract_metadata_fields(u);
+    Some(FmeaEntry {
+        failure_mode: fields.get("failureMode").cloned().unwrap_or_default(),
+        effect: fields.get("effect").cloned().unwrap_or_default(),
+        severity: fields.get("severity").and_then(|s| s.parse().ok()).unwrap_or(1),
+        occurrence: fields.get("occurrence").and_then(|s| s.parse().ok()).unwrap_or(1),
+        detection: fields.get("detection").and_then(|s| s.parse().ok()).unwrap_or(1),
+        asil: fields.get("asil").cloned(),
+    })
+}
+
+fn extract_asil_decomp_meta(u: &ast::Usage) -> Option<AsilDecompositionMeta> {
+    let (ty, _) = first_typed_by(&u.declaration);
+    let simple = ty.as_deref()?.rsplit("::").next()?;
+    if simple != "AsilDecomposition" {
+        return None;
+    }
+    let fields = extract_metadata_fields(u);
+    Some(AsilDecompositionMeta {
+        goal: fields.get("goal").cloned().unwrap_or_default(),
+        left_part: fields.get("leftPart").cloned().unwrap_or_default(),
+        left_asil: fields.get("leftAsil").cloned().unwrap_or_default(),
+        right_part: fields.get("rightPart").cloned().unwrap_or_default(),
+        right_asil: fields.get("rightAsil").cloned().unwrap_or_default(),
+    })
 }
 
 fn member_kind_label(k: &ast::MemberKind) -> String {

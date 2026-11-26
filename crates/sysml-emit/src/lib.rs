@@ -4,6 +4,7 @@
 #[cfg(feature = "validate")]
 pub mod audit;
 pub mod emit;
+pub mod safety_report;
 pub mod trace;
 #[cfg(feature = "validate")]
 pub mod validate;
@@ -14,6 +15,10 @@ pub use audit::{
     AuditReport,
 };
 pub use emit::{emit_model, emit_package, escape_sysml_name, iso26262_metadata_package};
+pub use safety_report::{
+    build_safety_report, render_safety_report_markdown, AsilDecompositionSummary, FaultCutSet,
+    FmeaSummary, SafetyGoalSummary, SafetyReport,
+};
 pub use trace::{
     build_trace_matrix, render_trace_matrix_csv, render_trace_matrix_markdown, TraceMatrix,
     TraceMatrixSummary, TraceRow,

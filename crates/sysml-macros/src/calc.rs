@@ -127,6 +127,7 @@ fn expand_calc_struct(args: TokenStream, mut st: ItemStruct) -> syn::Result<Toke
         impl ::sysml_dsl::ir::SysmlCalc for #ident {
             fn calc_def() -> ::sysml_dsl::ir::CalcDef {
                 ::sysml_dsl::ir::CalcDef {
+                    short_name: ::std::option::Option::None,
                     name: ::std::string::String::from(#sysml_name),
                     doc: #doc_tok,
                     params: ::std::vec![#(#param_tokens),*],
@@ -323,6 +324,7 @@ fn expand_calc_fn(args: TokenStream, mut func: ItemFn) -> syn::Result<TokenStrea
         impl ::sysml_dsl::ir::SysmlCalc for #marker_ident {
             fn calc_def() -> ::sysml_dsl::ir::CalcDef {
                 ::sysml_dsl::ir::CalcDef {
+                    short_name: ::std::option::Option::None,
                     name: ::std::string::String::from(#sysml_name),
                     doc: #doc_tok,
                     params: ::std::vec![#(#param_tokens),*],

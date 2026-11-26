@@ -260,3 +260,86 @@ fn cli_audit_with_files_stdlib_strict_passes() {
     assert_eq!(val["validation_warnings"], 0);
     assert_eq!(val["orphan_requirements"].as_array().unwrap().len(), 0);
 }
+
+#[test]
+fn cli_safety_report_builtin_and_files_passes() {
+    // 1. Built-in embedded-flight-controller JSON report
+    let json_out = Command::new(bin_path())
+        .args([
+            "safety-report",
+            "--model",
+            "embedded-flight-controller",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("run rsysdsl safety-report json");
+    assert_eq!(
+        json_out.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&json_out.stderr)
+    );
+    let val: serde_json::Value = serde_json::from_slice(&json_out.stdout).unwrap();
+    assert_eq!(val["total_safety_goals"], 1);
+    assert_eq!(val["total_decompositions"], 1);
+    assert_eq!(val["total_fmea_entries"], 2);
+    assert_eq!(val["max_rpn"], 60);
+    assert_eq!(val["single_point_fault_count"], 0);
+    assert_eq!(val["dual_channel_cut_set_count"], 1);
+
+    // 2. Markdown report
+    let md_out = Command::new(bin_path())
+        .args([
+            "safety-report",
+            "--model",
+            "embedded-flight-controller",
+            "--format",
+            "markdown",
+        ])
+        .output()
+        .expect("run rsysdsl safety-report markdown");
+    assert_eq!(md_out.status.code(), Some(0));
+    let md = String::from_utf8(md_out.stdout).unwrap();
+    assert!(md.contains("# ISO 26262 Safety, FMEA & Cut-Set Report"));
+    assert!(md.contains("SG-001"));
+    assert!(md.contains("SpuriousThrottleHigh"));
+    assert!(md.contains("dual_channel_decomposed"));
+
+    // 3. Emit to .sysml -> safety-report --files round-trip!
+    let dir = tempfile::tempdir().unwrap();
+    let emitted = dir.path().join("flight_controller.sysml");
+    let emit_out = Command::new(bin_path())
+        .args([
+            "emit",
+            "--model",
+            "embedded-flight-controller",
+            "--raw",
+            "-o",
+        ])
+        .arg(&emitted)
+        .output()
+        .expect("emit embedded-flight-controller");
+    assert_eq!(emit_out.status.code(), Some(0));
+
+    let files_out = Command::new(bin_path())
+        .arg("safety-report")
+        .arg("--files")
+        .arg(&emitted)
+        .args(["--format", "json"])
+        .output()
+        .expect("run rsysdsl safety-report --files");
+    assert_eq!(
+        files_out.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&files_out.stderr)
+    );
+    let fval: serde_json::Value = serde_json::from_slice(&files_out.stdout).unwrap();
+    assert_eq!(fval["total_safety_goals"], 1);
+    assert_eq!(fval["total_decompositions"], 1);
+    assert_eq!(fval["total_fmea_entries"], 2);
+    assert_eq!(fval["max_rpn"], 60);
+    assert_eq!(fval["single_point_fault_count"], 0);
+    assert_eq!(fval["dual_channel_cut_set_count"], 1);
+}

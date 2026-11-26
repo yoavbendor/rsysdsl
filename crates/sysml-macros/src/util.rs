@@ -487,7 +487,10 @@ pub fn build_attr_usage_tokens(
 
     Ok(quote! {
         ::sysml_dsl::ir::AttributeUsage {
+            short_name: ::std::option::Option::None,
             name: #name_tok,
+            is_private: false,
+            is_nonunique: false,
             type_name: #ty_tok,
             subsets: #subsets_tok,
             redefines: #redefines_tok,
@@ -497,6 +500,7 @@ pub fn build_attr_usage_tokens(
             unit: #unit_tok,
             doc: #doc_tok,
             is_keywordless: #is_keywordless,
+            nested_attributes: ::std::vec![],
         }
     })
 }

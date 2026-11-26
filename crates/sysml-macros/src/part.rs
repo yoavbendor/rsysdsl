@@ -449,6 +449,7 @@ pub fn expand_part(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
                         performs: ::std::vec![],
                         connections: ::std::vec![],
                         requirements: ::std::vec![],
+                        portions: ::std::vec![],
                     }
                 });
             } else if is_port {

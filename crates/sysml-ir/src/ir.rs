@@ -105,8 +105,11 @@ pub enum PackageMember {
     RequirementUsage(RequirementUsage),
     VerificationDef(VerificationDef),
     CalcDef(CalcDef),
+    CalcUsage(CalcDef),
     AnalysisDef(AnalysisDef),
     AnalysisUsage(AnalysisUsage),
+    AttributeUsage(AttributeUsage),
+    ViewUsage(ViewUsage),
     MetadataDef(MetadataDef),
 }
 
@@ -196,11 +199,19 @@ pub struct AttributeDef {
     pub is_abstract: bool,
     pub doc: Option<String>,
     pub specializes: Vec<String>,
+    #[serde(default)]
+    pub attributes: Vec<AttributeUsage>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct AttributeUsage {
+    #[serde(default)]
+    pub short_name: Option<String>,
     pub name: Option<String>,
+    #[serde(default)]
+    pub is_private: bool,
+    #[serde(default)]
+    pub is_nonunique: bool,
     pub type_name: Option<String>,
     pub subsets: Vec<String>,
     pub redefines: Vec<String>,
@@ -214,6 +225,8 @@ pub struct AttributeUsage {
     /// True for keyword-less SysML v2 feature bindings (e.g. `:> influenceLevel = ...;`).
     #[serde(default)]
     pub is_keywordless: bool,
+    #[serde(default)]
+    pub nested_attributes: Vec<AttributeUsage>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -264,6 +277,38 @@ pub struct PartUsage {
     pub connections: Vec<ConnectionUsage>,
     #[serde(default)]
     pub requirements: Vec<RequirementUsage>,
+    #[serde(default)]
+    pub portions: Vec<PortionUsage>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PortionKind {
+    #[default]
+    Timeslice,
+    Snapshot,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct PortionUsage {
+    pub kind: PortionKind,
+    pub is_then: bool,
+    pub name: String,
+    pub type_names: Vec<String>,
+    pub subsets: Vec<String>,
+    pub doc: Option<String>,
+    pub assert_constraints: Vec<String>,
+    pub attributes: Vec<AttributeUsage>,
+    pub parts: Vec<PartUsage>,
+    pub performs: Vec<PerformAction>,
+    pub portions: Vec<PortionUsage>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ViewUsage {
+    pub name: String,
+    pub type_name: Option<String>,
+    pub doc: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -543,6 +588,8 @@ pub struct CalcLocal {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct CalcDef {
+    #[serde(default)]
+    pub short_name: Option<String>,
     pub name: String,
     pub doc: Option<String>,
     pub params: Vec<CalcParam>,
