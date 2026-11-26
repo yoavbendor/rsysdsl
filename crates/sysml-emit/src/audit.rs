@@ -65,6 +65,19 @@ pub fn audit_model_with_lib(
     build_audit_report(model, verification, val, strict)
 }
 
+/// Audit raw `.sysml` source units alongside their lifted IR `Model` against an optional
+/// OMG Standard Library path (preserving exact source file names and line numbers in findings).
+pub fn audit_units_with_lib(
+    units: &[(String, String)],
+    model: &Model,
+    verification: Option<&VerificationReport>,
+    lib_dir: Option<&Path>,
+    strict: bool,
+) -> AuditReport {
+    let val = validate_sysml_units_with_lib(units, lib_dir);
+    build_audit_report(model, verification, val, strict)
+}
+
 /// Audit a `sysml_ir::Model` against the official OMG Standard Library (`sysml.library`),
 /// using `lib_dir` if provided or auto-discovering `sysml.library` otherwise.
 /// When `strict` is `true`, any validation warning also fails the audit.

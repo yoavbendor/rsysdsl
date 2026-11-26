@@ -226,3 +226,37 @@ fn cli_trace_matrix_json_markdown_csv_and_sysml_files() {
     assert!(fval["summary"]["total_requirements"].as_u64().unwrap() >= 50);
     assert!(fval["summary"]["satisfied_requirements"].as_u64().unwrap() >= 40);
 }
+
+#[test]
+fn cli_audit_with_files_stdlib_strict_passes() {
+    let dir = tempfile::tempdir().unwrap();
+    let emitted_path = dir.path().join("apollo11.sysml");
+
+    let emit_out = Command::new(bin_path())
+        .args(["emit", "--model", "apollo11-model", "--raw", "-o"])
+        .arg(&emitted_path)
+        .output()
+        .expect("emit apollo11-model to temp file");
+    assert_eq!(emit_out.status.code(), Some(0));
+
+    let audit_out = Command::new(bin_path())
+        .arg("audit")
+        .arg("--files")
+        .arg(&emitted_path)
+        .args(["--stdlib", "--strict"])
+        .output()
+        .expect("run rsysdsl audit --files --stdlib --strict");
+    assert_eq!(
+        audit_out.status.code(),
+        Some(0),
+        "stderr: {}\nstdout: {}",
+        String::from_utf8_lossy(&audit_out.stderr),
+        String::from_utf8_lossy(&audit_out.stdout)
+    );
+    let val: serde_json::Value = serde_json::from_slice(&audit_out.stdout).unwrap();
+    assert_eq!(val["ok"], true);
+    assert_eq!(val["stdlib_loaded"], true);
+    assert_eq!(val["validation_errors"], 0);
+    assert_eq!(val["validation_warnings"], 0);
+    assert_eq!(val["orphan_requirements"].as_array().unwrap().len(), 0);
+}

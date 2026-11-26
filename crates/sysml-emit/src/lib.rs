@@ -9,7 +9,10 @@ pub mod trace;
 pub mod validate;
 
 #[cfg(feature = "validate")]
-pub use audit::{audit_model, audit_model_with_lib, audit_model_with_stdlib, AuditFinding, AuditReport};
+pub use audit::{
+    audit_model, audit_model_with_lib, audit_model_with_stdlib, audit_units_with_lib, AuditFinding,
+    AuditReport,
+};
 pub use emit::{emit_model, emit_package, escape_sysml_name, iso26262_metadata_package};
 pub use trace::{
     build_trace_matrix, render_trace_matrix_csv, render_trace_matrix_markdown, TraceMatrix,

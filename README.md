@@ -24,6 +24,15 @@ To prevent AI coding agents from burying hidden safety `if`s in unconstrained Ru
 | [`examples/apollo11_model`](examples/apollo11_model) | Pure 100% declarative 5-layer Apollo 11 Powered Descent model crate (zero raw `impl`/`fn`, auto-`Default`, compiled constraints, guarded `Apollo11MissionPhases`, and `#[sysml::calc]` functions). |
 | [`examples/apollo11_sim`](examples/apollo11_sim) | Closed-loop physics, fault-injection, and verification runner crate depending one-way on `apollo11-model`. |
 | [`examples/embedded_flight_controller`](examples/embedded_flight_controller) | Ferrocene-ready `#![no_std]` ISO 26262 ASIL-D dual-channel flight controller (`ASIL_D -> ASIL_B(D) + ASIL_B(D)` with compile-time independence witnesses, `@FMEA`, guarded `#![no_std]` state machine, and 0-warning OMG stdlib validation). |
+| [`examples/starter_model`](examples/starter_model) | Minimal 1-file Visio-to-`rsysdsl` starter template with standalone `emit` binary (`cargo run -q -p starter-model --bin emit`) ready for VS Code SysML v2 / `sysml-reactflow`. |
+
+## Authoring New Systems with AI Agents (Cursor-CLI / Claude Code / Codex)
+
+`rsysdsl` ships with a lean, cost-aware LLM authoring workflow so engineers and coding agents can draft a system from a Visio diagram and incrementally crystallize it from a document corpus into a fully traceable SysML v2 model:
+
+- **Agent instructions:** [`AGENTS.md`](AGENTS.md) — rules, 1-page Visio/MBSE -> `rsysdsl` concept map, and 4-phase incremental crystallization workflow.
+- **On-demand modeling skill:** [`.agents/skills/rsysdsl-modeling/`](.agents/skills/rsysdsl-modeling/SKILL.md) (`PATTERNS.md` copy-pasteable Rust templates + `ERRORS.md` `rustc`/Open-MBEE fix table).
+- **Corporate offline & VS Code viewer guide:** [`docs/CORPORATE_OFFLINE_SETUP.md`](docs/CORPORATE_OFFLINE_SETUP.md) + [`scripts/vendor-offline.sh`](scripts/vendor-offline.sh).
 
 ## Quickstart
 

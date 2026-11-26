@@ -12,8 +12,8 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use sysml_emit::{
-    audit_model_with_lib, build_trace_matrix, discover_omg_stdlib, emit_model,
-    render_trace_matrix_csv, render_trace_matrix_markdown, validate_sysml_units,
+    audit_model_with_lib, audit_units_with_lib, build_trace_matrix, discover_omg_stdlib,
+    emit_model, render_trace_matrix_csv, render_trace_matrix_markdown, validate_sysml_units,
     validate_sysml_units_with_lib,
 };
 use sysml_lift::{
@@ -87,9 +87,13 @@ enum Commands {
 
     /// Audit semantic validity, orphan requirements, and verification traceability completeness.
     Audit {
-        /// Built-in model name to audit.
+        /// Built-in model name to audit (ignored when `--files` is provided).
         #[arg(long, default_value = "apollo11-model")]
         model: String,
+
+        /// Optional `.sysml` input files to validate and audit directly instead of a built-in model.
+        #[arg(long, num_args = 1..)]
+        files: Vec<PathBuf>,
 
         /// Also run executable verification and require PASS verdicts for all constrained requirements.
         #[arg(long)]
@@ -221,11 +225,12 @@ fn main() -> ExitCode {
         Commands::Verify { scenario } => cmd_verify(scenario, cli.pretty),
         Commands::Audit {
             model,
+            files,
             verify,
             stdlib,
             lib,
             strict,
-        } => cmd_audit(&model, verify, stdlib, lib, strict, cli.pretty),
+        } => cmd_audit(&model, &files, verify, stdlib, lib, strict, cli.pretty),
         Commands::TraceMatrix {
             model,
             files,
@@ -309,19 +314,13 @@ fn cmd_emit(model_name: &str, output: Option<PathBuf>, raw: bool, pretty: bool) 
 
 fn cmd_audit(
     model_name: &str,
+    files: &[PathBuf],
     with_verify: bool,
     stdlib: bool,
     lib: Option<PathBuf>,
     strict: bool,
     pretty: bool,
 ) -> ExitCode {
-    let model = match resolve_builtin_model(model_name) {
-        Ok(m) => m,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return ExitCode::from(2);
-        }
-    };
     let lib_dir = match resolve_lib_dir(stdlib, lib) {
         Ok(d) => d,
         Err(e) => {
@@ -329,18 +328,41 @@ fn cmd_audit(
             return ExitCode::from(2);
         }
     };
-    let verification = if with_verify {
-        Some(apollo11_sim::run_nominal_verification())
+    let report = if !files.is_empty() {
+        if with_verify {
+            eprintln!("error: `--verify` is only supported for executable built-in models, not `--files`");
+            return ExitCode::from(2);
+        }
+        let units = match read_units(files) {
+            Ok(u) => u,
+            Err(e) => {
+                eprintln!("error: {e}");
+                return ExitCode::from(2);
+            }
+        };
+        let lifted = lift_sysml_units(&units);
+        audit_units_with_lib(&units, &lifted.model, None, lib_dir.as_deref(), strict)
     } else {
-        None
+        let model = match resolve_builtin_model(model_name) {
+            Ok(m) => m,
+            Err(e) => {
+                eprintln!("error: {e}");
+                return ExitCode::from(2);
+            }
+        };
+        let verification = if with_verify {
+            Some(apollo11_sim::run_nominal_verification())
+        } else {
+            None
+        };
+        audit_model_with_lib(
+            model_name,
+            &model,
+            verification.as_ref(),
+            lib_dir.as_deref(),
+            strict,
+        )
     };
-    let report = audit_model_with_lib(
-        model_name,
-        &model,
-        verification.as_ref(),
-        lib_dir.as_deref(),
-        strict,
-    );
     print_json(&report, pretty);
     if report.ok {
         ExitCode::SUCCESS

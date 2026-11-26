@@ -11,6 +11,7 @@ members = [
     "examples/apollo11_model",
     "examples/apollo11_sim",
     "examples/embedded_flight_controller",
+    "examples/starter_model",
 ]
 
 [workspace.package]
