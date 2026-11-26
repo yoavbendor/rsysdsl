@@ -17,9 +17,9 @@ To prevent AI coding agents from burying hidden safety `if`s in unconstrained Ru
 | [`crates/sysml-ir`](crates/sysml-ir) | Strongly typed SysML v2 IR (including `CalcDef`), compile-time MBSE traits (`SysmlPart`, `SysmlPort`, `Conjugated<P>`, `PortConnectable`, `Specializes`, `Performs`, `Satisfies`, `Verifies`, `EvaluableRequirement`, `SysmlCalc`, `ToScalar`), `Quantity<T>`, and JSON verification types. |
 | [`crates/sysml-macros`](crates/sysml-macros) | Proc-macros (`#[sysml::package]`, `#[sysml::part]`, `#[sysml::port]`, `#[sysml::interface]`, `#[sysml::item]`, `#[sysml::enum_def]`, `#[sysml::action]`, `#[sysml::state]`, `#[sysml::requirement]`, `#[sysml::specification]`, `#[sysml::verification]`, `#[sysml::calc]`, `#[sysml::specializes]`, `#[sysml::perform]`, `#[sysml::satisfy]`, `#[sysml::verify]`, `#[sysml::connect]`) + closed 1:1 expression transpiler. |
 | [`crates/sysml-dsl`](crates/sysml-dsl) | Ergonomic user-facing facade (`sysml_dsl::prelude::*`) + Gate 1 `trybuild` compile-fail safety & anti-leakage test suite (12 compile-fail tests + 1 compile-pass). |
-| [`crates/sysml-emit`](crates/sysml-emit) | 1:1 deterministic IR -> formatted OMG SysML v2 `.sysml` emitter + embedded `Open-MBEE/sysml-toolkit` validator (`sysmlv2-syntax` + `sysmlv2-model`) + traceability completeness audit (`audit_model`). |
+| [`crates/sysml-emit`](crates/sysml-emit) | 1:1 deterministic IR -> formatted OMG SysML v2 `.sysml` emitter + embedded `Open-MBEE/sysml-toolkit` validator (`sysmlv2-syntax` + `sysmlv2-model`, with OMG Standard Library `sysml.library` resolution) + traceability audit (`audit_model`) + ASPICE bidirectional traceability matrix (`build_trace_matrix`, JSON/Markdown/CSV). |
 | [`crates/sysml-lift`](crates/sysml-lift) | `Open-MBEE/sysml-toolkit` AST -> IR lifter, compilable Rust DSL code generator, semantic AST/graph round-trip comparator, and explicit unsupported-construct ledger (zero silent drops). |
-| [`crates/sysml-cli`](crates/sysml-cli) | Agent-first CLI (`rsysdsl`): `emit`, `lift`, `roundtrip-check`, `verify`, `audit`, `validate` (compact JSON on `stdout`, diagnostics on `stderr`, exit codes `0` = ok, `1` = validation/audit/roundtrip/verification failure, `2` = IO/parse error). |
+| [`crates/sysml-cli`](crates/sysml-cli) | Agent-first CLI (`rsysdsl`): `emit`, `lift`, `roundtrip-check`, `verify`, `audit`, `trace-matrix`, `validate` (compact JSON on `stdout`, diagnostics on `stderr`, exit codes `0` = ok, `1` = validation/audit/roundtrip/verification failure, `2` = IO/parse error). |
 | [`examples/apollo11_model`](examples/apollo11_model) | Pure 100% declarative 5-layer Apollo 11 Powered Descent model crate (zero raw `impl`/`fn`, auto-`Default`, compiled constraints, guarded `Apollo11MissionPhases`, and `#[sysml::calc]` functions). |
 | [`examples/apollo11_sim`](examples/apollo11_sim) | Closed-loop physics, fault-injection, and verification runner crate depending one-way on `apollo11-model`. |
 
@@ -33,7 +33,7 @@ cargo test --workspace
 
 This single command automatically runs:
 1. **Gate 1 — Rust Compile-Time Safety & Anti-Leakage (`crates/sysml-dsl/tests/gate1_compile_safety.rs`):** `trybuild` verifies 1 valid model compiles and **12** invalid/leaky models fail `rustc` (port polarity/mismatch, cross-kind `:>` specialization, wrong requirement ID, non-action `perform`, missing state target, raw `fn`/`impl`/unannotated `struct` inside `#[sysml::package]`, typo in `#[sysml::require_constraint]`, opaque Rust call in `#[sysml::calc]`, nonexistent field in `#[sysml::transition]` guard).
-2. **Gate 2 — Normative SysML v2 Validation & Audit (`crates/sysml-lift/tests/apollo11_roundtrip.rs`):** Validates `apollo11-model` (including emitted `calc def`s and guarded transitions) and lifted Airbus Apollo 11 models with `Open-MBEE/sysml-toolkit` (**0 errors**) and runs `audit_model` (**0 orphan requirements, 0 unverified constrained requirements**).
+2. **Gate 2 — Normative SysML v2 Validation & Audit (`crates/sysml-lift/tests/apollo11_roundtrip.rs`):** Validates `apollo11-model` (including emitted `calc def`s and guarded transitions) against the full official **OMG SysML v2 Standard Library (`sysml.library`)** via `Open-MBEE/sysml-toolkit` with **0 errors AND 0 warnings**, and runs `audit_model_with_stdlib(..., strict = true)` (**0 orphan requirements, 0 unverified constrained requirements**).
 3. **Gate 3 — Semantic Round-Trip Fidelity (`crates/sysml-lift/tests/apollo11_roundtrip.rs`):** Lifts a 10-package Airbus Apollo 11 vertical slice (1,242 semantic facts across all 5 CoSMA layers) -> generates Rust DSL -> compiles & executes it with `cargo run` -> re-emits `.sysml` -> validates with Open-MBEE -> verifies **1,242 / 1,242 facts match (0 missing, 0 extra)**; plus audits all 28 Airbus Apollo 11 files.
 4. **Gate 4 — Closed-Loop Executable Verification (`examples/apollo11_sim/src/lib.rs`):** Executes terminal powered-descent physics and DPS stuck-throttle fault injection directly on `apollo11-model` via compiled `EvaluableRequirement::evaluate()`, `#[sysml::calc]`, and guarded `Apollo11MissionPhases::step_with()`, emitting JSON verdicts linked to `HLR-R002`, `CLR-R050`, `CLR-R057`, and `CLR-R058`.
 5. **Gate 5 — Reproducible Docs & Coverage (`README.md`, [`COVERAGE.md`](COVERAGE.md)):** Full per-file Airbus Apollo 11 element coverage report and roadmap.
@@ -47,8 +47,17 @@ cargo run -q -p sysml-cli -- emit --model apollo11-model --pretty
 # Emit raw .sysml text to a file
 cargo run -q -p sysml-cli -- emit --model apollo11-model --raw -o /tmp/apollo11_model.sysml
 
-# Run semantic validation + orphan-requirement + verification completeness audit
-cargo run -q -p sysml-cli -- audit --model apollo11-model --verify --pretty
+# Run strict 0-warning OMG Standard Library semantic validation + orphan-requirement + verification audit
+cargo run -q -p sysml-cli -- audit --model apollo11-model --verify --stdlib --strict --pretty
+
+# Export ASPICE bidirectional traceability matrix (JSON, Markdown, or RFC-4180 CSV)
+cargo run -q -p sysml-cli -- trace-matrix --model apollo11-model --verify --format markdown
+cargo run -q -p sysml-cli -- trace-matrix --model apollo11-model --verify --format csv -o /tmp/trace.csv
+
+# Generate a traceability matrix directly from existing Airbus Apollo 11 .sysml files
+cargo run -q -p sysml-cli -- trace-matrix --format markdown --files \
+  tests/fixtures/apollo-11-sysml-v2/Requirements/TechnicalRequirementsPackage.sysml \
+  tests/fixtures/apollo-11-sysml-v2/Technical/SystemSpecificationPackage.sysml
 
 # Lift real Airbus Apollo 11 .sysml files into compilable Rust DSL
 cargo run -q -p sysml-cli -- lift \
@@ -68,8 +77,8 @@ cargo run -q -p sysml-cli -- roundtrip-check --pretty \
 # Execute closed-loop Powered Descent verification (nominal + fault injection)
 cargo run -q -p sysml-cli -- verify --scenario all --pretty
 
-# Validate any .sysml file with the embedded Open-MBEE sysml-toolkit oracle
-cargo run -q -p sysml-cli -- validate --pretty /tmp/apollo11_model.sysml
+# Validate any .sysml file with the embedded Open-MBEE sysml-toolkit oracle + OMG stdlib
+cargo run -q -p sysml-cli -- validate --stdlib --strict --pretty /tmp/apollo11_model.sysml
 ```
 
 ## References & Provenance

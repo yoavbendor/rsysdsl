@@ -194,7 +194,7 @@ fn visit_expr(
                         }
                         ExprContext::TransitionGuard { has_subject } => {
                             if root_str == "event" {
-                                Ok((m_sysml, quote!(__sysml_event.#member_ident)))
+                                Ok((format!("payload.{m_sysml}"), quote!(__sysml_event.#member_ident)))
                             } else if root_str == "subject" {
                                 if !*has_subject {
                                     return Err(syn::Error::new_spanned(
@@ -202,7 +202,7 @@ fn visit_expr(
                                         "`subject.<field>` requires `#[sysml::state(subject = PartType)]` on the state machine enum",
                                     ));
                                 }
-                                Ok((m_sysml, quote!(__sysml_subject.#member_ident)))
+                                Ok((format!("target.{m_sysml}"), quote!(__sysml_subject.#member_ident)))
                             } else {
                                 Err(syn::Error::new_spanned(
                                     root_ident,

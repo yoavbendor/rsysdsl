@@ -1452,6 +1452,7 @@ fn lift_transition(u: &ast::Usage) -> Option<Transition> {
             name: u.declaration.id.name.as_ref().map(|n| n.value.clone()),
             source: src,
             trigger: trig,
+            trigger_payload_name: None,
             guard: guard_str,
             effect: effect_str,
             target: dst,

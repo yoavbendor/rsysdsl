@@ -1,7 +1,8 @@
 //! Traceability completeness and semantic validation audit (`rsysdsl audit`).
 //!
 //! Enforces that a Rust-authored SysML v2 model has:
-//! 1. Zero Open-MBEE `sysml-toolkit` syntax, body-context, or semantic errors.
+//! 1. Zero Open-MBEE `sysml-toolkit` syntax, body-context, or semantic errors
+//!    (and optionally zero warnings against the OMG Standard Library in `--strict` mode).
 //! 2. Zero orphan `requirement def`s (every declared requirement must be satisfied
 //!    by at least one part or specification `satisfy` link).
 //! 3. Full verification coverage (when a `VerificationReport` is supplied, every
@@ -9,13 +10,14 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 use sysml_ir::{
     Model, Package, PackageMember, RequirementDef, RequirementUsage, VerificationReport,
     VerificationStatus,
 };
 
 use crate::emit::emit_model;
-use crate::validate::validate_sysml_source;
+use crate::validate::{discover_omg_stdlib, validate_sysml_units_with_lib};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuditFinding {
@@ -28,8 +30,10 @@ pub struct AuditFinding {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuditReport {
     pub ok: bool,
+    pub stdlib_loaded: bool,
     pub validation_ok: bool,
     pub validation_errors: usize,
+    pub validation_warnings: usize,
     pub total_requirements: usize,
     pub satisfied_requirements: usize,
     pub orphan_requirements: Vec<String>,
@@ -38,15 +42,56 @@ pub struct AuditReport {
     pub findings: Vec<AuditFinding>,
 }
 
-/// Audit a `sysml_ir::Model` for semantic validity and traceability completeness.
+/// Audit a `sysml_ir::Model` without loading the OMG Standard Library (fast path).
 pub fn audit_model(
     model_name: &str,
     model: &Model,
     verification: Option<&VerificationReport>,
 ) -> AuditReport {
-    let emitted = emit_model(model);
-    let val = validate_sysml_source(&format!("{model_name}.sysml"), &emitted);
+    audit_model_with_lib(model_name, model, verification, None, false)
+}
 
+/// Audit a `sysml_ir::Model` with an optional explicit OMG Standard Library path.
+/// Unlike [`audit_model_with_stdlib`], `lib_dir = None` skips stdlib loading.
+pub fn audit_model_with_lib(
+    model_name: &str,
+    model: &Model,
+    verification: Option<&VerificationReport>,
+    lib_dir: Option<&Path>,
+    strict: bool,
+) -> AuditReport {
+    let emitted = emit_model(model);
+    let val = validate_sysml_units_with_lib(&[(format!("{model_name}.sysml"), emitted)], lib_dir);
+    build_audit_report(model, verification, val, strict)
+}
+
+/// Audit a `sysml_ir::Model` against the official OMG Standard Library (`sysml.library`),
+/// using `lib_dir` if provided or auto-discovering `sysml.library` otherwise.
+/// When `strict` is `true`, any validation warning also fails the audit.
+pub fn audit_model_with_stdlib(
+    model_name: &str,
+    model: &Model,
+    verification: Option<&VerificationReport>,
+    lib_dir: Option<&Path>,
+    strict: bool,
+) -> AuditReport {
+    let discovered;
+    let resolved = match lib_dir {
+        Some(p) => Some(p),
+        None => {
+            discovered = discover_omg_stdlib();
+            discovered.as_deref()
+        }
+    };
+    audit_model_with_lib(model_name, model, verification, resolved, strict)
+}
+
+fn build_audit_report(
+    model: &Model,
+    verification: Option<&VerificationReport>,
+    val: crate::validate::ValidationReport,
+    strict: bool,
+) -> AuditReport {
     let mut req_defs: BTreeMap<String, &RequirementDef> = BTreeMap::new();
     let mut satisfied_req_names: BTreeSet<String> = BTreeSet::new();
     let mut total_calcs = 0usize;
@@ -71,12 +116,22 @@ pub fn audit_model(
             });
         }
     }
+    if strict {
+        for warn in &val.warnings {
+            findings.push(AuditFinding {
+                rule: format!("openmbee:strict-warning:{}", warn.stage),
+                severity: "error".to_string(),
+                element: format!("{}:{}:{}", warn.unit, warn.line, warn.column),
+                message: warn.message.clone(),
+            });
+        }
+    }
 
     let mut orphan_requirements = Vec::new();
     for (req_name, rdef) in &req_defs {
         let req_id = rdef.short_name.as_deref().unwrap_or(req_name.as_str());
-        let is_satisfied = satisfied_req_names.contains(req_name)
-            || satisfied_req_names.contains(req_id);
+        let is_satisfied =
+            satisfied_req_names.contains(req_name) || satisfied_req_names.contains(req_id);
         if !is_satisfied {
             let label = format!("{req_id} ({req_name})");
             orphan_requirements.push(label.clone());
@@ -121,14 +176,18 @@ pub fn audit_model(
 
     let total_requirements = req_defs.len();
     let satisfied_requirements = total_requirements.saturating_sub(orphan_requirements.len());
+    let strict_ok = !strict || val.warning_count == 0;
     let ok = val.valid
+        && strict_ok
         && orphan_requirements.is_empty()
         && unverified_constrained_requirements.is_empty();
 
     AuditReport {
         ok,
+        stdlib_loaded: val.stdlib_loaded,
         validation_ok: val.valid,
         validation_errors: val.error_count,
+        validation_warnings: val.warning_count,
         total_requirements,
         satisfied_requirements,
         orphan_requirements,
@@ -172,7 +231,6 @@ fn collect_pkg<'a>(
 }
 
 fn collect_req_usage(ru: &RequirementUsage, satisfied_req_names: &mut BTreeSet<String>) {
-    // Map nested requirement usage names (`hlr-R002`) -> their RequirementDef type (`LunarLanderSoftLandingRequirement`)
     let mut usage_to_def: BTreeMap<String, String> = BTreeMap::new();
     for nested in &ru.nested_requirements {
         if let Some(ty) = &nested.type_name {

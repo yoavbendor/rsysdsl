@@ -112,7 +112,7 @@ pub fn simulate_powered_descent(
     let mut prop_remaining_kg = ds.propellant_mass.value() * 0.14;
     let dry_total_kg = ds.dry_mass.value()
         + total_stage_mass(as_.dry_mass.value(), as_.propellant_mass.value());
-    let max_thrust_n = ds.max_thrust.value() * 1000.0;
+    let max_thrust_n = ds.max_thrust.value();
     let min_frac = ds.min_throttle_percent.value() / 100.0;
     let max_frac = ds.max_throttle_percent.value() / 100.0;
     let ve_m_s = exhaust_velocity(ds.specific_impulse.value());
@@ -341,7 +341,8 @@ mod tests {
         let sc = ApolloSpacecraft::default();
         assert_eq!(sc.lunar_module.lunar_module_descent_stage.dry_mass.value(), 2100.0);
         assert_eq!(sc.lunar_module.lunar_module_descent_stage.dry_mass.unit, "kg");
-        assert_eq!(sc.lunar_module.lunar_module_ascent_stage.max_thrust.value(), 16.0);
+        assert_eq!(sc.lunar_module.lunar_module_ascent_stage.max_thrust.value(), 16000.0);
+        assert_eq!(sc.lunar_module.lunar_module_ascent_stage.max_thrust.unit, "N");
         // Verify nominal touchdown reached LunarSurfaceOps via compiled SysML guard
         assert_eq!(report.verdicts[0].evidence["final_phase"], "lunarSurfaceOps");
     }

@@ -51,7 +51,7 @@ fn gate2_handwritten_apollo11_model_validates_and_audits_cleanly() {
     assert_eq!(report.model_errors.len(), 0);
     // Verify modeled #[sysml::calc] defs and compiled state guards appear in emitted .sysml!
     assert!(emitted.contains("calc def ascentBurnDuration"));
-    assert!(emitted.contains("if (verticalVelocity <= maxTouchdownVerticalVelocity)"));
+    assert!(emitted.contains("if (payload.verticalVelocity <= target.maxTouchdownVerticalVelocity)"));
 
     let verification = apollo11_sim::run_nominal_verification();
     let audit = sysml_emit::audit_model("apollo11_model", &model, Some(&verification));
@@ -63,6 +63,42 @@ fn gate2_handwritten_apollo11_model_validates_and_audits_cleanly() {
     assert_eq!(audit.orphan_requirements.len(), 0);
     assert_eq!(audit.unverified_constrained_requirements.len(), 0);
     assert_eq!(audit.total_calcs, 3);
+}
+
+/// Gate 2 (Strict OMG Standard Library): Validate and audit `apollo11-model` against
+/// the full official OMG SysML v2 Standard Library (`sysml.library`) with 0 errors AND 0 warnings.
+#[test]
+fn gate2_apollo11_model_zero_errors_zero_warnings_with_omg_stdlib() {
+    let model = apollo11_model::build_apollo11_model();
+    let emitted = apollo11_model::emit_apollo11_model_sysml();
+    let report = sysml_emit::validate_sysml_source_with_stdlib(
+        "apollo11_model.sysml",
+        &emitted,
+        None,
+    );
+    assert!(
+        report.stdlib_loaded,
+        "Expected OMG sysml.library to be discovered and loaded"
+    );
+    assert!(
+        report.valid && report.warning_count == 0,
+        "Expected 0 errors and 0 warnings with OMG stdlib, got:\n{}",
+        serde_json::to_string_pretty(&report).unwrap()
+    );
+
+    let verification = apollo11_sim::run_nominal_verification();
+    let audit = sysml_emit::audit_model_with_stdlib(
+        "apollo11_model",
+        &model,
+        Some(&verification),
+        None,
+        true,
+    );
+    assert!(
+        audit.ok && audit.stdlib_loaded && audit.validation_warnings == 0,
+        "Expected 0 findings and 0 warnings in strict stdlib audit, got:\n{}",
+        serde_json::to_string_pretty(&audit).unwrap()
+    );
 }
 
 /// Gate 2 + Gate 3: Full end-to-end Apollo 11 bidirectional round-trip INCLUDING

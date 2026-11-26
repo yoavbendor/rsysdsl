@@ -11,7 +11,11 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use sysml_emit::{audit_model, emit_model, validate_sysml_units};
+use sysml_emit::{
+    audit_model_with_lib, build_trace_matrix, discover_omg_stdlib, emit_model,
+    render_trace_matrix_csv, render_trace_matrix_markdown, validate_sysml_units,
+    validate_sysml_units_with_lib,
+};
 use sysml_lift::{
     compare_sysml_roundtrip, generate_rust_dsl, lift_sysml_units, CodegenOptions,
 };
@@ -90,6 +94,41 @@ enum Commands {
         /// Also run executable verification and require PASS verdicts for all constrained requirements.
         #[arg(long)]
         verify: bool,
+
+        /// Auto-discover and load the official OMG Standard Library (`sysml.library`).
+        #[arg(long)]
+        stdlib: bool,
+
+        /// Explicit path to the OMG Standard Library (`sysml.library`) directory.
+        #[arg(long)]
+        lib: Option<PathBuf>,
+
+        /// Fail with exit code 1 if any Open-MBEE validation warnings are emitted.
+        #[arg(long)]
+        strict: bool,
+    },
+
+    /// Generate an ASPICE bidirectional traceability matrix (JSON, Markdown, or CSV).
+    TraceMatrix {
+        /// Built-in model name to trace (ignored when `--files` is provided).
+        #[arg(long, default_value = "apollo11-model")]
+        model: String,
+
+        /// Optional `.sysml` input files to lift and trace directly instead of a built-in model.
+        #[arg(long, num_args = 1..)]
+        files: Vec<PathBuf>,
+
+        /// Output format: json, markdown, or csv.
+        #[arg(long, value_enum, default_value = "json")]
+        format: TraceFormat,
+
+        /// Run executable verification on the built-in model and populate pass/fail verdicts & evidence.
+        #[arg(long)]
+        verify: bool,
+
+        /// Optional file path to write the rendered traceability matrix.
+        #[arg(short, long)]
+        output: Option<PathBuf>,
     },
 
     /// Validate `.sysml` files using the embedded Open-MBEE `sysml-toolkit` oracle.
@@ -97,6 +136,18 @@ enum Commands {
         /// Input `.sysml` file paths.
         #[arg(required = true)]
         files: Vec<PathBuf>,
+
+        /// Auto-discover and load the official OMG Standard Library (`sysml.library`).
+        #[arg(long)]
+        stdlib: bool,
+
+        /// Explicit path to the OMG Standard Library (`sysml.library`) directory.
+        #[arg(long)]
+        lib: Option<PathBuf>,
+
+        /// Fail with exit code 1 if any Open-MBEE validation warnings are emitted.
+        #[arg(long)]
+        strict: bool,
     },
 }
 
@@ -105,6 +156,13 @@ enum VerifyScenario {
     Nominal,
     Fault,
     All,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum TraceFormat {
+    Json,
+    Markdown,
+    Csv,
 }
 
 fn print_json<T: Serialize>(val: &T, pretty: bool) {
@@ -129,6 +187,24 @@ fn read_units(files: &[PathBuf]) -> Result<Vec<(String, String)>, String> {
     Ok(units)
 }
 
+fn resolve_lib_dir(stdlib: bool, lib: Option<PathBuf>) -> Result<Option<PathBuf>, String> {
+    if let Some(dir) = lib {
+        if !dir.is_dir() {
+            return Err(format!(
+                "standard library path '{}' does not exist or is not a directory",
+                dir.display()
+            ));
+        }
+        return Ok(Some(dir));
+    }
+    if stdlib {
+        return discover_omg_stdlib().map(Some).ok_or_else(|| {
+            "OMG standard library (`sysml.library`) could not be auto-discovered; pass `--lib <PATH>` or set `SYSML_LIBRARY_DIR`".to_string()
+        });
+    }
+    Ok(None)
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
     match cli.command {
@@ -143,8 +219,26 @@ fn main() -> ExitCode {
             reemitted_out,
         } => cmd_roundtrip_check(&files, reemitted_out, cli.pretty),
         Commands::Verify { scenario } => cmd_verify(scenario, cli.pretty),
-        Commands::Audit { model, verify } => cmd_audit(&model, verify, cli.pretty),
-        Commands::Validate { files } => cmd_validate(&files, cli.pretty),
+        Commands::Audit {
+            model,
+            verify,
+            stdlib,
+            lib,
+            strict,
+        } => cmd_audit(&model, verify, stdlib, lib, strict, cli.pretty),
+        Commands::TraceMatrix {
+            model,
+            files,
+            format,
+            verify,
+            output,
+        } => cmd_trace_matrix(&model, &files, format, verify, output, cli.pretty),
+        Commands::Validate {
+            files,
+            stdlib,
+            lib,
+            strict,
+        } => cmd_validate(&files, stdlib, lib, strict, cli.pretty),
     }
 }
 
@@ -213,9 +307,23 @@ fn cmd_emit(model_name: &str, output: Option<PathBuf>, raw: bool, pretty: bool) 
     }
 }
 
-fn cmd_audit(model_name: &str, with_verify: bool, pretty: bool) -> ExitCode {
+fn cmd_audit(
+    model_name: &str,
+    with_verify: bool,
+    stdlib: bool,
+    lib: Option<PathBuf>,
+    strict: bool,
+    pretty: bool,
+) -> ExitCode {
     let model = match resolve_builtin_model(model_name) {
         Ok(m) => m,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let lib_dir = match resolve_lib_dir(stdlib, lib) {
+        Ok(d) => d,
         Err(e) => {
             eprintln!("error: {e}");
             return ExitCode::from(2);
@@ -226,7 +334,13 @@ fn cmd_audit(model_name: &str, with_verify: bool, pretty: bool) -> ExitCode {
     } else {
         None
     };
-    let report = audit_model(model_name, &model, verification.as_ref());
+    let report = audit_model_with_lib(
+        model_name,
+        &model,
+        verification.as_ref(),
+        lib_dir.as_deref(),
+        strict,
+    );
     print_json(&report, pretty);
     if report.ok {
         ExitCode::SUCCESS
@@ -237,6 +351,85 @@ fn cmd_audit(model_name: &str, with_verify: bool, pretty: bool) -> ExitCode {
         );
         ExitCode::from(1)
     }
+}
+
+fn cmd_trace_matrix(
+    model_name: &str,
+    files: &[PathBuf],
+    format: TraceFormat,
+    with_verify: bool,
+    output: Option<PathBuf>,
+    pretty: bool,
+) -> ExitCode {
+    let (label, model, verification) = if !files.is_empty() {
+        if with_verify {
+            eprintln!("error: `--verify` is only supported for executable built-in models, not `--files`");
+            return ExitCode::from(2);
+        }
+        let units = match read_units(files) {
+            Ok(u) => u,
+            Err(e) => {
+                eprintln!("error: {e}");
+                return ExitCode::from(2);
+            }
+        };
+        let lifted = lift_sysml_units(&units);
+        if !lifted.parse_errors.is_empty() {
+            for err in &lifted.parse_errors {
+                eprintln!("parse error: {err}");
+            }
+            return ExitCode::from(2);
+        }
+        let label = if files.len() == 1 {
+            files[0].display().to_string()
+        } else {
+            format!("{} files", files.len())
+        };
+        (label, lifted.model, None)
+    } else {
+        let model = match resolve_builtin_model(model_name) {
+            Ok(m) => m,
+            Err(e) => {
+                eprintln!("error: {e}");
+                return ExitCode::from(2);
+            }
+        };
+        let verification = if with_verify {
+            Some(apollo11_sim::run_nominal_verification())
+        } else {
+            None
+        };
+        (model_name.to_string(), model, verification)
+    };
+
+    let matrix = build_trace_matrix(label, &model, verification.as_ref());
+    let rendered = match format {
+        TraceFormat::Json => {
+            let text = if pretty {
+                serde_json::to_string_pretty(&matrix)
+            } else {
+                serde_json::to_string(&matrix)
+            };
+            match text {
+                Ok(s) => format!("{s}\n"),
+                Err(e) => {
+                    eprintln!("error: failed to serialize trace matrix: {e}");
+                    return ExitCode::from(2);
+                }
+            }
+        }
+        TraceFormat::Markdown => render_trace_matrix_markdown(&matrix),
+        TraceFormat::Csv => render_trace_matrix_csv(&matrix),
+    };
+
+    if let Some(path) = &output {
+        if let Err(e) = fs::write(path, &rendered) {
+            eprintln!("error: failed to write '{}': {e}", path.display());
+            return ExitCode::from(2);
+        }
+    }
+    print!("{rendered}");
+    ExitCode::SUCCESS
 }
 
 fn cmd_lift(
@@ -418,7 +611,13 @@ fn cmd_verify(scenario: VerifyScenario, pretty: bool) -> ExitCode {
     }
 }
 
-fn cmd_validate(files: &[PathBuf], pretty: bool) -> ExitCode {
+fn cmd_validate(
+    files: &[PathBuf],
+    stdlib: bool,
+    lib: Option<PathBuf>,
+    strict: bool,
+    pretty: bool,
+) -> ExitCode {
     let units = match read_units(files) {
         Ok(u) => u,
         Err(e) => {
@@ -426,14 +625,28 @@ fn cmd_validate(files: &[PathBuf], pretty: bool) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let report = validate_sysml_units(&units);
+    let lib_dir = match resolve_lib_dir(stdlib, lib) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let report = validate_sysml_units_with_lib(&units, lib_dir.as_deref());
     print_json(&report, pretty);
-    if report.valid {
+    let ok = report.valid && (!strict || report.warning_count == 0);
+    if ok {
         ExitCode::SUCCESS
-    } else {
+    } else if !report.valid {
         eprintln!(
             "error: validation failed with {} error(s)",
             report.error_count
+        );
+        ExitCode::from(1)
+    } else {
+        eprintln!(
+            "error: strict validation failed with {} warning(s)",
+            report.warning_count
         );
         ExitCode::from(1)
     }

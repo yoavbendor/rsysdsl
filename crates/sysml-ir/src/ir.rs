@@ -358,6 +358,8 @@ pub struct Transition {
     pub name: Option<String>,
     pub source: String,
     pub trigger: Option<String>,
+    #[serde(default)]
+    pub trigger_payload_name: Option<String>,
     pub guard: Option<String>,
     pub effect: Option<String>,
     pub target: String,
@@ -383,6 +385,8 @@ pub struct StateDef {
     pub is_abstract: bool,
     pub doc: Option<String>,
     pub specializes: Vec<String>,
+    #[serde(default)]
+    pub subject_type: Option<String>,
     pub entry_action: Option<ActionUsage>,
     pub do_action: Option<ActionUsage>,
     pub exit_action: Option<ActionUsage>,

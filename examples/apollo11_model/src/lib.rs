@@ -109,6 +109,7 @@ pub mod operations_package {
 #[sysml::import("SI::*")]
 #[sysml::import("ISQ::*")]
 #[sysml::import("ScalarValues::*")]
+#[sysml::import("ModelingMetadata::*")]
 pub mod requirements_package {
     use sysml_dsl::prelude::*;
 
@@ -170,13 +171,13 @@ pub mod requirements_package {
     )]
     #[derive(Debug, Clone)]
     pub struct DPSThrottlingRange {
-        #[sysml::attr(ty = "Real", value = "10", unit = "%")]
+        #[sysml::attr(ty = "Real", value = "10")]
         pub actual_min_throttle_percentage: Quantity<f64>,
-        #[sysml::attr(ty = "Real", value = "10", unit = "%")]
+        #[sysml::attr(ty = "Real", value = "10")]
         pub min_required_throttle_percentage: Quantity<f64>,
-        #[sysml::attr(ty = "Real", value = "100", unit = "%")]
+        #[sysml::attr(ty = "Real", value = "100")]
         pub actual_max_throttle_percentage: Quantity<f64>,
-        #[sysml::attr(ty = "Real", value = "100", unit = "%")]
+        #[sysml::attr(ty = "Real", value = "100")]
         pub max_required_throttle_percentage: Quantity<f64>,
     }
 
@@ -196,6 +197,7 @@ pub mod requirements_package {
 #[sysml::package(name = "FunctionsPackage")]
 #[sysml::import("CoSMAPackage::*")]
 #[sysml::import("OperationsPackage::*")]
+#[sysml::import("ModelingMetadata::*")]
 pub mod functions_package {
     use super::cosma_package::*;
     use sysml_dsl::prelude::*;
@@ -260,7 +262,6 @@ pub mod logical_components_package {
 }
 
 #[sysml::package(name = "TechnicalPortsPackage")]
-#[sysml::import("SI::*")]
 pub mod technical_ports_package {
     use sysml_dsl::prelude::*;
 
@@ -333,6 +334,7 @@ pub mod technical_ports_package {
 #[sysml::import("CoSMAPackage::*")]
 #[sysml::import("SI::*")]
 #[sysml::import("ISQ::*")]
+#[sysml::import("ScalarValues::*")]
 #[sysml::import("LogicalComponentsPackage::*")]
 #[sysml::import("TechnicalPortsPackage::*")]
 #[sysml::import("RequirementsPackage::*")]
@@ -377,7 +379,7 @@ pub mod technical_components_package {
         pub dry_mass: Quantity<f64>,
         #[sysml::attr(redefines = "propellantMass", value = "8250", unit = "kg")]
         pub propellant_mass: Quantity<f64>,
-        #[sysml::attr(redefines = "maxThrust", value = "45", unit = "kN")]
+        #[sysml::attr(redefines = "maxThrust", value = "45000", unit = "N")]
         pub max_thrust: Quantity<f64>,
         #[sysml::attr(redefines = "specificImpulse", value = "305", unit = "s")]
         pub specific_impulse: Quantity<f64>,
@@ -387,9 +389,9 @@ pub mod technical_components_package {
         pub power_load: Quantity<f64>,
         #[sysml::attr(redefines = "failureRate", value = "3.0E-6", unit = "1/h")]
         pub failure_rate: Quantity<f64>,
-        #[sysml::attr(ty = "Real", value = "10", unit = "%")]
+        #[sysml::attr(ty = "Real", value = "10")]
         pub min_throttle_percent: Quantity<f64>,
-        #[sysml::attr(ty = "Real", value = "100", unit = "%")]
+        #[sysml::attr(ty = "Real", value = "100")]
         pub max_throttle_percent: Quantity<f64>,
         #[sysml::attr(subsets = "ISQ::speed", value = "3.05", unit = "m/s")]
         pub max_touchdown_vertical_velocity: Quantity<f64>,
@@ -409,7 +411,7 @@ pub mod technical_components_package {
         pub dry_mass: Quantity<f64>,
         #[sysml::attr(redefines = "propellantMass", value = "2370", unit = "kg")]
         pub propellant_mass: Quantity<f64>,
-        #[sysml::attr(redefines = "maxThrust", value = "16", unit = "kN")]
+        #[sysml::attr(redefines = "maxThrust", value = "16000", unit = "N")]
         pub max_thrust: Quantity<f64>,
         #[sysml::attr(redefines = "specificImpulse", value = "311", unit = "s")]
         pub specific_impulse: Quantity<f64>,
@@ -581,16 +583,16 @@ pub mod calculations_package {
         specific_impulse_s * 9.80665
     }
 
-    /// Computes LM Ascent Stage orbital insertion burn duration (s) from modeled stage parameters.
+    /// Computes LM Ascent Stage orbital insertion burn duration (s) from modeled stage parameters (thrust in N).
     #[sysml::calc]
     pub fn ascent_burn_duration(
         propellant_mass_kg: f64,
-        max_thrust_kn: f64,
+        max_thrust_n: f64,
         specific_impulse_s: f64,
         burn_fraction: f64,
     ) -> f64 {
         let ve = exhaust_velocity(specific_impulse_s);
-        let mass_flow_rate = (max_thrust_kn * 1000.0) / ve;
+        let mass_flow_rate = max_thrust_n / ve;
         let burned_propellant = propellant_mass_kg * burn_fraction;
         burned_propellant / mass_flow_rate
     }

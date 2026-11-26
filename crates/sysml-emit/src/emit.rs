@@ -747,7 +747,16 @@ fn emit_transition(t: &Transition, level: usize, out: &mut String) {
     }
     let _ = write!(out, " first {}", format_ref(&t.source));
     if let Some(trig) = &t.trigger {
-        let _ = write!(out, " accept {}", format_qualified(trig));
+        if let Some(pname) = &t.trigger_payload_name {
+            let _ = write!(
+                out,
+                " accept {} : {}",
+                escape_sysml_name(pname),
+                format_qualified(trig)
+            );
+        } else {
+            let _ = write!(out, " accept {}", format_qualified(trig));
+        }
     }
     if let Some(guard) = &t.guard {
         let _ = write!(out, " if {guard}");
@@ -808,6 +817,7 @@ fn emit_state_def(s: &StateDef, level: usize, out: &mut String) {
     let _ = write!(out, "{ind}{abs}state def {}", escape_sysml_name(&s.name));
     emit_specializes(&s.specializes, out);
     let has_body = s.doc.is_some()
+        || s.subject_type.is_some()
         || s.entry_action.is_some()
         || s.do_action.is_some()
         || s.exit_action.is_some()
@@ -819,6 +829,14 @@ fn emit_state_def(s: &StateDef, level: usize, out: &mut String) {
     }
     let _ = writeln!(out, " {{");
     emit_doc(&s.doc, level + 1, out);
+    if let Some(subj_ty) = &s.subject_type {
+        let _ = writeln!(
+            out,
+            "{}ref part target : {};",
+            indent(level + 1),
+            format_qualified(subj_ty)
+        );
+    }
     if let Some(e) = &s.entry_action {
         emit_action_usage(e, "entry ", level + 1, out);
     }

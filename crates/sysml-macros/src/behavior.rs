@@ -387,6 +387,7 @@ fn expand_state_struct(args: TokenStream, mut item: ItemStruct) -> syn::Result<T
                     is_abstract: #is_abstract,
                     doc: #doc_tok,
                     specializes: #spec_tok,
+                    subject_type: ::std::option::Option::None,
                     entry_action: ::std::option::Option::None,
                     do_action: #do_action_tok,
                     exit_action: ::std::option::Option::None,
@@ -516,11 +517,18 @@ fn expand_state_enum(args: TokenStream, mut item: ItemEnum) -> syn::Result<Token
             };
             let guard_tok = quote_opt_str(&guard_sysml);
 
+            let payload_name_tok = if guard_rust_opt.is_some() && t.trigger.is_some() {
+                quote!(::std::option::Option::Some(::std::string::String::from("payload")))
+            } else {
+                quote!(::std::option::Option::None)
+            };
+
             transition_tokens.push(quote! {
                 ::sysml_ir::Transition {
                     name: ::std::option::Option::None,
                     source: ::std::string::String::from(#v_sysml_name),
                     trigger: #trigger_tok,
+                    trigger_payload_name: #payload_name_tok,
                     guard: #guard_tok,
                     effect: #effect_tok,
                     target: ::std::string::String::from(#target_sysml),
@@ -636,6 +644,8 @@ fn expand_state_enum(args: TokenStream, mut item: ItemEnum) -> syn::Result<Token
     item.attrs = strip_sysml_attrs(std::mem::take(&mut item.attrs));
     let doc_tok = quote_opt_str(&doc);
     let spec_tok = quote_vec_str(&spec_names);
+    let subject_type_str = subject_ty.as_ref().map(path_to_sysml_string);
+    let subject_type_tok = quote_opt_str(&subject_type_str);
 
     Ok(quote! {
         #item
@@ -688,6 +698,7 @@ fn expand_state_enum(args: TokenStream, mut item: ItemEnum) -> syn::Result<Token
                     is_abstract: false,
                     doc: #doc_tok,
                     specializes: #spec_tok,
+                    subject_type: #subject_type_tok,
                     entry_action: ::std::option::Option::None,
                     do_action: ::std::option::Option::None,
                     exit_action: ::std::option::Option::None,
