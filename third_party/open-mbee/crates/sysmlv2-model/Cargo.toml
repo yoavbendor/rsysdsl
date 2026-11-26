@@ -1,0 +1,21 @@
+[package]
+name = "sysmlv2-model"
+version = "0.13.0"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/Open-MBEE/sysml-toolkit"
+description = "Semantic model layer for OMG SysML v2 / KerML: element graph, name resolution, JSON interchange, referential checks, expression evaluation"
+
+[dependencies]
+sysmlv2-syntax = { path = "../sysmlv2-syntax", version = "0.13.0", features = ["serde"] }
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+uuid = { version = "1", features = ["v4", "v5", "js", "serde"] }
+sha1_smol = "1"
+num-bigint = "0.4"
+num-integer = "0.1"
+num-rational = "0.4"
+num-traits = "0.2"
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+memmap2 = "0.9"

@@ -2,7 +2,6 @@
 //! with automatic OMG Standard Library (`sysml.library`) resolution for 0-warning validation.
 
 use serde::{Deserialize, Serialize};
-use std::fs;
 use std::path::{Path, PathBuf};
 use sysmlv2_model::check::{validate_model_with, validate_semantics_with};
 use sysmlv2_model::json::ResolvedModel;
@@ -40,8 +39,8 @@ pub struct ValidationReport {
 ///
 /// Search order:
 /// 1. `SYSML_LIBRARY_DIR` environment variable
-/// 2. Cargo's checked-out `Open-MBEE/sysml-toolkit` submodule (`spec-refs/SysML-v2-Release/sysml.library`)
-///    under `$CARGO_HOME`, `/opt/cargo`, or `$HOME/.cargo`
+/// 2. Bundled repository library (`third_party/omg/sysml.library`) relative to workspace root,
+///    current working directory ancestors, or executable ancestors
 pub fn discover_omg_stdlib() -> Option<PathBuf> {
     if let Ok(env_dir) = std::env::var("SYSML_LIBRARY_DIR") {
         let p = PathBuf::from(env_dir);
@@ -50,35 +49,25 @@ pub fn discover_omg_stdlib() -> Option<PathBuf> {
         }
     }
 
-    let mut cargo_homes = Vec::new();
-    if let Ok(ch) = std::env::var("CARGO_HOME") {
-        cargo_homes.push(PathBuf::from(ch));
-    }
-    cargo_homes.push(PathBuf::from("/opt/cargo"));
-    if let Ok(home) = std::env::var("HOME") {
-        cargo_homes.push(PathBuf::from(home).join(".cargo"));
+    let manifest_candidate = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../third_party/omg/sysml.library");
+    if manifest_candidate.is_dir() {
+        return Some(manifest_candidate);
     }
 
-    for ch in cargo_homes {
-        let checkouts = ch.join("git/checkouts");
-        let Ok(entries) = fs::read_dir(&checkouts) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let name = entry.file_name();
-            if !name.to_string_lossy().starts_with("sysml-toolkit-") {
-                continue;
-            }
-            let Ok(revs) = fs::read_dir(entry.path()) else {
-                continue;
-            };
-            for rev in revs.flatten() {
-                let candidate = rev
-                    .path()
-                    .join("spec-refs/SysML-v2-Release/sysml.library");
-                if candidate.is_dir() {
-                    return Some(candidate);
-                }
+    for start in [
+        std::env::current_dir().ok(),
+        std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(Path::to_path_buf)),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        for ancestor in start.ancestors() {
+            let candidate = ancestor.join("third_party/omg/sysml.library");
+            if candidate.is_dir() {
+                return Some(candidate);
             }
         }
     }
