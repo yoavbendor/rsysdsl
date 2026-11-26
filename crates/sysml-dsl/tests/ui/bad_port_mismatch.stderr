@@ -1,0 +1,17 @@
+error[E0308]: mismatched types
+  --> tests/ui/bad_port_mismatch.rs:36:1
+   |
+36 | #[sysml::part]
+   | ^^^^^^^^^^^^^^
+   | |
+   | expected `&Conjugated<PortA>`, found `&Conjugated<PortB>`
+   | arguments to this function are incorrect
+   |
+   = note: expected reference `&Conjugated<PortA>`
+              found reference `&Conjugated<PortB>`
+note: function defined here
+  --> $WORKSPACE/crates/sysml-ir/src/traits.rs
+   |
+   | pub fn assert_ports_connect<A, B>(_a: &A, _b: &B)
+   |        ^^^^^^^^^^^^^^^^^^^^
+   = note: this error originates in the attribute macro `sysml::part` (in Nightly builds, run with -Z macro-backtrace for more info)

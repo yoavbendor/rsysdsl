@@ -1,0 +1,5 @@
+error[E0080]: evaluation panicked: SysML requirement ID mismatch in #[sysml::satisfy]
+ --> tests/ui/bad_requirement_id.rs:8:1
+  |
+8 | #[sysml::part]
+  | ^^^^^^^^^^^^^^ evaluation of `_` failed here
