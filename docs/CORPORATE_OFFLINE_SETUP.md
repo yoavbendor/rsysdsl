@@ -36,7 +36,23 @@ cargo run --offline -q -p sysml-cli -- audit --files target/starter_model.sysml 
 
 ---
 
-## 3. Viewing Emitted `.sysml` in VS Code
+## 3. Viewing Emitted `.sysml` in VS Code or Standalone Offline HTML
+
+### Option A — Zero-Install Standalone Offline HTML Viewer (`rsysdsl view`)
+
+If you do not want to install any VS Code extensions, `rsysdsl view` bundles the MIT-licensed `VSCode_SysML_Extension` runtime together with D3, ELK, and Cytoscape into a single self-contained `.html` file that works offline over `file://` (or via `--serve`):
+
+```bash
+cargo run -q -p sysml-cli -- view target/starter_model.sysml --view interconnection -o target/starter_model.html
+# Or launch a local loopback server on http://127.0.0.1:8080/
+cargo run -q -p sysml-cli -- view target/starter_model.sysml --view interconnection --serve --port 8080
+```
+
+Features included in the generated HTML:
+- **10 interactive diagram views:** General (`general`), Interconnection/IBD (`interconnection`), State (`state`), Action Flow (`activity`), Sequence (`sequence`), Package (`package`), Tree (`tree`), Hierarchy (`hierarchy`), Graph (`graph`), and Case (`usecase`).
+- **SVG / PNG export** and **Light / Dark theme toggle** (`--theme light` or `--theme dark`).
+
+### Option B — VS Code Extensions
 
 1. Open the `rsysdsl` workspace in VS Code.
 2. Install either (or both):

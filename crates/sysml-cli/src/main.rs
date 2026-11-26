@@ -8,14 +8,17 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use serde::Serialize;
 use std::fs;
+use std::io::{BufRead, BufReader, Write};
+use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use sysml_emit::{
     audit_model_with_lib, audit_units_with_lib, build_safety_report, build_trace_matrix,
-    discover_omg_stdlib, emit_model, iso26262_metadata_package, render_safety_report_markdown,
-    render_trace_matrix_csv, render_trace_matrix_markdown, validate_sysml_units,
-    validate_sysml_units_with_lib,
+    build_viewer_snapshot, discover_omg_stdlib, emit_model, iso26262_metadata_package,
+    render_safety_report_markdown, render_standalone_html, render_trace_matrix_csv,
+    render_trace_matrix_markdown, validate_sysml_units, validate_sysml_units_with_lib,
+    ViewerOptions, ViewerTheme, ViewerView,
 };
 use sysml_lift::{
     compare_sysml_roundtrip, generate_rust_dsl, lift_sysml_units, CodegenOptions,
@@ -173,6 +176,44 @@ enum Commands {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+
+    /// Generate a standalone offline interactive HTML diagram viewer (or serve locally).
+    View {
+        /// Optional `.sysml` files to lift and view (uses `--model` when empty).
+        files: Vec<PathBuf>,
+
+        /// Built-in model name when no positional files are passed (`apollo11-model` or `embedded-flight-controller`).
+        #[arg(long, default_value = "apollo11-model")]
+        model: String,
+
+        /// Output `.html` path (defaults to `<stem>.html` alongside the first file or `<model>.html`).
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        /// Initial diagram view.
+        #[arg(long, value_enum, default_value = "general")]
+        view: CliViewerView,
+
+        /// Default color theme (`dark` or `light`).
+        #[arg(long, value_enum, default_value = "dark")]
+        theme: CliViewerTheme,
+
+        /// Custom HTML page title (defaults to filename or model name).
+        #[arg(long)]
+        title: Option<String>,
+
+        /// Print the `ViewerSnapshot` JSON to stdout instead of writing HTML.
+        #[arg(long)]
+        json_snapshot: bool,
+
+        /// Serve the generated HTML on `http://127.0.0.1:<port>` instead of exiting after writing.
+        #[arg(long)]
+        serve: bool,
+
+        /// TCP port for `--serve`.
+        #[arg(long, default_value_t = 8080)]
+        port: u16,
+    },
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -193,6 +234,52 @@ enum TraceFormat {
 enum SafetyFormat {
     Json,
     Markdown,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum CliViewerView {
+    General,
+    Interconnection,
+    State,
+    Activity,
+    Sequence,
+    Usecase,
+    Tree,
+    Package,
+    Graph,
+    Hierarchy,
+}
+
+impl From<CliViewerView> for ViewerView {
+    fn from(v: CliViewerView) -> Self {
+        match v {
+            CliViewerView::General => ViewerView::General,
+            CliViewerView::Interconnection => ViewerView::Interconnection,
+            CliViewerView::State => ViewerView::State,
+            CliViewerView::Activity => ViewerView::Activity,
+            CliViewerView::Sequence => ViewerView::Sequence,
+            CliViewerView::Usecase => ViewerView::UseCase,
+            CliViewerView::Tree => ViewerView::Tree,
+            CliViewerView::Package => ViewerView::Package,
+            CliViewerView::Graph => ViewerView::Graph,
+            CliViewerView::Hierarchy => ViewerView::Hierarchy,
+        }
+    }
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum CliViewerTheme {
+    Dark,
+    Light,
+}
+
+impl From<CliViewerTheme> for ViewerTheme {
+    fn from(t: CliViewerTheme) -> Self {
+        match t {
+            CliViewerTheme::Dark => ViewerTheme::Dark,
+            CliViewerTheme::Light => ViewerTheme::Light,
+        }
+    }
 }
 
 fn print_json<T: Serialize>(val: &T, pretty: bool) {
@@ -276,7 +363,196 @@ fn main() -> ExitCode {
             format,
             output,
         } => cmd_safety_report(&model, &files, format, output, cli.pretty),
+        Commands::View {
+            files,
+            model,
+            output,
+            view,
+            theme,
+            title,
+            json_snapshot,
+            serve,
+            port,
+        } => cmd_view(
+            &files,
+            &model,
+            output,
+            view.into(),
+            theme.into(),
+            title,
+            json_snapshot,
+            serve,
+            port,
+            cli.pretty,
+        ),
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn cmd_view(
+    files: &[PathBuf],
+    model_name: &str,
+    output: Option<PathBuf>,
+    view: ViewerView,
+    theme: ViewerTheme,
+    title_override: Option<String>,
+    json_snapshot: bool,
+    serve: bool,
+    port: u16,
+    pretty: bool,
+) -> ExitCode {
+    let (default_title, default_out, model) = if !files.is_empty() {
+        let units = match read_units(files) {
+            Ok(u) => u,
+            Err(e) => {
+                eprintln!("error: {e}");
+                return ExitCode::from(2);
+            }
+        };
+        let lifted = lift_sysml_units(&units);
+        if !lifted.parse_errors.is_empty() {
+            for err in &lifted.parse_errors {
+                eprintln!("parse error: {err}");
+            }
+            return ExitCode::from(2);
+        }
+        let first = &files[0];
+        let stem = first
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .filter(|s| !s.is_empty())
+            .unwrap_or("sysml_model");
+        let default_title = if files.len() == 1 {
+            first
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or(stem)
+                .to_string()
+        } else {
+            format!("{stem} (+{} files)", files.len() - 1)
+        };
+        let default_out = match first.parent() {
+            Some(parent) if !parent.as_os_str().is_empty() => parent.join(format!("{stem}.html")),
+            _ => PathBuf::from(format!("{stem}.html")),
+        };
+        (default_title, default_out, lifted.model)
+    } else {
+        let model = match resolve_builtin_model(model_name) {
+            Ok(m) => m,
+            Err(e) => {
+                eprintln!("error: {e}");
+                return ExitCode::from(2);
+            }
+        };
+        let default_out = PathBuf::from(format!("{model_name}.html"));
+        (model_name.to_string(), default_out, model)
+    };
+
+    let title = title_override.unwrap_or(default_title);
+    let snapshot = build_viewer_snapshot(&model, view);
+
+    if json_snapshot {
+        print_json(&snapshot, pretty);
+        return ExitCode::SUCCESS;
+    }
+
+    let html = render_standalone_html(
+        &model,
+        &ViewerOptions {
+            title: title.clone(),
+            initial_view: view,
+            theme,
+        },
+    );
+
+    if serve {
+        if let Some(out) = &output {
+            if let Some(parent) = out.parent() {
+                if !parent.as_os_str().is_empty() {
+                    let _ = fs::create_dir_all(parent);
+                }
+            }
+            if let Err(e) = fs::write(out, &html) {
+                eprintln!("error: failed to write '{}': {e}", out.display());
+                return ExitCode::from(2);
+            }
+        }
+        let addr = format!("127.0.0.1:{port}");
+        let listener = match TcpListener::bind(&addr) {
+            Ok(l) => l,
+            Err(e) => {
+                eprintln!("error: failed to bind HTTP server on {addr}: {e}");
+                return ExitCode::from(2);
+            }
+        };
+        let actual_addr = listener.local_addr().map_or(addr, |a| a.to_string());
+        eprintln!("Serving SysML v2 viewer at http://{actual_addr}/ (Ctrl+C to stop)");
+        for stream in listener.incoming() {
+            let mut stream = match stream {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("warning: accept error: {e}");
+                    continue;
+                }
+            };
+            let mut reader = BufReader::new(&stream);
+            let mut request_line = String::new();
+            let _ = reader.read_line(&mut request_line);
+            let mut line = String::new();
+            while reader.read_line(&mut line).unwrap_or(0) > 0 {
+                if line.trim().is_empty() {
+                    break;
+                }
+                line.clear();
+            }
+
+            let header = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                html.len()
+            );
+            let _ = stream.write_all(header.as_bytes());
+            let _ = stream.write_all(html.as_bytes());
+            let _ = stream.flush();
+        }
+        return ExitCode::SUCCESS;
+    }
+
+    let out = output.unwrap_or(default_out);
+    if let Some(parent) = out.parent() {
+        if !parent.as_os_str().is_empty() {
+            let _ = fs::create_dir_all(parent);
+        }
+    }
+    if let Err(e) = fs::write(&out, &html) {
+        eprintln!("error: failed to write '{}': {e}", out.display());
+        return ExitCode::from(2);
+    }
+
+    #[derive(Serialize)]
+    struct ViewOutput {
+        ok: bool,
+        output: String,
+        bytes: usize,
+        title: String,
+        view: &'static str,
+        theme: &'static str,
+        packages: usize,
+        relationships: usize,
+    }
+    print_json(
+        &ViewOutput {
+            ok: true,
+            output: out.display().to_string(),
+            bytes: html.len(),
+            title,
+            view: view.runtime_id(),
+            theme: theme.as_str(),
+            packages: snapshot.elements.len(),
+            relationships: snapshot.relationships.len(),
+        },
+        pretty,
+    );
+    ExitCode::SUCCESS
 }
 
 fn resolve_builtin_model(model_name: &str) -> Result<sysml_ir::Model, String> {
