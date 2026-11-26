@@ -3,13 +3,15 @@
 
 use proc_macro2::TokenStream;
 use quote::quote;
-use syn::{Fields, ItemStruct, LitStr, Meta};
+use std::collections::BTreeMap;
+use syn::{Expr, ExprLit, Fields, ItemStruct, Lit, LitStr, Meta};
 
+use crate::expr_transpile::{transpile_expr, ExprContext};
 use crate::part::ReqLinkArgs;
 use crate::util::{
-    analyze_rust_type, build_attr_usage_tokens, extract_doc, extract_refinements,
-    extract_sysml_name_override, is_sysml_attr, path_to_sysml_string, quote_opt_str, quote_vec_str,
-    snake_to_camel, strip_sysml_attrs, KvArgs, PathList,
+    analyze_rust_type, build_attr_usage_tokens, build_auto_default_impl, extract_doc,
+    extract_refinements, extract_sysml_name_override, is_sysml_attr, path_to_sysml_string,
+    quote_opt_str, quote_vec_str, snake_to_camel, strip_sysml_attrs, KvArgs, PathList,
 };
 
 pub fn expand_requirement(args: TokenStream, mut item: ItemStruct) -> syn::Result<TokenStream> {
@@ -26,9 +28,32 @@ pub fn expand_requirement(args: TokenStream, mut item: ItemStruct) -> syn::Resul
         .unwrap_or_else(|| item.ident.to_string());
     let req_id_const = short_name.clone().unwrap_or_else(|| sysml_name.clone());
 
+    let auto_default_impl = build_auto_default_impl(&item)?;
+
+    // Build map of Rust field name -> SysML attribute name for native expression transpilation
+    let mut field_map: BTreeMap<String, String> = BTreeMap::new();
+    if let Fields::Named(fields) = &item.fields {
+        for field in &fields.named {
+            let fname_rust = field.ident.as_ref().unwrap().to_string();
+            let mut fkv = KvArgs::default();
+            for a in &field.attrs {
+                if is_sysml_attr(a, "attr") {
+                    if let Meta::List(_) = &a.meta {
+                        fkv = a.parse_args()?;
+                    }
+                }
+            }
+            let fname_sysml = extract_sysml_name_override(&field.attrs)?
+                .or_else(|| fkv.get_str("name"))
+                .unwrap_or_else(|| snake_to_camel(&fname_rust));
+            field_map.insert(fname_rust, fname_sysml);
+        }
+    }
+
     let mut specializes_paths = Vec::new();
     let mut rationale: Option<String> = kv.get_str("rationale");
     let mut require_constraints = Vec::new();
+    let mut require_eval_exprs: Vec<TokenStream> = Vec::new();
     let mut assume_constraints = Vec::new();
     let mut subject: Option<(String, String)> = None;
     let mut subject_check = quote!();
@@ -41,11 +66,32 @@ pub fn expand_requirement(args: TokenStream, mut item: ItemStruct) -> syn::Resul
             let s: LitStr = attr.parse_args()?;
             rationale = Some(s.value());
         } else if is_sysml_attr(attr, "require_constraint") {
-            let s: LitStr = attr.parse_args()?;
-            require_constraints.push(s.value());
+            let expr: Expr = attr.parse_args()?;
+            if let Expr::Lit(ExprLit {
+                lit: Lit::Str(s), ..
+            }) = expr
+            {
+                // Raw KerML string literal (used by `sysml-lift` for lifted constraints)
+                require_constraints.push(s.value());
+            } else {
+                // Native Rust expression: 1:1 transpiled to OMG SysML v2 + compiled into `evaluate(&self)`!
+                let ctx = ExprContext::Requirement { fields: &field_map };
+                let transpiled = transpile_expr(&expr, &ctx)?;
+                require_constraints.push(transpiled.sysml);
+                require_eval_exprs.push(transpiled.rust);
+            }
         } else if is_sysml_attr(attr, "assume_constraint") {
-            let s: LitStr = attr.parse_args()?;
-            assume_constraints.push(s.value());
+            let expr: Expr = attr.parse_args()?;
+            if let Expr::Lit(ExprLit {
+                lit: Lit::Str(s), ..
+            }) = expr
+            {
+                assume_constraints.push(s.value());
+            } else {
+                let ctx = ExprContext::Requirement { fields: &field_map };
+                let transpiled = transpile_expr(&expr, &ctx)?;
+                assume_constraints.push(transpiled.sysml);
+            }
         } else if is_sysml_attr(attr, "subject") {
             let skv: KvArgs = attr.parse_args()?;
             let sname = skv.get_str("name").unwrap_or_else(|| "subject".to_string());
@@ -89,6 +135,18 @@ pub fn expand_requirement(args: TokenStream, mut item: ItemStruct) -> syn::Resul
         }
     });
 
+    let eval_impl = if !require_eval_exprs.is_empty() {
+        quote! {
+            impl ::sysml_ir::EvaluableRequirement for #ident {
+                fn evaluate(&self) -> bool {
+                    true #(&& (#require_eval_exprs))*
+                }
+            }
+        }
+    } else {
+        quote!()
+    };
+
     item.attrs = strip_sysml_attrs(std::mem::take(&mut item.attrs));
     let short_tok = quote_opt_str(&short_name);
     let doc_tok = quote_opt_str(&doc);
@@ -108,6 +166,8 @@ pub fn expand_requirement(args: TokenStream, mut item: ItemStruct) -> syn::Resul
 
     Ok(quote! {
         #item
+
+        #auto_default_impl
 
         impl ::sysml_ir::SysmlRequirement for #ident {
             const REQ_ID: &'static str = #req_id_const;
@@ -130,6 +190,7 @@ pub fn expand_requirement(args: TokenStream, mut item: ItemStruct) -> syn::Resul
             }
         }
 
+        #eval_impl
         #subject_check
         #(#spec_impls)*
     })

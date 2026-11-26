@@ -96,6 +96,7 @@ pub enum PackageMember {
     RequirementDef(RequirementDef),
     RequirementUsage(RequirementUsage),
     VerificationDef(VerificationDef),
+    CalcDef(CalcDef),
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -445,4 +446,27 @@ pub struct VerificationDef {
     pub doc: Option<String>,
     pub subject: Option<SubjectDecl>,
     pub verifies: Vec<VerifyStmt>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct CalcParam {
+    pub name: String,
+    pub type_name: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct CalcLocal {
+    pub name: String,
+    pub expr: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct CalcDef {
+    pub name: String,
+    pub doc: Option<String>,
+    pub params: Vec<CalcParam>,
+    pub locals: Vec<CalcLocal>,
+    pub return_name: String,
+    pub return_type: String,
+    pub result_expr: String,
 }

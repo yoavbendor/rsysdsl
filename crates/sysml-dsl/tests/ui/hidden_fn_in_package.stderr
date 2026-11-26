@@ -1,0 +1,5 @@
+error: unmodeled `fn` is forbidden inside `#[sysml::package]` (semantic leakage prevented): annotate modeled calculations with `#[sysml::calc]` or move imperative logic to an external runner crate
+  --> tests/ui/hidden_fn_in_package.rs:12:12
+   |
+12 |     pub fn hidden_safety_override(pressure: f64) -> bool {
+   |            ^^^^^^^^^^^^^^^^^^^^^^

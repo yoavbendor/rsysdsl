@@ -13,6 +13,7 @@ serde = { workspace = true }
 
 [dev-dependencies]
 sysml-emit = { workspace = true }
-apollo11-slice = { workspace = true }
+apollo11-model = { workspace = true }
+apollo11-sim = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }

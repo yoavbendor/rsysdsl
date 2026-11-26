@@ -208,6 +208,7 @@ fn emit_member(member: &PackageMember, level: usize, out: &mut String) {
         PackageMember::RequirementDef(r) => emit_requirement_def(r, level, out),
         PackageMember::RequirementUsage(r) => emit_requirement_usage(r, level, out),
         PackageMember::VerificationDef(v) => emit_verification_def(v, level, out),
+        PackageMember::CalcDef(c) => emit_calc_def(c, level, out),
     }
 }
 
@@ -991,5 +992,38 @@ fn emit_verification_def(v: &VerificationDef, level: usize, out: &mut String) {
     for ver in &v.verifies {
         emit_verify(ver, level + 1, out);
     }
+    let _ = writeln!(out, "{ind}}}");
+}
+
+fn emit_calc_def(c: &CalcDef, level: usize, out: &mut String) {
+    let ind = indent(level);
+    let _ = writeln!(out, "{ind}calc def {} {{", escape_sysml_name(&c.name));
+    emit_doc(&c.doc, level + 1, out);
+    for p in &c.params {
+        let _ = writeln!(
+            out,
+            "{}in {} : {};",
+            indent(level + 1),
+            escape_sysml_name(&p.name),
+            format_qualified(&p.type_name)
+        );
+    }
+    for local in &c.locals {
+        let _ = writeln!(
+            out,
+            "{}attribute {} = {};",
+            indent(level + 1),
+            escape_sysml_name(&local.name),
+            local.expr
+        );
+    }
+    let _ = writeln!(
+        out,
+        "{}return {} : {} = {};",
+        indent(level + 1),
+        escape_sysml_name(&c.return_name),
+        format_qualified(&c.return_type),
+        c.result_expr
+    );
     let _ = writeln!(out, "{ind}}}");
 }

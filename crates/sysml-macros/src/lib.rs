@@ -23,9 +23,11 @@
 
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{parse_macro_input, Attribute, Item, ItemEnum, ItemMod, ItemStruct};
+use syn::{parse_macro_input, Attribute, Item, ItemEnum, ItemFn, ItemMod, ItemStruct};
 
 mod behavior;
+mod calc;
+mod expr_transpile;
 mod package;
 mod part;
 mod port;
@@ -33,6 +35,14 @@ mod requirement;
 mod util;
 
 use util::{is_sysml_attr, PathList};
+
+#[proc_macro_attribute]
+pub fn calc(args: TokenStream, input: TokenStream) -> TokenStream {
+    let item = parse_macro_input!(input as ItemFn);
+    calc::expand_calc(args.into(), item)
+        .unwrap_or_else(|e| e.to_compile_error())
+        .into()
+}
 
 #[proc_macro_attribute]
 pub fn package(args: TokenStream, input: TokenStream) -> TokenStream {

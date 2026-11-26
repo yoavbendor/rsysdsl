@@ -24,10 +24,10 @@ pub use sysml_macros as sysml;
 
 pub mod prelude {
     pub use sysml_ir::{
-        Conjugated, Model, Package, Performs, PortConnectable, Quantity, Satisfies, Specializes,
-        SysmlAction, SysmlEnum, SysmlInterface, SysmlItem, SysmlPart, SysmlPort, SysmlRequirement,
-        SysmlState, TransitionError, VerificationReport, VerificationStatus, VerificationVerdict,
-        Verifies,
+        Conjugated, EvaluableRequirement, Model, Package, Performs, PortConnectable, Quantity,
+        Satisfies, Specializes, SysmlAction, SysmlCalc, SysmlEnum, SysmlInterface, SysmlItem,
+        SysmlPart, SysmlPort, SysmlRequirement, SysmlState, ToScalar, TransitionError,
+        VerificationReport, VerificationStatus, VerificationVerdict, Verifies,
     };
     pub use sysml_macros as sysml;
 }

@@ -53,13 +53,21 @@ dependencies = [
 ]
 
 [[package]]
-name = "apollo11-slice"
+name = "apollo11-model"
 version = "0.1.0"
 dependencies = [
- "serde",
- "serde_json",
  "sysml-dsl",
  "sysml-emit",
+ "sysml-ir",
+]
+
+[[package]]
+name = "apollo11-sim"
+version = "0.1.0"
+dependencies = [
+ "apollo11-model",
+ "serde",
+ "serde_json",
  "sysml-ir",
 ]
 
@@ -464,7 +472,8 @@ dependencies = [
 name = "sysml-cli"
 version = "0.1.0"
 dependencies = [
- "apollo11-slice",
+ "apollo11-model",
+ "apollo11-sim",
  "clap",
  "serde",
  "serde_json",
@@ -504,7 +513,8 @@ dependencies = [
 name = "sysml-lift"
 version = "0.1.0"
 dependencies = [
- "apollo11-slice",
+ "apollo11-model",
+ "apollo11-sim",
  "serde",
  "serde_json",
  "sysml-emit",

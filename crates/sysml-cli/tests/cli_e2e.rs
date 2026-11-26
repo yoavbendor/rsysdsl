@@ -1,5 +1,5 @@
 //! End-to-end CLI tests for `rsysdsl` verifying JSON stdout, stderr diagnostics,
-//! and clean exit codes (`0` = ok, `1` = validation/roundtrip/verify failure, `2` = IO/parse error).
+//! traceability audit, and clean exit codes (`0` = ok, `1` = failure, `2` = IO/parse error).
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -20,7 +20,7 @@ fn workspace_root() -> PathBuf {
 #[test]
 fn cli_emit_outputs_valid_json_and_zero_exit() {
     let out = Command::new(bin_path())
-        .args(["emit", "--model", "apollo11-slice"])
+        .args(["emit", "--model", "apollo11-model"])
         .output()
         .expect("run rsysdsl emit");
     assert_eq!(out.status.code(), Some(0));
@@ -28,7 +28,33 @@ fn cli_emit_outputs_valid_json_and_zero_exit() {
         serde_json::from_slice(&out.stdout).expect("stdout must be valid compact JSON");
     assert_eq!(val["validation_ok"], true);
     assert_eq!(val["validation_errors"], 0);
-    assert!(val["packages"].as_u64().unwrap() >= 8);
+    assert_eq!(val["packages"], 10);
+}
+
+#[test]
+fn cli_audit_with_verify_passes_with_zero_findings() {
+    let out = Command::new(bin_path())
+        .args(["audit", "--model", "apollo11-model", "--verify"])
+        .output()
+        .expect("run rsysdsl audit");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let val: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(val["ok"], true);
+    assert_eq!(val["validation_ok"], true);
+    assert_eq!(val["orphan_requirements"].as_array().unwrap().len(), 0);
+    assert_eq!(
+        val["unverified_constrained_requirements"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
+    assert_eq!(val["total_calcs"], 3);
 }
 
 #[test]

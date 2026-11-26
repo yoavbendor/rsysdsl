@@ -1,7 +1,16 @@
 //! Proc-macro expansion for `#[sysml::package]` on Rust modules.
+//!
+//! Enforces strict 3-tier anti-semantic-leakage purity at `rustc` compile time:
+//! - Allowed items inside `#[sysml::package]`:
+//!   - `use ...;`
+//!   - `#[sysml::import("...")] const ...;`
+//!   - `struct`/`enum`/`mod` annotated with a primary `#[sysml::*]` attribute
+//!   - `fn` annotated with `#[sysml::calc]`
+//! - **Hard compile error:** raw `fn`, `impl`, `static`, `trait`, `macro_rules!`,
+//!   unannotated `struct`/`enum`/`mod`/`const`, `type`, or `extern crate`.
 
 use proc_macro2::TokenStream;
-use quote::quote;
+use quote::{format_ident, quote};
 use syn::{Item, ItemMod, LitStr};
 
 use crate::util::{
@@ -53,6 +62,7 @@ pub fn expand_package(args: TokenStream, mut item: ItemMod) -> syn::Result<Token
     if let Some((_, ref mut items)) = item.content {
         for sub in items.iter_mut() {
             match sub {
+                Item::Use(_) => {}
                 Item::Const(c) => {
                     let mut had_import = false;
                     for attr in &c.attrs {
@@ -69,9 +79,13 @@ pub fn expand_package(args: TokenStream, mut item: ItemMod) -> syn::Result<Token
                             had_import = true;
                         }
                     }
-                    if had_import {
-                        c.attrs = strip_sysml_attrs(std::mem::take(&mut c.attrs));
+                    if !had_import {
+                        return Err(syn::Error::new_spanned(
+                            c,
+                            "unmodeled `const` is forbidden inside `#[sysml::package]` (semantic leakage prevented): declare values as `#[sysml::attr(value = ...)]` or annotate imports with `#[sysml::import(...)]`",
+                        ));
                     }
+                    c.attrs = strip_sysml_attrs(std::mem::take(&mut c.attrs));
                 }
                 Item::Struct(s) => {
                     let id = &s.ident;
@@ -115,6 +129,11 @@ pub fn expand_package(args: TokenStream, mut item: ItemMod) -> syn::Result<Token
                         member_tokens.push(quote! {
                             ::sysml_ir::PackageMember::VerificationDef(#id::verification_def())
                         });
+                    } else {
+                        return Err(syn::Error::new_spanned(
+                            &s.ident,
+                            "unannotated `struct` is forbidden inside `#[sysml::package]` (semantic leakage prevented): annotate with a `#[sysml::*]` macro or move outside the model package",
+                        ));
                     }
                 }
                 Item::Enum(e) => {
@@ -127,6 +146,11 @@ pub fn expand_package(args: TokenStream, mut item: ItemMod) -> syn::Result<Token
                         member_tokens.push(quote! {
                             ::sysml_ir::PackageMember::EnumDef(<#id as ::sysml_ir::SysmlEnum>::enum_def())
                         });
+                    } else {
+                        return Err(syn::Error::new_spanned(
+                            &e.ident,
+                            "unannotated `enum` is forbidden inside `#[sysml::package]` (semantic leakage prevented): annotate with `#[sysml::state]` or `#[sysml::enum_def]`",
+                        ));
                     }
                 }
                 Item::Mod(m) => {
@@ -135,9 +159,38 @@ pub fn expand_package(args: TokenStream, mut item: ItemMod) -> syn::Result<Token
                         member_tokens.push(quote! {
                             ::sysml_ir::PackageMember::Package(#id::sysml_package())
                         });
+                    } else {
+                        return Err(syn::Error::new_spanned(
+                            &m.ident,
+                            "unannotated `mod` is forbidden inside `#[sysml::package]` (semantic leakage prevented): annotate nested packages with `#[sysml::package]`",
+                        ));
                     }
                 }
-                _ => {}
+                Item::Fn(f) => {
+                    if f.attrs.iter().any(|a| is_sysml_attr(a, "calc")) {
+                        let marker = format_ident!("__sysml_calc_marker_{}", f.sig.ident);
+                        member_tokens.push(quote! {
+                            ::sysml_ir::PackageMember::CalcDef(<#marker as ::sysml_ir::SysmlCalc>::calc_def())
+                        });
+                    } else {
+                        return Err(syn::Error::new_spanned(
+                            &f.sig.ident,
+                            "unmodeled `fn` is forbidden inside `#[sysml::package]` (semantic leakage prevented): annotate modeled calculations with `#[sysml::calc]` or move imperative logic to an external runner crate",
+                        ));
+                    }
+                }
+                Item::Impl(imp) => {
+                    return Err(syn::Error::new_spanned(
+                        imp,
+                        "raw `impl` blocks are forbidden inside `#[sysml::package]` (semantic leakage prevented): `Default` is auto-generated from `#[sysml::attr(value = ...)]`, constraints generate `evaluate()`, and imperative runners belong in a separate crate",
+                    ));
+                }
+                other => {
+                    return Err(syn::Error::new_spanned(
+                        other,
+                        "unmodeled Rust item is forbidden inside `#[sysml::package]` (semantic leakage prevented)",
+                    ));
+                }
             }
         }
 

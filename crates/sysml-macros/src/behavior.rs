@@ -12,8 +12,9 @@ use proc_macro2::TokenStream;
 use quote::quote;
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
-use syn::{bracketed, Fields, Ident, Item, ItemEnum, ItemStruct, LitStr, Path, Token};
+use syn::{bracketed, Expr, ExprLit, Fields, Ident, Item, ItemEnum, ItemStruct, Lit, LitStr, Path, Token};
 
+use crate::expr_transpile::{transpile_expr, ExprContext};
 use crate::util::{
     analyze_rust_type, extract_doc, extract_refinements, extract_sysml_name_override,
     is_sysml_attr, path_to_sysml_string, quote_opt_str, quote_vec_str, snake_to_camel,
@@ -84,12 +85,17 @@ impl Parse for DoActionArgs {
     }
 }
 
-/// Parses `#[sysml::transition(on = TriggerItem, to = TargetVariant, guard = "...")]`
+enum GuardSpec {
+    RawString(String),
+    NativeExpr(Expr),
+}
+
+/// Parses `#[sysml::transition(on = TriggerItem, guard = event.v <= subject.max_v, to = TargetVariant)]`
 /// or `#[sysml::transition(to = TargetVariant)]`.
 struct TransitionArgs {
     trigger: Option<Path>,
     to: Ident,
-    guard: Option<String>,
+    guard: Option<GuardSpec>,
     effect: Option<String>,
     doc: Option<String>,
 }
@@ -112,8 +118,15 @@ impl Parse for TransitionArgs {
                     to = Some(input.parse::<Ident>()?);
                 }
                 "guard" | "if_guard" => {
-                    let s: LitStr = input.parse()?;
-                    guard = Some(s.value());
+                    let expr: Expr = input.parse()?;
+                    if let Expr::Lit(ExprLit {
+                        lit: Lit::Str(s), ..
+                    }) = expr
+                    {
+                        guard = Some(GuardSpec::RawString(s.value()));
+                    } else {
+                        guard = Some(GuardSpec::NativeExpr(expr));
+                    }
                 }
                 "effect" => {
                     let s: LitStr = input.parse()?;
@@ -401,6 +414,8 @@ fn expand_state_enum(args: TokenStream, mut item: ItemEnum) -> syn::Result<Token
     let sysml_name = extract_sysml_name_override(&item.attrs)?
         .or_else(|| kv.get_str("name"))
         .unwrap_or_else(|| item.ident.to_string());
+    let subject_ty: Option<Path> = kv.get_path("subject");
+    let has_subject = subject_ty.is_some();
 
     let mut specializes_paths = Vec::new();
     for attr in &item.attrs {
@@ -416,9 +431,14 @@ fn expand_state_enum(args: TokenStream, mut item: ItemEnum) -> syn::Result<Token
     let mut transition_tokens = Vec::new();
     let mut compile_checks = Vec::new();
     let mut step_match_arms = Vec::new();
+    let mut guarded_event_checks = Vec::new();
     let mut allowed_match_arms = Vec::new();
     let mut name_match_arms = Vec::new();
     let mut initial_variant: Option<Ident> = None;
+
+    if let Some(subj) = &subject_ty {
+        compile_checks.push(quote! { ::sysml_ir::assert_part::<#subj>(); });
+    }
 
     for variant in &mut item.variants {
         let v_ident = variant.ident.clone();
@@ -427,7 +447,6 @@ fn expand_state_enum(args: TokenStream, mut item: ItemEnum) -> syn::Result<Token
         let v_sysml_name = extract_sysml_name_override(&variant.attrs)?
             .unwrap_or_else(|| lower_first(&v_ident.to_string()));
 
-        // Optional state typing: `#[sysml::state_type(PoweredDescentPhase)]` or `#[sysml::part(ty = "...")]`
         let mut state_ty: Option<Path> = None;
         let mut variant_transitions = Vec::new();
 
@@ -472,7 +491,6 @@ fn expand_state_enum(args: TokenStream, mut item: ItemEnum) -> syn::Result<Token
             let target_sysml = lower_first(&target_ident.to_string());
             let trigger_str = t.trigger.as_ref().map(path_to_sysml_string);
             let trigger_tok = quote_opt_str(&trigger_str);
-            let guard_tok = quote_opt_str(&t.guard);
             let effect_tok = quote_opt_str(&t.effect);
             let tdoc_tok = quote_opt_str(&t.doc);
 
@@ -487,6 +505,17 @@ fn expand_state_enum(args: TokenStream, mut item: ItemEnum) -> syn::Result<Token
                 });
             }
 
+            let (guard_sysml, guard_rust_opt) = match &t.guard {
+                None => (None, None),
+                Some(GuardSpec::RawString(s)) => (Some(s.clone()), None),
+                Some(GuardSpec::NativeExpr(expr)) => {
+                    let ctx = ExprContext::TransitionGuard { has_subject };
+                    let transpiled = transpile_expr(expr, &ctx)?;
+                    (Some(transpiled.sysml), Some(transpiled.rust))
+                }
+            };
+            let guard_tok = quote_opt_str(&guard_sysml);
+
             transition_tokens.push(quote! {
                 ::sysml_ir::Transition {
                     name: ::std::option::Option::None,
@@ -500,13 +529,45 @@ fn expand_state_enum(args: TokenStream, mut item: ItemEnum) -> syn::Result<Token
             });
 
             let trig_key = trigger_str.unwrap_or_else(|| "auto".to_string());
-            allowed_triggers.push(trig_key.clone());
-            step_match_arms.push(quote! {
-                (#ident::#v_ident, #trig_key) => {
-                    *self = #ident::#target_ident;
-                    ::std::result::Result::Ok(*self)
+            if !allowed_triggers.contains(&trig_key) {
+                allowed_triggers.push(trig_key.clone());
+            }
+
+            if guard_rust_opt.is_none() {
+                step_match_arms.push(quote! {
+                    (#ident::#v_ident, #trig_key) => {
+                        *self = #ident::#target_ident;
+                        ::std::result::Result::Ok(*self)
+                    }
+                });
+            }
+
+            // Generate typed payload + guard dispatch arm for `step_event` / `step_with`
+            if let Some(trig_path) = &t.trigger {
+                if let Some(guard_expr) = &guard_rust_opt {
+                    guarded_event_checks.push(quote! {
+                        if *self == #ident::#v_ident {
+                            if let ::std::option::Option::Some(__sysml_event) =
+                                (__any_event as &dyn ::std::any::Any).downcast_ref::<#trig_path>()
+                            {
+                                if #guard_expr {
+                                    *self = #ident::#target_ident;
+                                    return ::std::result::Result::Ok(*self);
+                                }
+                            }
+                        }
+                    });
+                } else {
+                    guarded_event_checks.push(quote! {
+                        if *self == #ident::#v_ident {
+                            if (__any_event as &dyn ::std::any::Any).is::<#trig_path>() {
+                                *self = #ident::#target_ident;
+                                return ::std::result::Result::Ok(*self);
+                            }
+                        }
+                    });
                 }
-            });
+            }
         }
 
         allowed_match_arms.push(quote! {
@@ -514,7 +575,6 @@ fn expand_state_enum(args: TokenStream, mut item: ItemEnum) -> syn::Result<Token
         });
 
         variant.attrs = strip_sysml_attrs(std::mem::take(&mut variant.attrs));
-        // Also strip `state_type`
         variant.attrs.retain(|a| !is_sysml_attr(a, "state_type"));
     }
 
@@ -526,6 +586,44 @@ fn expand_state_enum(args: TokenStream, mut item: ItemEnum) -> syn::Result<Token
         }
     } else {
         quote!()
+    };
+
+    let typed_step_fn = if let Some(subj) = &subject_ty {
+        quote! {
+            /// Evaluates typed trigger payload and compiled SysML v2 transition guards
+            /// against both `event` and `subject`, advancing the state machine atomically.
+            pub fn step_with<E: ::sysml_ir::SysmlItem + 'static>(
+                &mut self,
+                __any_event: &E,
+                __sysml_subject: &#subj,
+            ) -> ::std::result::Result<Self, ::sysml_ir::TransitionError> {
+                let _ = __sysml_subject;
+                #(#guarded_event_checks)*
+                ::std::result::Result::Err(::sysml_ir::TransitionError {
+                    state_machine: ::std::string::String::from(#sysml_name),
+                    from: ::std::string::String::from(self.sysml_state_name()),
+                    trigger: ::std::string::String::from(<E as ::sysml_ir::SysmlItem>::SYSML_NAME),
+                    allowed_triggers: self.allowed_triggers(),
+                })
+            }
+        }
+    } else {
+        quote! {
+            /// Evaluates typed trigger payload and compiled SysML v2 transition guards,
+            /// advancing the state machine atomically.
+            pub fn step_event<E: ::sysml_ir::SysmlItem + 'static>(
+                &mut self,
+                __any_event: &E,
+            ) -> ::std::result::Result<Self, ::sysml_ir::TransitionError> {
+                #(#guarded_event_checks)*
+                ::std::result::Result::Err(::sysml_ir::TransitionError {
+                    state_machine: ::std::string::String::from(#sysml_name),
+                    from: ::std::string::String::from(self.sysml_state_name()),
+                    trigger: ::std::string::String::from(<E as ::sysml_ir::SysmlItem>::SYSML_NAME),
+                    allowed_triggers: self.allowed_triggers(),
+                })
+            }
+        }
     };
 
     let spec_impls = specializes_paths.iter().map(|base| {
@@ -559,7 +657,7 @@ fn expand_state_enum(args: TokenStream, mut item: ItemEnum) -> syn::Result<Token
                 }
             }
 
-            /// Executes a transition by trigger name (or `"auto"` for unconditional
+            /// Executes an unguarded transition by trigger name (or `"auto"` for unconditional
             /// transitions), returning `Err(TransitionError)` if the transition is illegal.
             pub fn step(&mut self, trigger: &str) -> ::std::result::Result<Self, ::sysml_ir::TransitionError> {
                 match (*self, trigger) {
@@ -573,10 +671,12 @@ fn expand_state_enum(args: TokenStream, mut item: ItemEnum) -> syn::Result<Token
                 }
             }
 
-            /// Executes a strongly typed transition using a `SysmlItem` trigger type.
+            /// Executes an unguarded strongly typed transition using a `SysmlItem` trigger type.
             pub fn step_on<T: ::sysml_ir::SysmlItem>(&mut self) -> ::std::result::Result<Self, ::sysml_ir::TransitionError> {
                 self.step(<T as ::sysml_ir::SysmlItem>::SYSML_NAME)
             }
+
+            #typed_step_fn
         }
 
         impl ::sysml_ir::SysmlState for #ident {

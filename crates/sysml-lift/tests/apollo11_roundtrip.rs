@@ -33,20 +33,36 @@ fn apollo11_fixture(rel: &str) -> (String, String) {
     (rel.to_string(), src)
 }
 
-/// Gate 2: Validate the hand-written 5-layer Apollo 11 Rust DSL slice with Open-MBEE `sysml-toolkit`.
+/// Gate 2: Validate the pure declarative 5-layer Apollo 11 Rust DSL model (`apollo11-model`)
+/// with Open-MBEE `sysml-toolkit` AND run full traceability audit (`audit_model`) with verification.
 #[test]
-fn gate2_handwritten_apollo11_slice_validates_with_zero_errors() {
-    let emitted = apollo11_slice::emit_apollo11_slice_sysml();
-    let report = validate_sysml_source("apollo11_slice.sysml", &emitted);
+fn gate2_handwritten_apollo11_model_validates_and_audits_cleanly() {
+    let model = apollo11_model::build_apollo11_model();
+    let emitted = apollo11_model::emit_apollo11_model_sysml();
+    let report = validate_sysml_source("apollo11_model.sysml", &emitted);
     assert!(
         report.valid,
-        "Expected 0 Open-MBEE validation errors on emitted Apollo 11 slice, got:\n{}\n\nEmitted SysML:\n{}",
+        "Expected 0 Open-MBEE validation errors on emitted Apollo 11 model, got:\n{}\n\nEmitted SysML:\n{}",
         serde_json::to_string_pretty(&report).unwrap(),
         emitted
     );
     assert_eq!(report.syntax_errors.len(), 0);
     assert_eq!(report.context_errors.len(), 0);
     assert_eq!(report.model_errors.len(), 0);
+    // Verify modeled #[sysml::calc] defs and compiled state guards appear in emitted .sysml!
+    assert!(emitted.contains("calc def ascentBurnDuration"));
+    assert!(emitted.contains("if (verticalVelocity <= maxTouchdownVerticalVelocity)"));
+
+    let verification = apollo11_sim::run_nominal_verification();
+    let audit = sysml_emit::audit_model("apollo11_model", &model, Some(&verification));
+    assert!(
+        audit.ok,
+        "Expected 0 traceability audit findings on apollo11-model, got:\n{}",
+        serde_json::to_string_pretty(&audit).unwrap()
+    );
+    assert_eq!(audit.orphan_requirements.len(), 0);
+    assert_eq!(audit.unverified_constrained_requirements.len(), 0);
+    assert_eq!(audit.total_calcs, 3);
 }
 
 /// Gate 2 + Gate 3: Full end-to-end Apollo 11 bidirectional round-trip INCLUDING

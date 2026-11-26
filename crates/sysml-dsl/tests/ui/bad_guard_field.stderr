@@ -1,0 +1,7 @@
+error[E0609]: no field `nonexistent_metric` on type `&TouchdownEvent`
+  --> tests/ui/bad_guard_field.rs:17:23
+   |
+17 |         guard = event.nonexistent_metric <= 2.0,
+   |                       ^^^^^^^^^^^^^^^^^^ unknown field
+   |
+   = note: available field is: `vertical_velocity`

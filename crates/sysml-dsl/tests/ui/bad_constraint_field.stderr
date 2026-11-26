@@ -1,0 +1,5 @@
+error: unknown requirement attribute `max_veloctiy` in #[sysml::require_constraint]; expected one of: ["actual_velocity", "max_velocity"]
+ --> tests/ui/bad_constraint_field.rs:5:48
+  |
+5 | #[sysml::require_constraint(actual_velocity <= max_veloctiy)]
+  |                                                ^^^^^^^^^^^^

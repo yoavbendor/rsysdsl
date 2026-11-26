@@ -1,21 +1,14 @@
-//! Complete 5-layer vertical slice of Airbus Central R&T's Apollo 11 SysML v2
-//! mission model authored directly in idiomatic, strongly typed Rust.
+//! Pure declarative 5-layer vertical slice of Airbus Central R&T's Apollo 11
+//! SysML v2 mission model authored in strict, zero-leakage Rust DSL.
 //!
-//! Layers covered end-to-end:
-//! 1. **CoSMA Base** (`cosma_package`): `MassedComponent`, `Function`, `LogicalComponent`,
-//!    `HardwareComponent`, `PowerProvider`, `PowerConsumer`, `Phase`, `System`
-//! 2. **Purpose / Mission Phases** (`mission_phases_package`): `PoweredDescentPhase` +
-//!    executable `Apollo11MissionPhases` state machine
-//! 3. **Requirements** (`requirements_package`): `HLR-R002`, `CLR-R018`, `CLR-R050`,
-//!    `CLR-R057`, `CLR-R058`
-//! 4. **Functions & Logical** (`functions_package`, `logical_components_package`):
-//!    `ExecuteDescentBurn`, `ExecuteAscentBurn`, `Spacecraft` (`perform action`)
-//! 5. **Technical Ports, Hardware & Specification** (`technical_ports_package`,
-//!    `technical_components_package`, `system_specification_package`):
-//!    `LMStagingPort`, `DockingPort`, `LMStagingInterface`, `LunarModuleDescentStage`,
-//!    `LunarModuleAscentStage`, `ApolloLunarModule`, `ApolloSpacecraft`, `satisfy` links.
-
-pub mod simulation;
+//! Notice what is **absent** from this entire crate (enforced at compile time
+//! by `#[sysml::package]`):
+//! - ZERO raw `fn` definitions (only 1:1 SysML-transpiled `#[sysml::calc] fn`)
+//! - ZERO raw `impl` blocks (`Default` is auto-generated from `#[sysml::attr(value = ...)]`;
+//!   requirement `evaluate(&self)` is compiled from `#[sysml::require_constraint(...)]`;
+//!   state-machine guards are compiled from `#[sysml::transition(..., guard = ...)]`)
+//! - ZERO simulation, physics, or test runner dependencies (those live in `apollo11-sim`,
+//!   which depends one-way on `apollo11-model`).
 
 use sysml_dsl::prelude::*;
 
@@ -61,7 +54,7 @@ pub mod cosma_package {
 
     #[sysml::part(abstract)]
     #[sysml::specializes(HardwareComponent)]
-    #[derive(Debug, Clone, Default)]
+    #[derive(Debug, Clone)]
     pub struct PowerProvider {
         #[sysml::attr(subsets = "ISQ::power", default = "0", unit = "W")]
         pub power_generated: Quantity<f64>,
@@ -112,83 +105,6 @@ pub mod operations_package {
     pub struct ExecuteLunarAscentBurn;
 }
 
-#[sysml::package(name = "MissionPhasesPackage")]
-#[sysml::import("CoSMAPackage::*")]
-#[sysml::import("OperationsPackage::*")]
-pub mod mission_phases_package {
-    use super::cosma_package::*;
-    use super::operations_package::*;
-    use sysml_dsl::prelude::*;
-
-    #[sysml::item]
-    #[derive(Debug, Clone, Default)]
-    pub struct PreparationPhaseCompletedNotification;
-
-    #[sysml::item]
-    #[derive(Debug, Clone, Default)]
-    pub struct LaunchPhaseCompletedNotification;
-
-    #[sysml::item]
-    #[derive(Debug, Clone, Default)]
-    pub struct LunarOrbitOpsDescentPrepCompletedNotification;
-
-    #[sysml::item]
-    #[derive(Debug, Clone, Default)]
-    pub struct PoweredDescentPhaseCompletedNotification;
-
-    #[sysml::item]
-    #[derive(Debug, Clone, Default)]
-    pub struct PoweredDescentAbortTrigger;
-
-    #[sysml::item]
-    #[derive(Debug, Clone, Default)]
-    pub struct LunarSurfaceOpsCompletedNotification;
-
-    /// Powered Descent mission phase culminating in Eagle touchdown at Tranquility Base.
-    #[sysml::state]
-    #[sysml::specializes(Phase)]
-    #[sysml::do_action(
-        name = "poweredDescentOperations",
-        steps = [
-            executePoweredDescentBurn: ExecutePoweredDescentBurn,
-            monitorDescentTelemetry: MonitorDescentTelemetry,
-            performManualPiloting: PerformManualPiloting,
-        ]
-    )]
-    #[derive(Debug, Clone, Default)]
-    pub struct PoweredDescentPhase;
-
-    /// Executable Apollo 11 mission phase state machine (both emits SysML v2
-    /// transitions and executes directly in `cargo test` simulations).
-    #[sysml::state(name = "Apollo11MissionPhases")]
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub enum Apollo11MissionPhases {
-        #[sysml::initial]
-        #[sysml::transition(to = Preparation)]
-        Initial,
-
-        #[sysml::transition(on = PreparationPhaseCompletedNotification, to = Launch)]
-        Preparation,
-
-        #[sysml::transition(on = LaunchPhaseCompletedNotification, to = LunarOrbitOps)]
-        Launch,
-
-        #[sysml::transition(on = LunarOrbitOpsDescentPrepCompletedNotification, to = PoweredDescent)]
-        LunarOrbitOps,
-
-        #[sysml::transition(on = PoweredDescentPhaseCompletedNotification, to = LunarSurfaceOps)]
-        #[sysml::transition(on = PoweredDescentAbortTrigger, to = AbortToLunarOrbit)]
-        PoweredDescent,
-
-        #[sysml::transition(on = LunarSurfaceOpsCompletedNotification, to = MissionComplete)]
-        LunarSurfaceOps,
-
-        AbortToLunarOrbit,
-
-        MissionComplete,
-    }
-}
-
 #[sysml::package(name = "RequirementsPackage")]
 #[sysml::import("SI::*")]
 #[sysml::import("ISQ::*")]
@@ -199,34 +115,25 @@ pub mod requirements_package {
     /// The Apollo 11 Mission shall achieve a soft landing of the crewed lunar lander on the lunar surface within the designated landing zone (Tranquility Base), by July 20, 1969.
     #[sysml::requirement(id = "HLR-R002")]
     #[sysml::rationale("A soft and precise lunar landing is fundamental to the 'Go to Moon' goal and ensures the integrity of the lander and safety of the crew for surface operations and subsequent ascent.")]
-    #[sysml::require_constraint("(actualVerticalVelocity <= maxVerticalVelocity) and (actualHorizontalVelocity <= maxHorizontalVelocity) and (actualLandingZoneDeviation <= maxLandingZoneDeviation)")]
+    #[sysml::require_constraint(
+        (actual_vertical_velocity <= max_vertical_velocity)
+            && (actual_horizontal_velocity <= max_horizontal_velocity)
+            && (actual_landing_zone_deviation <= max_landing_zone_deviation)
+    )]
     #[derive(Debug, Clone)]
     pub struct LunarLanderSoftLandingRequirement {
-        #[sysml::attr(subsets = "ISQ::speed")]
+        #[sysml::attr(subsets = "ISQ::speed", unit = "m/s")]
         pub actual_vertical_velocity: Quantity<f64>,
         #[sysml::attr(subsets = "ISQ::speed", value = "2", unit = "m/s")]
         pub max_vertical_velocity: Quantity<f64>,
-        #[sysml::attr(subsets = "ISQ::speed")]
+        #[sysml::attr(subsets = "ISQ::speed", unit = "m/s")]
         pub actual_horizontal_velocity: Quantity<f64>,
         #[sysml::attr(subsets = "ISQ::speed", value = "0.5", unit = "m/s")]
         pub max_horizontal_velocity: Quantity<f64>,
-        #[sysml::attr(subsets = "ISQ::length")]
+        #[sysml::attr(subsets = "ISQ::length", unit = "m")]
         pub actual_landing_zone_deviation: Quantity<f64>,
         #[sysml::attr(subsets = "ISQ::length", value = "1000", unit = "m")]
         pub max_landing_zone_deviation: Quantity<f64>,
-    }
-
-    impl Default for LunarLanderSoftLandingRequirement {
-        fn default() -> Self {
-            Self {
-                actual_vertical_velocity: Quantity::m_per_s(0.0),
-                max_vertical_velocity: Quantity::m_per_s(2.0),
-                actual_horizontal_velocity: Quantity::m_per_s(0.0),
-                max_horizontal_velocity: Quantity::m_per_s(0.5),
-                actual_landing_zone_deviation: Quantity::m(0.0),
-                max_landing_zone_deviation: Quantity::m(1000.0),
-            }
-        }
     }
 
     /// The LunarModuleDescentStage shall provide a main engine with a throttleable thrust range.
@@ -238,76 +145,51 @@ pub mod requirements_package {
     /// The LunarModuleDescentStage shall command thrust to ensure that at the moment of footpad touchdown, vertical velocity <= 3.05 m/s and horizontal velocity <= 1.22 m/s.
     #[sysml::requirement(id = "CLR-R050")]
     #[sysml::rationale("These limits prevent structural damage to the ascent stage interface or a post-impact tip-over of the LM.")]
-    #[sysml::require_constraint("(actualVerticalVelocity <= maxTouchdownVerticalVelocity) and (actualHorizontalVelocity <= maxTouchdownHorizontalVelocity)")]
+    #[sysml::require_constraint(
+        (actual_vertical_velocity <= max_touchdown_vertical_velocity)
+            && (actual_horizontal_velocity <= max_touchdown_horizontal_velocity)
+    )]
     #[derive(Debug, Clone)]
     pub struct LMDSVelocityLimits {
-        #[sysml::attr(subsets = "ISQ::speed")]
+        #[sysml::attr(subsets = "ISQ::speed", unit = "m/s")]
         pub actual_vertical_velocity: Quantity<f64>,
         #[sysml::attr(subsets = "ISQ::speed", value = "3.05", unit = "m/s")]
         pub max_touchdown_vertical_velocity: Quantity<f64>,
-        #[sysml::attr(subsets = "ISQ::speed")]
+        #[sysml::attr(subsets = "ISQ::speed", unit = "m/s")]
         pub actual_horizontal_velocity: Quantity<f64>,
         #[sysml::attr(subsets = "ISQ::speed", value = "1.22", unit = "m/s")]
         pub max_touchdown_horizontal_velocity: Quantity<f64>,
     }
 
-    impl Default for LMDSVelocityLimits {
-        fn default() -> Self {
-            Self {
-                actual_vertical_velocity: Quantity::m_per_s(0.0),
-                max_touchdown_vertical_velocity: Quantity::m_per_s(3.05),
-                actual_horizontal_velocity: Quantity::m_per_s(0.0),
-                max_touchdown_horizontal_velocity: Quantity::m_per_s(1.22),
-            }
-        }
-    }
-
     /// The lunar lander descent propulsion system shall provide throttleable thrust from 10% to 100% of maximum thrust.
     #[sysml::requirement(id = "CLR-R057")]
     #[sysml::rationale("Throttling capability provides the fine control necessary to manage descent rate and fuel consumption during the lunar landing.")]
-    #[sysml::require_constraint("(actualMinThrottlePercentage <= minRequiredThrottlePercentage) and (actualMaxThrottlePercentage >= maxRequiredThrottlePercentage)")]
+    #[sysml::require_constraint(
+        (actual_min_throttle_percentage <= min_required_throttle_percentage)
+            && (actual_max_throttle_percentage >= max_required_throttle_percentage)
+    )]
     #[derive(Debug, Clone)]
     pub struct DPSThrottlingRange {
-        #[sysml::attr(ty = "Real")]
+        #[sysml::attr(ty = "Real", value = "10", unit = "%")]
         pub actual_min_throttle_percentage: Quantity<f64>,
         #[sysml::attr(ty = "Real", value = "10", unit = "%")]
         pub min_required_throttle_percentage: Quantity<f64>,
-        #[sysml::attr(ty = "Real")]
+        #[sysml::attr(ty = "Real", value = "100", unit = "%")]
         pub actual_max_throttle_percentage: Quantity<f64>,
         #[sysml::attr(ty = "Real", value = "100", unit = "%")]
         pub max_required_throttle_percentage: Quantity<f64>,
     }
 
-    impl Default for DPSThrottlingRange {
-        fn default() -> Self {
-            Self {
-                actual_min_throttle_percentage: Quantity::percent(10.0),
-                min_required_throttle_percentage: Quantity::percent(10.0),
-                actual_max_throttle_percentage: Quantity::percent(100.0),
-                max_required_throttle_percentage: Quantity::percent(100.0),
-            }
-        }
-    }
-
     /// The lunar lander ascent propulsion system shall achieve a burn duration of <= 400 seconds to insert the ascent stage into lunar orbit.
     #[sysml::requirement(id = "CLR-R058")]
     #[sysml::rationale("A specific burn duration is required to ensure the ascent stage achieves the correct lunar orbit for rendezvous.")]
-    #[sysml::require_constraint("actualAscentBurnDuration <= maxAscentBurnDuration")]
+    #[sysml::require_constraint(actual_ascent_burn_duration <= max_ascent_burn_duration)]
     #[derive(Debug, Clone)]
     pub struct LMASBurnDuration {
-        #[sysml::attr(subsets = "ISQ::time")]
+        #[sysml::attr(subsets = "ISQ::time", unit = "s")]
         pub actual_ascent_burn_duration: Quantity<f64>,
         #[sysml::attr(subsets = "ISQ::time", value = "400", unit = "s")]
         pub max_ascent_burn_duration: Quantity<f64>,
-    }
-
-    impl Default for LMASBurnDuration {
-        fn default() -> Self {
-            Self {
-                actual_ascent_burn_duration: Quantity::seconds(0.0),
-                max_ascent_burn_duration: Quantity::seconds(400.0),
-            }
-        }
     }
 }
 
@@ -509,26 +391,12 @@ pub mod technical_components_package {
         pub min_throttle_percent: Quantity<f64>,
         #[sysml::attr(ty = "Real", value = "100", unit = "%")]
         pub max_throttle_percent: Quantity<f64>,
+        #[sysml::attr(subsets = "ISQ::speed", value = "3.05", unit = "m/s")]
+        pub max_touchdown_vertical_velocity: Quantity<f64>,
+        #[sysml::attr(subsets = "ISQ::speed", value = "1.22", unit = "m/s")]
+        pub max_touchdown_horizontal_velocity: Quantity<f64>,
         #[sysml::port]
         pub upper_stage_port: LMStagingPort,
-    }
-
-    impl LunarModuleDescentStage {
-        /// Construct the Apollo 11 Eagle (LM-5) Descent Stage with Airbus model parameters.
-        pub fn apollo11_eagle() -> Self {
-            Self {
-                dry_mass: Quantity::kg(2100.0),
-                propellant_mass: Quantity::kg(8250.0),
-                max_thrust: Quantity::kn(45.0),
-                specific_impulse: Quantity::seconds(305.0),
-                power_generated: Quantity::watts(1500.0),
-                power_load: Quantity::watts(1000.0),
-                failure_rate: Quantity::per_hour(3.0e-6),
-                min_throttle_percent: Quantity::percent(10.0),
-                max_throttle_percent: Quantity::percent(100.0),
-                upper_stage_port: LMStagingPort::default(),
-            }
-        }
     }
 
     /// The upper portion of the Lunar Module, serving as the crew cabin and ascent vehicle.
@@ -555,23 +423,6 @@ pub mod technical_components_package {
         pub lower_stage_port: Conjugated<LMStagingPort>,
         #[sysml::port]
         pub docking_port: DockingPort,
-    }
-
-    impl LunarModuleAscentStage {
-        /// Construct the Apollo 11 Eagle (LM-5) Ascent Stage with Airbus model parameters.
-        pub fn apollo11_eagle() -> Self {
-            Self {
-                dry_mass: Quantity::kg(2220.0),
-                propellant_mass: Quantity::kg(2370.0),
-                max_thrust: Quantity::kn(16.0),
-                specific_impulse: Quantity::seconds(311.0),
-                power_generated: Quantity::watts(1500.0),
-                power_load: Quantity::watts(1200.0),
-                failure_rate: Quantity::per_hour(2.5e-6),
-                lower_stage_port: Conjugated::new(),
-                docking_port: DockingPort::default(),
-            }
-        }
     }
 
     /// The two-stage vehicle that performed the lunar landing and ascent.
@@ -602,28 +453,11 @@ pub mod technical_components_package {
         pub power_load: Quantity<f64>,
     }
 
-    impl ApolloLunarModule {
-        pub fn apollo11_eagle() -> Self {
-            let ds = LunarModuleDescentStage::apollo11_eagle();
-            let as_ = LunarModuleAscentStage::apollo11_eagle();
-            let power_generated = ds.power_generated + as_.power_generated;
-            let power_load = ds.power_load + as_.power_load;
-            Self {
-                lunar_module_descent_stage: ds,
-                lunar_module_ascent_stage: as_,
-                power_generated,
-                power_load,
-            }
-        }
-
-        /// Total wet mass of LM-5 (Descent + Ascent stages).
-        pub fn total_wet_mass_kg(&self) -> f64 {
-            self.lunar_module_descent_stage.dry_mass.value()
-                + self.lunar_module_descent_stage.propellant_mass.value()
-                + self.lunar_module_ascent_stage.dry_mass.value()
-                + self.lunar_module_ascent_stage.propellant_mass.value()
-        }
-    }
+    /// The concrete Apollo 11 Eagle (LM-5) flight article individual.
+    #[sysml::part(individual, name = "LM-5")]
+    #[sysml::specializes(ApolloLunarModule)]
+    #[derive(Debug, Clone, Default)]
+    pub struct Lm5;
 
     /// The Apollo spacecraft stack realizing the logical `Spacecraft` functions.
     #[sysml::part]
@@ -633,13 +467,132 @@ pub mod technical_components_package {
         #[sysml::part]
         pub lunar_module: ApolloLunarModule,
     }
+}
 
-    impl ApolloSpacecraft {
-        pub fn apollo11() -> Self {
-            Self {
-                lunar_module: ApolloLunarModule::apollo11_eagle(),
-            }
-        }
+#[sysml::package(name = "MissionPhasesPackage")]
+#[sysml::import("CoSMAPackage::*")]
+#[sysml::import("OperationsPackage::*")]
+#[sysml::import("TechnicalComponentsPackage::*")]
+#[sysml::import("ISQ::*")]
+pub mod mission_phases_package {
+    use super::cosma_package::*;
+    use super::operations_package::*;
+    use super::technical_components_package::*;
+    use sysml_dsl::prelude::*;
+
+    #[sysml::item]
+    #[derive(Debug, Clone, Default)]
+    pub struct PreparationPhaseCompletedNotification;
+
+    #[sysml::item]
+    #[derive(Debug, Clone, Default)]
+    pub struct LaunchPhaseCompletedNotification;
+
+    #[sysml::item]
+    #[derive(Debug, Clone, Default)]
+    pub struct LunarOrbitOpsDescentPrepCompletedNotification;
+
+    /// Typed touchdown telemetry payload evaluated directly by the SysML state machine guards.
+    #[sysml::item]
+    #[derive(Debug, Clone, Default)]
+    pub struct TouchdownTelemetry {
+        #[sysml::attr(subsets = "ISQ::speed", unit = "m/s")]
+        pub vertical_velocity: Quantity<f64>,
+        #[sysml::attr(subsets = "ISQ::speed", unit = "m/s")]
+        pub horizontal_velocity: Quantity<f64>,
+    }
+
+    #[sysml::item]
+    #[derive(Debug, Clone, Default)]
+    pub struct LunarSurfaceOpsCompletedNotification;
+
+    /// Powered Descent mission phase culminating in Eagle touchdown at Tranquility Base.
+    #[sysml::state]
+    #[sysml::specializes(Phase)]
+    #[sysml::do_action(
+        name = "poweredDescentOperations",
+        steps = [
+            executePoweredDescentBurn: ExecutePoweredDescentBurn,
+            monitorDescentTelemetry: MonitorDescentTelemetry,
+            performManualPiloting: PerformManualPiloting,
+        ]
+    )]
+    #[derive(Debug, Clone, Default)]
+    pub struct PoweredDescentPhase;
+
+    /// Executable Apollo 11 mission phase state machine with compiled SysML v2 guards.
+    ///
+    /// Notice: the landing vs. abort safety boundary is declared directly on the
+    /// `PoweredDescent` transitions and compiled into both `.sysml` (`if ...`) and
+    /// `step_with(&event, &subject)` — zero hidden `if` abort logic in the simulator!
+    #[sysml::state(name = "Apollo11MissionPhases", subject = LunarModuleDescentStage)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum Apollo11MissionPhases {
+        #[sysml::initial]
+        #[sysml::transition(to = Preparation)]
+        Initial,
+
+        #[sysml::transition(on = PreparationPhaseCompletedNotification, to = Launch)]
+        Preparation,
+
+        #[sysml::transition(on = LaunchPhaseCompletedNotification, to = LunarOrbitOps)]
+        Launch,
+
+        #[sysml::transition(on = LunarOrbitOpsDescentPrepCompletedNotification, to = PoweredDescent)]
+        LunarOrbitOps,
+
+        #[sysml::transition(
+            on = TouchdownTelemetry,
+            guard = (event.vertical_velocity <= subject.max_touchdown_vertical_velocity)
+                && (event.horizontal_velocity <= subject.max_touchdown_horizontal_velocity),
+            to = LunarSurfaceOps
+        )]
+        #[sysml::transition(
+            on = TouchdownTelemetry,
+            guard = (event.vertical_velocity > subject.max_touchdown_vertical_velocity)
+                || (event.horizontal_velocity > subject.max_touchdown_horizontal_velocity),
+            to = AbortToLunarOrbit
+        )]
+        PoweredDescent,
+
+        #[sysml::transition(on = LunarSurfaceOpsCompletedNotification, to = MissionComplete)]
+        LunarSurfaceOps,
+
+        AbortToLunarOrbit,
+
+        MissionComplete,
+    }
+}
+
+#[sysml::package(name = "CalculationsPackage")]
+#[sysml::import("ScalarValues::*")]
+pub mod calculations_package {
+    use sysml_dsl::prelude::*;
+
+    /// Computes total wet mass of a propelled stage from dry and propellant mass.
+    #[sysml::calc]
+    pub fn total_stage_mass(dry_mass: f64, propellant_mass: f64) -> f64 {
+        dry_mass + propellant_mass
+    }
+
+    /// Computes effective rocket exhaust velocity (m/s) from specific impulse (s).
+    #[sysml::calc]
+    pub fn exhaust_velocity(specific_impulse_s: f64) -> f64 {
+        specific_impulse_s * 9.80665
+    }
+
+    /// Computes LM Ascent Stage orbital insertion burn duration (s) from modeled stage parameters.
+    #[sysml::calc]
+    pub fn ascent_burn_duration(
+        propellant_mass_kg: f64,
+        max_thrust_kn: f64,
+        specific_impulse_s: f64,
+        burn_fraction: f64,
+    ) -> f64 {
+        let ve = exhaust_velocity(specific_impulse_s);
+        let mass_flow_rate = (max_thrust_kn * 1000.0) / ve;
+        let burned_propellant = propellant_mass_kg * burn_fraction;
+        burned_propellant / mass_flow_rate
     }
 }
 
@@ -659,7 +612,7 @@ pub mod system_specification_package {
     #[sysml::satisfy(req = LMDSVelocityLimits, id = "CLR-R050", requirement = "clr-R050", by = "apolloSpacecraft.lunarModule.lunarModuleDescentStage")]
     #[sysml::satisfy(req = DPSThrottlingRange, id = "CLR-R057", requirement = "clr-R057", by = "apolloSpacecraft.lunarModule.lunarModuleDescentStage")]
     #[sysml::satisfy(req = LMASBurnDuration, id = "CLR-R058", requirement = "clr-R058", by = "apolloSpacecraft.lunarModule.lunarModuleAscentStage")]
-    #[derive(Debug, Clone, Default)]
+    #[derive(Debug, Clone)]
     pub struct Apollo11PoweredDescentSpecification {
         #[sysml::requirement_ref(name = "hlr-R002")]
         pub hlr_r002: LunarLanderSoftLandingRequirement,
@@ -675,21 +628,22 @@ pub mod system_specification_package {
 }
 
 /// Build the complete 5-layer Apollo 11 vertical slice `sysml_ir::Model`.
-pub fn build_apollo11_slice_model() -> sysml_ir::Model {
+pub fn build_apollo11_model() -> sysml_ir::Model {
     sysml_ir::Model::new(vec![
         cosma_package::sysml_package(),
         operations_package::sysml_package(),
-        mission_phases_package::sysml_package(),
         requirements_package::sysml_package(),
         functions_package::sysml_package(),
         logical_components_package::sysml_package(),
         technical_ports_package::sysml_package(),
         technical_components_package::sysml_package(),
+        mission_phases_package::sysml_package(),
+        calculations_package::sysml_package(),
         system_specification_package::sysml_package(),
     ])
 }
 
-/// Emit the complete 5-layer Apollo 11 vertical slice to deterministic OMG SysML v2 text.
-pub fn emit_apollo11_slice_sysml() -> String {
-    sysml_emit::emit_model(&build_apollo11_slice_model())
+/// Emit the complete 5-layer Apollo 11 model to deterministic OMG SysML v2 text.
+pub fn emit_apollo11_model_sysml() -> String {
+    sysml_emit::emit_model(&build_apollo11_model())
 }

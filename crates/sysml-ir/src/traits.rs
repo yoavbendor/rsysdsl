@@ -9,8 +9,9 @@
 use std::marker::PhantomData;
 
 use crate::ir::{
-    ActionDef, EnumDef, InterfaceDef, ItemDef, PartDef, PortDef, RequirementDef, StateDef,
+    ActionDef, CalcDef, EnumDef, InterfaceDef, ItemDef, PartDef, PortDef, RequirementDef, StateDef,
 };
+use crate::quantity::Quantity;
 
 /// Marker and IR reflection trait for SysML `part def` types.
 pub trait SysmlPart: 'static {
@@ -148,6 +149,90 @@ where
     A: SysmlPort + PortConnectable<B>,
     B: SysmlPort,
 {
+}
+
+/// Executable requirement evaluation generated from `#[sysml::require_constraint(...)]`.
+pub trait EvaluableRequirement: SysmlRequirement {
+    /// Evaluates the exact same constraint predicate emitted to SysML v2.
+    fn evaluate(&self) -> bool;
+}
+
+/// Marker and IR reflection trait for modeled `#[sysml::calc]` functions.
+pub trait SysmlCalc: 'static {
+    const SYSML_NAME: &'static str;
+    fn calc_def() -> CalcDef;
+}
+
+/// Compile-time assertion that a callee inside `#[sysml::calc]` is itself a modeled `#[sysml::calc]`.
+pub fn assert_calc<T: SysmlCalc>() {}
+
+/// Extracts a scalar `f64` from primitive numbers or `Quantity<f64>` for compiled
+/// constraint and guard evaluation without duplicating threshold logic.
+pub trait ToScalar {
+    fn to_scalar(self) -> f64;
+}
+
+impl ToScalar for f64 {
+    #[inline]
+    fn to_scalar(self) -> f64 {
+        self
+    }
+}
+
+impl ToScalar for f32 {
+    #[inline]
+    fn to_scalar(self) -> f64 {
+        self as f64
+    }
+}
+
+impl ToScalar for i64 {
+    #[inline]
+    fn to_scalar(self) -> f64 {
+        self as f64
+    }
+}
+
+impl ToScalar for i32 {
+    #[inline]
+    fn to_scalar(self) -> f64 {
+        self as f64
+    }
+}
+
+impl ToScalar for u64 {
+    #[inline]
+    fn to_scalar(self) -> f64 {
+        self as f64
+    }
+}
+
+impl ToScalar for u32 {
+    #[inline]
+    fn to_scalar(self) -> f64 {
+        self as f64
+    }
+}
+
+impl ToScalar for usize {
+    #[inline]
+    fn to_scalar(self) -> f64 {
+        self as f64
+    }
+}
+
+impl ToScalar for Quantity<f64> {
+    #[inline]
+    fn to_scalar(self) -> f64 {
+        self.value
+    }
+}
+
+impl<T: Copy + ToScalar> ToScalar for &T {
+    #[inline]
+    fn to_scalar(self) -> f64 {
+        (*self).to_scalar()
+    }
 }
 
 /// `const`-evaluable string equality check used by `#[sysml::satisfy(..., id = "...")]`

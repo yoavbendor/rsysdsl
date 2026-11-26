@@ -17,9 +17,10 @@ use syn::punctuated::Punctuated;
 use syn::{Expr, Fields, Ident, ItemStruct, LitStr, Meta, Path, Token};
 
 use crate::util::{
-    analyze_rust_type, build_attr_usage_tokens, extract_doc, extract_sysml_name_override,
-    is_sysml_attr, parse_multiplicity_str, path_to_sysml_string, quote_opt_mult, quote_opt_str,
-    quote_vec_str, snake_to_camel, strip_sysml_attrs, KvArgs, PathList,
+    analyze_rust_type, build_attr_usage_tokens, build_auto_default_impl, extract_doc,
+    extract_sysml_name_override, is_sysml_attr, parse_multiplicity_str, path_to_sysml_string,
+    quote_opt_mult, quote_opt_str, quote_vec_str, snake_to_camel, strip_sysml_attrs, KvArgs,
+    PathList,
 };
 
 /// Parses `#[sysml::perform(execute_descent_burn: ExecuteDescentBurn)]`
@@ -264,6 +265,8 @@ pub fn expand_part(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
     }
 
     let spec_names: Vec<String> = specializes_paths.iter().map(path_to_sysml_string).collect();
+
+    let auto_default_impl = build_auto_default_impl(&item)?;
 
     // Parse fields into attributes, nested parts, ports, items, requirement usages
     let mut attr_tokens = Vec::new();
@@ -655,6 +658,8 @@ pub fn expand_part(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
 
     Ok(quote! {
         #item
+
+        #auto_default_impl
 
         impl ::sysml_ir::SysmlPart for #ident {
             const SYSML_NAME: &'static str = #sysml_name;

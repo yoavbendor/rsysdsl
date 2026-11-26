@@ -449,3 +449,139 @@ pub fn build_attr_usage_tokens(
         }
     })
 }
+
+/// Returns `true` if `#[derive(..., Default, ...)]` is already present on `attrs`.
+pub fn has_derive_default(attrs: &[Attribute]) -> bool {
+    for attr in attrs {
+        if attr.path().is_ident("derive") {
+            let mut found = false;
+            let _ = attr.parse_nested_meta(|meta| {
+                if meta.path.is_ident("Default") {
+                    found = true;
+                }
+                Ok(())
+            });
+            if found {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Auto-generates `impl Default for #ident` from `#[sysml::attr(value = "...", default = "...", unit = "...")]`
+/// metadata whenever `#[derive(Default)]` is NOT explicitly present on a named-field struct.
+///
+/// This eliminates hand-written `impl Default` blocks inside `#[sysml::package]` modules
+/// and guarantees numeric thresholds / physical parameters cannot drift from emitted `.sysml`.
+pub fn build_auto_default_impl(item: &syn::ItemStruct) -> syn::Result<TokenStream> {
+    if has_derive_default(&item.attrs) {
+        return Ok(quote!());
+    }
+    let syn::Fields::Named(fields) = &item.fields else {
+        return Ok(quote!());
+    };
+
+    let mut has_any_literal_default = false;
+    let mut field_inits = Vec::new();
+    for field in &fields.named {
+        let fname = field.ident.as_ref().unwrap();
+        let mut kv = KvArgs::default();
+        for attr in &field.attrs {
+            if is_sysml_attr(attr, "attr") {
+                if let Meta::List(_) = &attr.meta {
+                    kv = attr.parse_args()?;
+                }
+            }
+        }
+        let raw_val = kv.get_str("value").or_else(|| kv.get_str("default"));
+        let unit = kv.get_str("unit").unwrap_or_default();
+
+        let init_expr = if let Some(val_str) = raw_val {
+            let trimmed = val_str.trim();
+            if is_quantity_type(&field.ty) {
+                if let Ok(num) = trimmed.parse::<f64>() {
+                    has_any_literal_default = true;
+                    quote!(::sysml_ir::Quantity::new(#num, #unit))
+                } else {
+                    quote!(::std::default::Default::default())
+                }
+            } else if is_prim_ident(&field.ty, "f64") || is_prim_ident(&field.ty, "f32") {
+                if let Ok(num) = trimmed.parse::<f64>() {
+                    has_any_literal_default = true;
+                    quote!(#num as _)
+                } else {
+                    quote!(::std::default::Default::default())
+                }
+            } else if is_prim_ident(&field.ty, "i64")
+                || is_prim_ident(&field.ty, "i32")
+                || is_prim_ident(&field.ty, "usize")
+            {
+                if let Ok(num) = trimmed.parse::<i64>() {
+                    has_any_literal_default = true;
+                    quote!(#num as _)
+                } else {
+                    quote!(::std::default::Default::default())
+                }
+            } else if is_prim_ident(&field.ty, "bool") {
+                if let Ok(b) = trimmed.parse::<bool>() {
+                    has_any_literal_default = true;
+                    quote!(#b)
+                } else {
+                    quote!(::std::default::Default::default())
+                }
+            } else if is_prim_ident(&field.ty, "String") {
+                has_any_literal_default = true;
+                let unquoted = trimmed
+                    .strip_prefix('"')
+                    .and_then(|s| s.strip_suffix('"'))
+                    .unwrap_or(trimmed);
+                quote!(::std::string::String::from(#unquoted))
+            } else {
+                quote!(::std::default::Default::default())
+            }
+        } else if is_quantity_type(&field.ty) && !unit.is_empty() {
+            has_any_literal_default = true;
+            quote!(::sysml_ir::Quantity::new(0.0, #unit))
+        } else {
+            quote!(::std::default::Default::default())
+        };
+
+        field_inits.push(quote!(#fname: #init_expr));
+    }
+
+    if !has_any_literal_default {
+        // Still generate `impl Default` if the user omitted `#[derive(Default)]` on a
+        // declarative struct whose fields are all Default-constructible (e.g. composed assemblies
+        // like `ApolloLunarModule` or `ApolloSpacecraft` whose subparts have auto-generated Default).
+    }
+
+    let ident = &item.ident;
+    Ok(quote! {
+        impl ::std::default::Default for #ident {
+            fn default() -> Self {
+                Self {
+                    #(#field_inits),*
+                }
+            }
+        }
+    })
+}
+
+fn is_quantity_type(ty: &Type) -> bool {
+    if let Type::Path(tp) = ty {
+        if let Some(last) = tp.path.segments.last() {
+            return last.ident == "Quantity";
+        }
+    }
+    false
+}
+
+fn is_prim_ident(ty: &Type, name: &str) -> bool {
+    if let Type::Path(tp) = ty {
+        if let Some(last) = tp.path.segments.last() {
+            return last.ident == name;
+        }
+    }
+    false
+}

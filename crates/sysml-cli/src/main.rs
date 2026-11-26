@@ -3,7 +3,7 @@
 //! Conventions:
 //! - Compact JSON on `stdout` by default (`--pretty` for indented JSON).
 //! - Human/tool diagnostics strictly on `stderr`.
-//! - Exit codes: `0` = ok, `1` = validation/roundtrip/verification failure, `2` = IO/parse error.
+//! - Exit codes: `0` = ok, `1` = validation/audit/roundtrip/verification failure, `2` = IO/parse error.
 
 use clap::{Parser, Subcommand, ValueEnum};
 use serde::Serialize;
@@ -11,7 +11,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use sysml_emit::{emit_model, validate_sysml_units};
+use sysml_emit::{audit_model, emit_model, validate_sysml_units};
 use sysml_lift::{
     compare_sysml_roundtrip, generate_rust_dsl, lift_sysml_units, CodegenOptions,
 };
@@ -36,7 +36,7 @@ enum Commands {
     /// Deterministically emit OMG-valid SysML v2 (.sysml) from a Rust DSL model.
     Emit {
         /// Built-in model name to emit.
-        #[arg(long, default_value = "apollo11-slice")]
+        #[arg(long, default_value = "apollo11-model")]
         model: String,
 
         /// Write emitted `.sysml` text to a file path.
@@ -74,11 +74,22 @@ enum Commands {
         reemitted_out: Option<PathBuf>,
     },
 
-    /// Execute closed-loop verification on the Rust DSL Apollo 11 slice and emit JSON verdicts.
+    /// Execute closed-loop verification on the Rust DSL Apollo 11 model and emit JSON verdicts.
     Verify {
         /// Scenario to execute.
         #[arg(long, value_enum, default_value = "nominal")]
         scenario: VerifyScenario,
+    },
+
+    /// Audit semantic validity, orphan requirements, and verification traceability completeness.
+    Audit {
+        /// Built-in model name to audit.
+        #[arg(long, default_value = "apollo11-model")]
+        model: String,
+
+        /// Also run executable verification and require PASS verdicts for all constrained requirements.
+        #[arg(long)]
+        verify: bool,
     },
 
     /// Validate `.sysml` files using the embedded Open-MBEE `sysml-toolkit` oracle.
@@ -132,15 +143,25 @@ fn main() -> ExitCode {
             reemitted_out,
         } => cmd_roundtrip_check(&files, reemitted_out, cli.pretty),
         Commands::Verify { scenario } => cmd_verify(scenario, cli.pretty),
+        Commands::Audit { model, verify } => cmd_audit(&model, verify, cli.pretty),
         Commands::Validate { files } => cmd_validate(&files, cli.pretty),
     }
 }
 
+fn resolve_builtin_model(model_name: &str) -> Result<sysml_ir::Model, String> {
+    match model_name {
+        "apollo11-model" => Ok(apollo11_model::build_apollo11_model()),
+        other => Err(format!(
+            "unknown model '{other}' (available: apollo11-model)"
+        )),
+    }
+}
+
 fn cmd_emit(model_name: &str, output: Option<PathBuf>, raw: bool, pretty: bool) -> ExitCode {
-    let model = match model_name {
-        "apollo11-slice" => apollo11_slice::build_apollo11_slice_model(),
-        other => {
-            eprintln!("error: unknown model '{other}' (available: apollo11-slice)");
+    let model = match resolve_builtin_model(model_name) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("error: {e}");
             return ExitCode::from(2);
         }
     };
@@ -187,6 +208,32 @@ fn cmd_emit(model_name: &str, output: Option<PathBuf>, raw: bool, pretty: bool) 
         eprintln!(
             "error: emitted SysML v2 failed validation with {} error(s)",
             validation.error_count
+        );
+        ExitCode::from(1)
+    }
+}
+
+fn cmd_audit(model_name: &str, with_verify: bool, pretty: bool) -> ExitCode {
+    let model = match resolve_builtin_model(model_name) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let verification = if with_verify {
+        Some(apollo11_sim::run_nominal_verification())
+    } else {
+        None
+    };
+    let report = audit_model(model_name, &model, verification.as_ref());
+    print_json(&report, pretty);
+    if report.ok {
+        ExitCode::SUCCESS
+    } else {
+        eprintln!(
+            "error: audit failed with {} finding(s)",
+            report.findings.len()
         );
         ExitCode::from(1)
     }
@@ -321,7 +368,7 @@ fn cmd_roundtrip_check(
 fn cmd_verify(scenario: VerifyScenario, pretty: bool) -> ExitCode {
     match scenario {
         VerifyScenario::Nominal => {
-            let report = apollo11_slice::simulation::run_nominal_verification();
+            let report = apollo11_sim::run_nominal_verification();
             print_json(&report, pretty);
             if report.all_passed {
                 ExitCode::SUCCESS
@@ -331,7 +378,7 @@ fn cmd_verify(scenario: VerifyScenario, pretty: bool) -> ExitCode {
             }
         }
         VerifyScenario::Fault => {
-            let report = apollo11_slice::simulation::run_fault_injection_verification();
+            let report = apollo11_sim::run_fault_injection_verification();
             print_json(&report, pretty);
             if report.all_passed {
                 ExitCode::SUCCESS
@@ -344,8 +391,8 @@ fn cmd_verify(scenario: VerifyScenario, pretty: bool) -> ExitCode {
             }
         }
         VerifyScenario::All => {
-            let nominal = apollo11_slice::simulation::run_nominal_verification();
-            let fault = apollo11_slice::simulation::run_fault_injection_verification();
+            let nominal = apollo11_sim::run_nominal_verification();
+            let fault = apollo11_sim::run_fault_injection_verification();
             let ok = nominal.all_passed && !fault.all_passed;
             #[derive(Serialize)]
             struct AllVerifyOutput {
