@@ -563,7 +563,6 @@ dependencies = [
 [[package]]
 name = "sysmlv2-model"
 version = "0.13.0"
-source = "git+https://github.com/Open-MBEE/sysml-toolkit?rev=c8d256bdf6638d3f867e61850df332da43a0f9e9#c8d256bdf6638d3f867e61850df332da43a0f9e9"
 dependencies = [
  "memmap2",
  "num-bigint",
@@ -580,7 +579,6 @@ dependencies = [
 [[package]]
 name = "sysmlv2-syntax"
 version = "0.13.0"
-source = "git+https://github.com/Open-MBEE/sysml-toolkit?rev=c8d256bdf6638d3f867e61850df332da43a0f9e9#c8d256bdf6638d3f867e61850df332da43a0f9e9"
 dependencies = [
  "serde",
 ]

@@ -1,0 +1,13 @@
+[package]
+name = "sysmlv2-syntax"
+version = "0.13.0"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/Open-MBEE/sysml-toolkit"
+description = "Syntax layer for OMG SysML v2 / KerML: lexer, parser, spans, AST, printer/formatter, body-context validation"
+
+[features]
+serde = ["dep:serde"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"], optional = true }

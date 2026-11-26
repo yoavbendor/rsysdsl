@@ -4,7 +4,9 @@ This guide covers cloning `rsysdsl` onto a corporate workstation, running Cursor
 
 ---
 
-## 1. Online Corporate Host Setup (GitHub / crates.io Accessible)
+## 1. Corporate Host Setup (crates.io Accessible — Zero Git Submodules!)
+
+`Open-MBEE/sysmlv2-syntax`, `sysmlv2-model`, and the official OMG Standard Library (`third_party/omg/sysml.library`) are **bundled directly in `third_party/`**, so Cargo never clones any external GitHub repositories or 2.1 GB git submodules:
 
 ```bash
 git clone https://github.com/yoavbendor/rsysdsl.git
@@ -16,24 +18,19 @@ cargo run -q -p sysml-cli -- audit --files target/starter_model.sysml --stdlib -
 
 ---
 
-## 2. Air-Gapped / Restricted Corporate Network Setup
+## 2. Completely Air-Gapped Host Setup (No crates.io Access)
 
-On a machine **with** internet access, run the bundling script once:
+On a machine **with** crates.io access, run the bundling script once:
 
 ```bash
 ./scripts/vendor-offline.sh
 ```
 
-This creates:
-- `vendor/` — all Cargo crates (including pinned `Open-MBEE/sysml-toolkit`)
-- `vendor-stdlib/sysml.library/` — official OMG SysML v2 Standard Library
-- `.cargo/config.toml` — offline Cargo source replacement configuration
-
-Transfer the repo directory (including `vendor/`, `vendor-stdlib/`, and `.cargo/config.toml`) to your corporate host, then run completely offline:
+This creates `vendor/` (all crates.io crates) and `.cargo/config.toml`. Transfer the repo directory to your air-gapped host, then run completely offline (`third_party/omg/sysml.library` is auto-discovered with no environment variables required):
 
 ```bash
-export SYSML_LIBRARY_DIR="$PWD/vendor-stdlib/sysml.library"
 cargo test --offline -p starter-model
+cargo run --offline -q -p starter-model --bin emit -- -o target/starter_model.sysml
 cargo run --offline -q -p sysml-cli -- audit --files target/starter_model.sysml --stdlib --strict --pretty
 ```
 

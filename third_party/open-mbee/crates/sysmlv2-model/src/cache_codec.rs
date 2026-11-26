@@ -1,0 +1,1076 @@
+//! Private schema-directed binary encoding for build-versioned library caches.
+//! Fixed record layouts omit redundant collection headers. Scalar tags retain
+//! dynamic JSON number types. String/byte lengths and collection counts are bounded.
+#[cfg(test)]
+use serde::Deserialize;
+use serde::{
+    Serialize,
+    de::{
+        self, DeserializeOwned, DeserializeSeed, EnumAccess, IntoDeserializer, MapAccess,
+        SeqAccess, VariantAccess, Visitor,
+    },
+    ser,
+};
+use std::fmt;
+
+#[derive(Debug)]
+pub(crate) struct Error(String);
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+impl std::error::Error for Error {}
+impl ser::Error for Error {
+    fn custom<T: fmt::Display>(s: T) -> Self {
+        Self(s.to_string())
+    }
+}
+impl de::Error for Error {
+    fn custom<T: fmt::Display>(s: T) -> Self {
+        Self(s.to_string())
+    }
+}
+type Result<T> = std::result::Result<T, Error>;
+#[cold]
+fn bad() -> Error {
+    Error("invalid prepared-library encoding".into())
+}
+const UNIT: u8 = 0;
+const FALSE: u8 = 1;
+const TRUE: u8 = 2;
+const UINT: u8 = 3;
+const INT: u8 = 4;
+const FLOAT: u8 = 5;
+const STR: u8 = 6;
+const SEQ: u8 = 7;
+const MAP: u8 = 8;
+const ENUM: u8 = 9;
+const SOME: u8 = 10;
+const BYTES: u8 = 11;
+/// Values encoded one after the other as the parts of one payload: one
+/// string table at the front, then each part's bytes, so that a reader
+/// that has the table decodes the parts apart from one another — side by
+/// side, or each verified against a checksum of its own before it is read.
+/// A writer puts the table and the body down one after the other without
+/// joining them: the body is as large as the values.
+pub(crate) struct Parts {
+    w: Writer,
+    /// Where each part's bytes end in the body.
+    ends: Vec<usize>,
+}
+
+impl Parts {
+    /// A writer whose body is reserved for about `capacity` bytes up front,
+    /// so a large payload is not copied as the buffer grows.
+    pub(crate) fn with_capacity(capacity: usize) -> Self {
+        Self {
+            w: Writer(Vec::with_capacity(capacity), Default::default(), Vec::new()),
+            ends: Vec::new(),
+        }
+    }
+
+    /// Encode `value` as the next part.
+    pub(crate) fn part(&mut self, value: &impl Serialize) -> Result<()> {
+        value.serialize(&mut self.w)?;
+        self.ends.push(self.w.0.len());
+        Ok(())
+    }
+
+    /// The string table, the body, and where each part's bytes end in it.
+    pub(crate) fn finish(self) -> (Vec<u8>, Vec<u8>, Vec<usize>) {
+        let mut table = Writer::default();
+        table.count(self.w.2.len() as u64);
+        for value in &self.w.2 {
+            table.count(value.len() as u64);
+            table.0.extend_from_slice(value.as_bytes());
+        }
+        (table.0, self.w.0, self.ends)
+    }
+}
+
+/// One value as the table and its bytes joined: what [`decode`] reads.
+pub(crate) fn encode(value: &impl Serialize) -> Result<Vec<u8>> {
+    let mut parts = Parts::with_capacity(0);
+    parts.part(value)?;
+    let (mut table, body, _) = parts.finish();
+    table.extend_from_slice(&body);
+    Ok(table)
+}
+/// One value from its table and bytes joined (see [`encode`]).
+pub(crate) fn decode<T: DeserializeOwned>(bytes: &[u8]) -> Result<T> {
+    decode_from(Slice(bytes))
+}
+
+/// Where a decoder's bytes come from. A slice serves them in place; a
+/// chunked source serves them through a window it refills from a feed, so
+/// a payload a host holds elsewhere (a browser's heap) is never copied into
+/// this memory whole. `take` yields bytes valid until the next call.
+pub(crate) trait Source {
+    /// Bytes not yet taken.
+    fn remaining(&self) -> usize;
+    /// The next byte, left in place; `None` at the end.
+    fn peek(&mut self) -> Option<u8>;
+    /// The next `n` bytes, consumed.
+    fn take(&mut self, n: usize) -> Result<&[u8]>;
+}
+
+/// The bytes in place.
+pub(crate) struct Slice<'a>(pub(crate) &'a [u8]);
+
+impl Source for Slice<'_> {
+    #[inline]
+    fn remaining(&self) -> usize {
+        self.0.len()
+    }
+    #[inline]
+    fn peek(&mut self) -> Option<u8> {
+        self.0.first().copied()
+    }
+    #[inline]
+    fn take(&mut self, n: usize) -> Result<&[u8]> {
+        if n > self.0.len() {
+            return Err(bad());
+        }
+        let (v, rest) = self.0.split_at(n);
+        self.0 = rest;
+        Ok(v)
+    }
+}
+
+/// A window over a feed: `fill` copies the next bytes of the payload into
+/// the buffer it is given and answers how many (0 at the end). Everything
+/// taken is folded into a checksum the caller reads back at the end, so a
+/// payload is verified once it has been consumed whole.
+pub(crate) struct Chunked<F: FnMut(&mut [u8]) -> usize> {
+    fill: F,
+    buf: Vec<u8>,
+    start: usize,
+    end: usize,
+    remaining: usize,
+    hash: crate::libcache::Fnv,
+}
+
+impl<F: FnMut(&mut [u8]) -> usize> Chunked<F> {
+    /// A window of `window` bytes over a payload of `len` bytes.
+    pub(crate) fn new(len: usize, window: usize, fill: F) -> Self {
+        Self {
+            fill,
+            buf: vec![0; window.max(16)],
+            start: 0,
+            end: 0,
+            remaining: len,
+            hash: crate::libcache::Fnv::new(),
+        }
+    }
+
+    /// Checksum of every byte taken since the last reset.
+    pub(crate) fn checksum(&self) -> u64 {
+        self.hash.finish()
+    }
+
+    /// Start the checksum over (after a header the checksum does not cover).
+    pub(crate) fn reset_checksum(&mut self) {
+        self.hash = crate::libcache::Fnv::new();
+    }
+
+    /// Make at least `n` contiguous bytes available at `start`.
+    fn ensure(&mut self, n: usize) -> Result<()> {
+        if self.end - self.start >= n {
+            return Ok(());
+        }
+        if n > self.remaining {
+            return Err(bad());
+        }
+        // compact, then grow for a single item wider than the window
+        self.buf.copy_within(self.start..self.end, 0);
+        self.end -= self.start;
+        self.start = 0;
+        if self.buf.len() < n {
+            self.buf.resize(n, 0);
+        }
+        while self.end < n {
+            // what the buffer can hold, bounded by what the payload still has beyond the buffered bytes
+            let room = (self.buf.len() - self.end).min(self.remaining - self.end);
+            if room == 0 {
+                return Err(bad());
+            }
+            let got = (self.fill)(&mut self.buf[self.end..self.end + room]);
+            if got == 0 || got > room {
+                return Err(bad());
+            }
+            self.end += got;
+        }
+        Ok(())
+    }
+}
+
+impl<F: FnMut(&mut [u8]) -> usize> Source for Chunked<F> {
+    #[inline]
+    fn remaining(&self) -> usize {
+        self.remaining
+    }
+    #[inline]
+    fn peek(&mut self) -> Option<u8> {
+        if self.remaining == 0 {
+            return None;
+        }
+        self.ensure(1).ok()?;
+        Some(self.buf[self.start])
+    }
+    #[inline]
+    fn take(&mut self, n: usize) -> Result<&[u8]> {
+        self.ensure(n)?;
+        let v = &self.buf[self.start..self.start + n];
+        self.hash.update(v);
+        self.start += n;
+        self.remaining -= n;
+        Ok(v)
+    }
+}
+
+impl<S: Source> Source for &mut S {
+    #[inline]
+    fn remaining(&self) -> usize {
+        (**self).remaining()
+    }
+    #[inline]
+    fn peek(&mut self) -> Option<u8> {
+        (**self).peek()
+    }
+    #[inline]
+    fn take(&mut self, n: usize) -> Result<&[u8]> {
+        (**self).take(n)
+    }
+}
+
+/// Decode one value from a source holding exactly it: the string table at
+/// the front, then the value's bytes.
+pub(crate) fn decode_from<T: DeserializeOwned, S: Source>(mut src: S) -> Result<T> {
+    let table = StringTable::read(&mut src)?;
+    decode_part(&table.strings(), src)
+}
+
+/// The string table at the front of a payload: every string once, copied
+/// into one arena the decoded values borrow from while decoding (a table
+/// entry's address identifies it to `shared_string`).
+pub(crate) struct StringTable {
+    arena: Vec<u8>,
+    spans: Vec<(usize, usize)>,
+}
+
+impl StringTable {
+    /// Read the table from the front of `src`, leaving what follows it.
+    pub(crate) fn read<S: Source>(src: &mut S) -> Result<Self> {
+        let mut r = Reader {
+            src,
+            depth: 0,
+            strings: &[],
+        };
+        let count = r.length()?;
+        if count > 1_048_576 {
+            return Err(bad());
+        }
+        let mut arena = Vec::new();
+        let mut spans = Vec::with_capacity(count);
+        for _ in 0..count {
+            let len = r.length()?;
+            let text = r.src.take(len)?;
+            std::str::from_utf8(text).map_err(|_| bad())?;
+            spans.push((arena.len(), len));
+            arena.extend_from_slice(text);
+        }
+        Ok(Self { arena, spans })
+    }
+
+    /// Read the table from a source holding exactly it.
+    pub(crate) fn decode<S: Source>(mut src: S) -> Result<Self> {
+        let table = Self::read(&mut src)?;
+        if src.remaining() != 0 {
+            return Err(bad());
+        }
+        Ok(table)
+    }
+
+    /// The strings, borrowing the arena.
+    pub(crate) fn strings(&self) -> Vec<&str> {
+        self.spans
+            .iter()
+            .map(|&(at, len)| {
+                // validated when read
+                std::str::from_utf8(&self.arena[at..at + len]).unwrap_or_default()
+            })
+            .collect()
+    }
+}
+
+/// Decode one value over a payload's string table from a source holding
+/// exactly its bytes: a part of a snapshot, read apart from the other parts
+/// once the table is.
+pub(crate) fn decode_part<T: DeserializeOwned, S: Source>(strings: &[&str], src: S) -> Result<T> {
+    let _strings = SharedStrings::enter();
+    let mut r = Reader {
+        src,
+        depth: 0,
+        strings,
+    };
+    let value = T::deserialize(&mut r)?;
+    if r.src.remaining() != 0 {
+        return Err(bad());
+    }
+    Ok(value)
+}
+
+/// The next `len` bytes of a source as a source of their own — a part of a
+/// payload whose length the header gave — so that a part decoded from a
+/// stream ends exactly where the header says it does.
+pub(crate) struct Limited<'a, S: Source> {
+    inner: &'a mut S,
+    remaining: usize,
+}
+
+impl<'a, S: Source> Limited<'a, S> {
+    pub(crate) fn new(inner: &'a mut S, len: usize) -> Result<Self> {
+        if len > inner.remaining() {
+            return Err(bad());
+        }
+        Ok(Self {
+            inner,
+            remaining: len,
+        })
+    }
+}
+
+impl<S: Source> Source for Limited<'_, S> {
+    #[inline]
+    fn remaining(&self) -> usize {
+        self.remaining
+    }
+    #[inline]
+    fn peek(&mut self) -> Option<u8> {
+        if self.remaining == 0 {
+            return None;
+        }
+        self.inner.peek()
+    }
+    #[inline]
+    fn take(&mut self, n: usize) -> Result<&[u8]> {
+        if n > self.remaining {
+            return Err(bad());
+        }
+        self.remaining -= n;
+        self.inner.take(n)
+    }
+}
+#[derive(Default)]
+struct Writer(
+    Vec<u8>,
+    std::collections::HashMap<std::sync::Arc<str>, u64>,
+    Vec<std::sync::Arc<str>>,
+);
+impl Writer {
+    #[inline]
+    fn count(&mut self, mut n: u64) {
+        while n >= 128 {
+            self.0.push(n as u8 | 128);
+            n >>= 7;
+        }
+        self.0.push(n as u8);
+    }
+    fn collection(&mut self, tag: u8, n: usize) {
+        self.0.push(tag);
+        self.count(n as u64);
+    }
+    fn variant(&mut self, n: u32) {
+        self.0.push(ENUM);
+        self.count(n as u64);
+    }
+}
+struct Compound<'a>(&'a mut Writer);
+macro_rules! integer_ser { ($($name:ident:$ty:ty => $dest:ident),*) => { $(fn $name(self,v:$ty)->Result<()> { self.$dest(v as _) })* }; }
+impl<'a> ser::Serializer for &'a mut Writer {
+    type Ok = ();
+    type Error = Error;
+    type SerializeSeq = Compound<'a>;
+    type SerializeTuple = Compound<'a>;
+    type SerializeTupleStruct = Compound<'a>;
+    type SerializeTupleVariant = Compound<'a>;
+    type SerializeMap = Compound<'a>;
+    type SerializeStruct = Compound<'a>;
+    type SerializeStructVariant = Compound<'a>;
+    fn is_human_readable(&self) -> bool {
+        false
+    }
+    fn serialize_bool(self, v: bool) -> Result<()> {
+        self.0.push(if v { TRUE } else { FALSE });
+        Ok(())
+    }
+    integer_ser!(serialize_i8:i8=>serialize_i64,serialize_i16:i16=>serialize_i64,serialize_i32:i32=>serialize_i64,serialize_u8:u8=>serialize_u64,serialize_u16:u16=>serialize_u64,serialize_u32:u32=>serialize_u64);
+    fn serialize_i64(self, v: i64) -> Result<()> {
+        self.0.push(INT);
+        self.count(((v << 1) ^ (v >> 63)) as u64);
+        Ok(())
+    }
+    fn serialize_u64(self, v: u64) -> Result<()> {
+        self.0.push(UINT);
+        self.count(v);
+        Ok(())
+    }
+    fn serialize_f32(self, v: f32) -> Result<()> {
+        self.serialize_f64(v as f64)
+    }
+    fn serialize_f64(self, v: f64) -> Result<()> {
+        self.0.push(FLOAT);
+        self.0.extend_from_slice(&v.to_le_bytes());
+        Ok(())
+    }
+    fn serialize_char(self, v: char) -> Result<()> {
+        self.serialize_str(v.encode_utf8(&mut [0; 4]))
+    }
+    fn serialize_str(self, v: &str) -> Result<()> {
+        let index = if let Some(&index) = self.1.get(v) {
+            index
+        } else {
+            let text: std::sync::Arc<str> = v.into();
+            let index = self.2.len() as u64;
+            self.2.push(text.clone());
+            self.1.insert(text, index);
+            index
+        };
+        self.0.push(STR);
+        self.count(index);
+        Ok(())
+    }
+    fn serialize_bytes(self, v: &[u8]) -> Result<()> {
+        self.collection(BYTES, v.len());
+        self.0.extend_from_slice(v);
+        Ok(())
+    }
+    fn serialize_none(self) -> Result<()> {
+        self.serialize_unit()
+    }
+    fn serialize_some<T: Serialize + ?Sized>(self, v: &T) -> Result<()> {
+        self.0.push(SOME);
+        v.serialize(self)
+    }
+    fn serialize_unit(self) -> Result<()> {
+        self.0.push(UNIT);
+        Ok(())
+    }
+    fn serialize_unit_struct(self, _: &'static str) -> Result<()> {
+        self.serialize_unit()
+    }
+    fn serialize_unit_variant(self, _: &'static str, i: u32, _: &'static str) -> Result<()> {
+        self.variant(i);
+        Ok(())
+    }
+    fn serialize_newtype_struct<T: Serialize + ?Sized>(self, _: &'static str, v: &T) -> Result<()> {
+        v.serialize(self)
+    }
+    fn serialize_newtype_variant<T: Serialize + ?Sized>(
+        self,
+        _: &'static str,
+        i: u32,
+        _: &'static str,
+        v: &T,
+    ) -> Result<()> {
+        self.variant(i);
+        v.serialize(self)
+    }
+    fn serialize_seq(self, n: Option<usize>) -> Result<Compound<'a>> {
+        self.collection(SEQ, n.ok_or_else(bad)?);
+        Ok(Compound(self))
+    }
+    fn serialize_tuple(self, _: usize) -> Result<Compound<'a>> {
+        Ok(Compound(self))
+    }
+    fn serialize_tuple_struct(self, _: &'static str, n: usize) -> Result<Compound<'a>> {
+        self.serialize_tuple(n)
+    }
+    fn serialize_tuple_variant(
+        self,
+        _: &'static str,
+        i: u32,
+        _: &'static str,
+        n: usize,
+    ) -> Result<Compound<'a>> {
+        self.variant(i);
+        self.serialize_tuple(n)
+    }
+    fn serialize_map(self, n: Option<usize>) -> Result<Compound<'a>> {
+        self.collection(MAP, n.ok_or_else(bad)?);
+        Ok(Compound(self))
+    }
+    fn serialize_struct(self, _: &'static str, n: usize) -> Result<Compound<'a>> {
+        self.serialize_tuple(n)
+    }
+    fn serialize_struct_variant(
+        self,
+        _: &'static str,
+        i: u32,
+        _: &'static str,
+        n: usize,
+    ) -> Result<Compound<'a>> {
+        self.variant(i);
+        self.serialize_tuple(n)
+    }
+}
+macro_rules! compound {
+    ($trait:ident,$method:ident) => {
+        impl ser::$trait for Compound<'_> {
+            type Ok = ();
+            type Error = Error;
+            fn $method<T: Serialize + ?Sized>(&mut self, v: &T) -> Result<()> {
+                v.serialize(&mut *self.0)
+            }
+            fn end(self) -> Result<()> {
+                Ok(())
+            }
+        }
+    };
+}
+compound!(SerializeSeq, serialize_element);
+compound!(SerializeTuple, serialize_element);
+compound!(SerializeTupleStruct, serialize_field);
+compound!(SerializeTupleVariant, serialize_field);
+impl ser::SerializeMap for Compound<'_> {
+    type Ok = ();
+    type Error = Error;
+    fn serialize_key<T: Serialize + ?Sized>(&mut self, v: &T) -> Result<()> {
+        v.serialize(&mut *self.0)
+    }
+    fn serialize_value<T: Serialize + ?Sized>(&mut self, v: &T) -> Result<()> {
+        v.serialize(&mut *self.0)
+    }
+    fn end(self) -> Result<()> {
+        Ok(())
+    }
+}
+macro_rules! compound_struct {
+    ($trait:ident) => {
+        impl ser::$trait for Compound<'_> {
+            type Ok = ();
+            type Error = Error;
+            fn serialize_field<T: Serialize + ?Sized>(
+                &mut self,
+                _: &'static str,
+                v: &T,
+            ) -> Result<()> {
+                v.serialize(&mut *self.0)
+            }
+            fn end(self) -> Result<()> {
+                Ok(())
+            }
+        }
+    };
+}
+compound_struct!(SerializeStruct);
+compound_struct!(SerializeStructVariant);
+struct Reader<'de, S: Source> {
+    src: S,
+    depth: usize,
+    strings: &'de [&'de str],
+}
+impl<S: Source> Reader<'_, S> {
+    #[inline]
+    fn tag(&mut self) -> Result<u8> {
+        Ok(self.src.take(1)?[0])
+    }
+    #[inline]
+    fn skip(&mut self) -> Result<()> {
+        self.src.take(1).map(|_| ())
+    }
+    #[inline]
+    fn count(&mut self) -> Result<u64> {
+        let mut n = 0;
+        for shift in (0..70).step_by(7) {
+            let b = self.tag()?;
+            if shift == 63 && b > 1 {
+                return Err(bad());
+            }
+            n |= ((b & 127) as u64) << shift;
+            if b < 128 {
+                return Ok(n);
+            }
+        }
+        Err(bad())
+    }
+    #[inline]
+    fn length(&mut self) -> Result<usize> {
+        let n = usize::try_from(self.count()?).map_err(|_| bad())?;
+        if n > self.src.remaining() {
+            return Err(bad());
+        }
+        Ok(n)
+    }
+}
+struct Access<'a, 'de, S: Source> {
+    r: &'a mut Reader<'de, S>,
+    remaining: usize,
+}
+impl<'de, S: Source> SeqAccess<'de> for Access<'_, 'de, S> {
+    type Error = Error;
+    fn next_element_seed<T: DeserializeSeed<'de>>(&mut self, seed: T) -> Result<Option<T::Value>> {
+        if self.remaining == 0 {
+            return Ok(None);
+        }
+        self.remaining -= 1;
+        seed.deserialize(&mut *self.r).map(Some)
+    }
+    fn size_hint(&self) -> Option<usize> {
+        Some(self.remaining.min(1_048_576))
+    }
+}
+impl<'de, S: Source> MapAccess<'de> for Access<'_, 'de, S> {
+    type Error = Error;
+    fn next_key_seed<T: DeserializeSeed<'de>>(&mut self, seed: T) -> Result<Option<T::Value>> {
+        self.next_element_seed(seed)
+    }
+    fn next_value_seed<T: DeserializeSeed<'de>>(&mut self, seed: T) -> Result<T::Value> {
+        seed.deserialize(&mut *self.r)
+    }
+    fn size_hint(&self) -> Option<usize> {
+        Some(self.remaining.min(1_048_576))
+    }
+}
+impl<'de, S: Source> de::Deserializer<'de> for &mut Reader<'de, S> {
+    type Error = Error;
+    fn is_human_readable(&self) -> bool {
+        false
+    }
+    fn deserialize_any<V: Visitor<'de>>(self, v: V) -> Result<V::Value> {
+        match self.src.peek() {
+            Some(SEQ) => return self.collection(v, false),
+            Some(MAP) => return self.collection(v, true),
+            _ => {}
+        }
+        if self.depth >= 256 {
+            return Err(bad());
+        }
+        self.depth += 1;
+        let result = match self.tag()? {
+            UNIT => v.visit_unit(),
+            FALSE => v.visit_bool(false),
+            TRUE => v.visit_bool(true),
+            UINT => v.visit_u64(self.count()?),
+            INT => {
+                let n = self.count()?;
+                v.visit_i64(((n >> 1) as i64) ^ -((n & 1) as i64))
+            }
+            FLOAT => v.visit_f64(f64::from_le_bytes(
+                self.src.take(8)?.try_into().map_err(|_| bad())?,
+            )),
+            STR => {
+                let index = usize::try_from(self.count()?).map_err(|_| bad())?;
+                v.visit_borrowed_str(self.strings.get(index).copied().ok_or_else(bad)?)
+            }
+            BYTES => {
+                let n = self.length()?;
+                v.visit_bytes(self.src.take(n)?)
+            }
+            _ => Err(bad()),
+        };
+        self.depth -= 1;
+        result
+    }
+    fn deserialize_seq<V: Visitor<'de>>(self, v: V) -> Result<V::Value> {
+        self.collection(v, false)
+    }
+    fn deserialize_map<V: Visitor<'de>>(self, v: V) -> Result<V::Value> {
+        self.collection(v, true)
+    }
+    fn deserialize_tuple<V: Visitor<'de>>(self, n: usize, v: V) -> Result<V::Value> {
+        self.fixed(v, n)
+    }
+    fn deserialize_tuple_struct<V: Visitor<'de>>(
+        self,
+        _: &'static str,
+        n: usize,
+        v: V,
+    ) -> Result<V::Value> {
+        self.fixed(v, n)
+    }
+    fn deserialize_struct<V: Visitor<'de>>(
+        self,
+        _: &'static str,
+        fields: &'static [&'static str],
+        v: V,
+    ) -> Result<V::Value> {
+        self.fixed(v, fields.len())
+    }
+    fn deserialize_option<V: Visitor<'de>>(self, v: V) -> Result<V::Value> {
+        if self.depth >= 256 {
+            return Err(bad());
+        }
+        self.depth += 1;
+        let result = match self.tag()? {
+            UNIT => v.visit_none(),
+            SOME => v.visit_some(&mut *self),
+            _ => Err(bad()),
+        };
+        self.depth -= 1;
+        result
+    }
+    fn deserialize_newtype_struct<V: Visitor<'de>>(
+        self,
+        _: &'static str,
+        v: V,
+    ) -> Result<V::Value> {
+        v.visit_newtype_struct(self)
+    }
+    fn deserialize_enum<V: Visitor<'de>>(
+        self,
+        _: &'static str,
+        _: &'static [&'static str],
+        v: V,
+    ) -> Result<V::Value> {
+        if self.tag()? != ENUM || self.depth >= 256 {
+            return Err(bad());
+        }
+        self.depth += 1;
+        let i = u32::try_from(self.count()?).map_err(|_| bad())?;
+        let result = v.visit_enum(Variant { r: self, index: i });
+        self.depth -= 1;
+        result
+    }
+    fn deserialize_u64<V: Visitor<'de>>(self, v: V) -> Result<V::Value> {
+        if self.src.peek() != Some(UINT) {
+            return self.deserialize_any(v);
+        }
+        self.skip()?;
+        v.visit_u64(self.count()?)
+    }
+    fn deserialize_i64<V: Visitor<'de>>(self, v: V) -> Result<V::Value> {
+        if self.src.peek() != Some(INT) {
+            return self.deserialize_any(v);
+        }
+        self.skip()?;
+        let n = self.count()?;
+        v.visit_i64(((n >> 1) as i64) ^ -((n & 1) as i64))
+    }
+    fn deserialize_bool<V: Visitor<'de>>(self, v: V) -> Result<V::Value> {
+        match self.src.peek() {
+            Some(b @ (TRUE | FALSE)) => {
+                self.skip()?;
+                v.visit_bool(b == TRUE)
+            }
+            _ => self.deserialize_any(v),
+        }
+    }
+    fn deserialize_str<V: Visitor<'de>>(self, v: V) -> Result<V::Value> {
+        if self.src.peek() != Some(STR) {
+            return self.deserialize_any(v);
+        }
+        self.skip()?;
+        let i = usize::try_from(self.count()?).map_err(|_| bad())?;
+        v.visit_borrowed_str(self.strings.get(i).copied().ok_or_else(bad)?)
+    }
+    fn deserialize_string<V: Visitor<'de>>(self, v: V) -> Result<V::Value> {
+        self.deserialize_str(v)
+    }
+    fn deserialize_u8<V: Visitor<'de>>(self, v: V) -> Result<V::Value> {
+        self.deserialize_u64(v)
+    }
+    fn deserialize_u16<V: Visitor<'de>>(self, v: V) -> Result<V::Value> {
+        self.deserialize_u64(v)
+    }
+    fn deserialize_u32<V: Visitor<'de>>(self, v: V) -> Result<V::Value> {
+        self.deserialize_u64(v)
+    }
+    fn deserialize_i8<V: Visitor<'de>>(self, v: V) -> Result<V::Value> {
+        self.deserialize_i64(v)
+    }
+    fn deserialize_i16<V: Visitor<'de>>(self, v: V) -> Result<V::Value> {
+        self.deserialize_i64(v)
+    }
+    fn deserialize_i32<V: Visitor<'de>>(self, v: V) -> Result<V::Value> {
+        self.deserialize_i64(v)
+    }
+    serde::forward_to_deserialize_any! { f32 f64 char bytes byte_buf unit unit_struct identifier ignored_any }
+}
+impl<'de, S: Source> Reader<'de, S> {
+    fn fixed<V: Visitor<'de>>(&mut self, v: V, n: usize) -> Result<V::Value> {
+        if self.depth >= 256 {
+            return Err(bad());
+        }
+        self.depth += 1;
+        let mut access = Access {
+            r: self,
+            remaining: n,
+        };
+        let result = v.visit_seq(&mut access);
+        let remaining = access.remaining;
+        self.depth -= 1;
+        if remaining != 0 {
+            return Err(bad());
+        }
+        result
+    }
+    fn collection<V: Visitor<'de>>(&mut self, v: V, map: bool) -> Result<V::Value> {
+        if self.depth >= 256 || self.tag()? != if map { MAP } else { SEQ } {
+            return Err(bad());
+        }
+        self.depth += 1;
+        let n = usize::try_from(self.count()?).map_err(|_| bad())?;
+        // Fixed empty records occupy no payload bytes, so element counts
+        // have a separate bound instead of assuming one byte per element.
+        if n > 1_048_576 {
+            return Err(bad());
+        }
+        let mut a = Access {
+            r: self,
+            remaining: n,
+        };
+        let result = if map {
+            v.visit_map(&mut a)
+        } else {
+            v.visit_seq(&mut a)
+        };
+        let left = a.remaining;
+        self.depth -= 1;
+        if left != 0 {
+            return Err(bad());
+        }
+        result
+    }
+}
+struct Variant<'a, 'de, S: Source> {
+    r: &'a mut Reader<'de, S>,
+    index: u32,
+}
+impl<'a, 'de, S: Source> EnumAccess<'de> for Variant<'a, 'de, S> {
+    type Error = Error;
+    type Variant = Self;
+    fn variant_seed<V: DeserializeSeed<'de>>(self, seed: V) -> Result<(V::Value, Self)> {
+        Ok((seed.deserialize(self.index.into_deserializer())?, self))
+    }
+}
+impl<'de, S: Source> VariantAccess<'de> for Variant<'_, 'de, S> {
+    type Error = Error;
+    fn unit_variant(self) -> Result<()> {
+        Ok(())
+    }
+    fn newtype_variant_seed<T: DeserializeSeed<'de>>(self, seed: T) -> Result<T::Value> {
+        seed.deserialize(&mut *self.r)
+    }
+    fn tuple_variant<V: Visitor<'de>>(self, n: usize, v: V) -> Result<V::Value> {
+        de::Deserializer::deserialize_tuple(&mut *self.r, n, v)
+    }
+    fn struct_variant<V: Visitor<'de>>(
+        self,
+        fields: &'static [&'static str],
+        v: V,
+    ) -> Result<V::Value> {
+        de::Deserializer::deserialize_struct(&mut *self.r, "", fields, v)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[derive(Debug, PartialEq, Serialize, Deserialize)]
+    enum Choice {
+        Empty,
+        Value(Option<Option<i64>>),
+        Pair(String, u64),
+        Fields { value: f64 },
+    }
+    #[test]
+    fn binary_cache_preserves_numbers_variants_options_and_tuple_keys() {
+        let choices = vec![
+            Choice::Empty,
+            Choice::Value(None),
+            Choice::Value(Some(None)),
+            Choice::Value(Some(Some(i64::MIN))),
+            Choice::Pair("é".into(), u64::MAX),
+            Choice::Fields { value: -0.0 },
+        ];
+        let bytes = encode(&choices).unwrap();
+        assert_eq!(decode::<Vec<Choice>>(&bytes).unwrap(), choices);
+        let value = serde_json::json!({"signed":i64::MIN,"unsigned":u64::MAX,"float":1e-28,"empty":null,"array":[true,false,{},[]]});
+        assert_eq!(
+            decode::<serde_json::Value>(&encode(&value).unwrap()).unwrap(),
+            value
+        );
+        let map = std::collections::HashMap::from([((42usize, "name".to_string()), Some(8usize))]);
+        assert_eq!(
+            decode::<std::collections::HashMap<(usize, String), Option<usize>>>(
+                &encode(&map).unwrap()
+            )
+            .unwrap(),
+            map
+        );
+        for cut in 0..bytes.len() {
+            assert!(decode::<Vec<Choice>>(&bytes[..cut]).is_err());
+        }
+        let mut trailing = bytes;
+        trailing.push(UNIT);
+        assert!(decode::<Vec<Choice>>(&trailing).is_err());
+        assert!(
+            decode::<Vec<Choice>>(&[SEQ, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255])
+                .is_err()
+        );
+    }
+}
+
+#[cfg(test)]
+mod chunked_tests {
+    use super::*;
+    /// A feed over a slice that hands out at most `step` bytes per call.
+    fn feed(bytes: &[u8], step: usize) -> impl FnMut(&mut [u8]) -> usize + '_ {
+        let mut at = 0;
+        move |buf: &mut [u8]| {
+            let n = buf.len().min(step).min(bytes.len() - at);
+            buf[..n].copy_from_slice(&bytes[at..at + n]);
+            at += n;
+            n
+        }
+    }
+    #[test]
+    fn chunked_sources_decode_like_slices_and_checksum_what_they_took() {
+        let value = serde_json::json!({"signed":i64::MIN,"text":"a long repeated property and qualified name","nested":[[1.5,true,null],{"k":"a long repeated property and qualified name"}],"bytes":[0,255,128]});
+        let bytes = encode(&value).unwrap();
+        for (window, step) in [(16, 1), (16, 5), (7, 7), (64 * 1024, 64 * 1024), (3, 1000)] {
+            let mut src = Chunked::new(bytes.len(), window, feed(&bytes, step));
+            let decoded: serde_json::Value = decode_from(&mut src).unwrap();
+            assert_eq!(decoded, value, "window {window}, step {step}");
+            let mut hash = crate::libcache::Fnv::new();
+            hash.update(&bytes);
+            assert_eq!(src.checksum(), hash.finish(), "every byte was taken once");
+        }
+        // a feed that ends early is a truncation, and a payload length past the feed too
+        let mut short = Chunked::new(bytes.len(), 16, feed(&bytes[..bytes.len() / 2], 16));
+        assert!(decode_from::<serde_json::Value, _>(&mut short).is_err());
+        let mut long = Chunked::new(bytes.len() + 1, 16, feed(&bytes, 16));
+        assert!(decode_from::<serde_json::Value, _>(&mut long).is_err());
+    }
+}
+
+#[cfg(test)]
+mod string_table_tests {
+    use super::*;
+    #[test]
+    fn repeated_strings_are_interned_and_invalid_tables_are_rejected() {
+        let values = vec!["a long repeated property and qualified name".to_owned(); 100];
+        let encoded = encode(&values).unwrap();
+        assert!(encoded.len() < 300);
+        assert_eq!(decode::<Vec<String>>(&encoded).unwrap(), values);
+        // No strings but a string reference, truncated string, invalid UTF-8,
+        // and an out-of-bounds reference to a one-entry table.
+        for bytes in [
+            vec![0, STR, 0],
+            vec![1, 2, b'a'],
+            vec![1, 1, 255, UNIT],
+            vec![1, 1, b'a', STR, 1],
+        ] {
+            assert!(decode::<String>(&bytes).is_err());
+        }
+    }
+}
+
+// Only active during this decoder's call. Table slices remain alive throughout
+// it, so a borrowed string's address identifies its table entry. No raw pointer
+// is dereferenced. Nested decodes get independent tables; the guard restores
+// the previous context on both normal returns and unwinding.
+type StringPool = crate::layered::IdMap<(usize, usize), std::sync::Arc<str>>;
+thread_local! {
+    static SHARED_STRINGS: std::cell::RefCell<Option<StringPool>> = const { std::cell::RefCell::new(None) };
+}
+struct SharedStrings(Option<StringPool>);
+impl SharedStrings {
+    fn enter() -> Self {
+        Self(SHARED_STRINGS.with(|v| v.replace(Some(Default::default()))))
+    }
+}
+impl Drop for SharedStrings {
+    fn drop(&mut self) {
+        SHARED_STRINGS.with(|v| {
+            v.replace(self.0.take());
+        });
+    }
+}
+pub(crate) fn shared_string<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> std::result::Result<std::sync::Arc<str>, D::Error> {
+    struct Text;
+    impl serde::de::Visitor<'_> for Text {
+        type Value = std::sync::Arc<str>;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("a string")
+        }
+        fn visit_str<E: serde::de::Error>(self, s: &str) -> std::result::Result<Self::Value, E> {
+            Ok(s.into())
+        }
+        fn visit_borrowed_str<E: serde::de::Error>(
+            self,
+            s: &str,
+        ) -> std::result::Result<Self::Value, E> {
+            Ok(SHARED_STRINGS.with(|pool| {
+                let mut pool = pool.borrow_mut();
+                let Some(pool) = pool.as_mut() else {
+                    return s.into();
+                };
+                let value = pool
+                    .entry((s.as_ptr() as usize, s.len()))
+                    .or_insert_with(|| s.into());
+                // Also safe for another serde source used within a decode.
+                if value.as_ref() != s {
+                    *value = s.into();
+                }
+                value.clone()
+            }))
+        }
+    }
+    d.deserialize_str(Text)
+}
+
+#[cfg(test)]
+mod shared_text_tests {
+    use super::*;
+    use std::sync::Arc;
+    #[derive(Serialize, Deserialize)]
+    struct Text(#[serde(deserialize_with = "shared_string")] Arc<str>);
+    #[test]
+    fn repeated_text_is_shared_and_decode_contexts_do_not_escape() {
+        let source = vec![Text("repeated name".into()), Text("repeated name".into())];
+        let bytes = encode(&source).unwrap();
+        let first: Vec<Text> = decode(&bytes).unwrap();
+        assert!(Arc::ptr_eq(&first[0].0, &first[1].0));
+        assert!(SHARED_STRINGS.with(|s| s.borrow().is_none()));
+        let next: Vec<Text> = decode(&bytes).unwrap();
+        assert!(!Arc::ptr_eq(&first[0].0, &next[0].0));
+        assert!(decode::<Vec<Text>>(&bytes[..bytes.len() - 1]).is_err());
+        assert!(SHARED_STRINGS.with(|s| s.borrow().is_none()));
+        let outer = SharedStrings::enter();
+        {
+            let _inner = SharedStrings::enter();
+        }
+        assert!(SHARED_STRINGS.with(|s| s.borrow().is_some()));
+        drop(outer);
+        assert!(SHARED_STRINGS.with(|s| s.borrow().is_none()));
+    }
+}
+
+#[cfg(test)]
+mod record_tests {
+    use super::*;
+    #[derive(Debug, PartialEq, Serialize, Deserialize)]
+    struct Empty {}
+    #[test]
+    fn fixed_records_preserve_zero_width_values_and_bound_counts() {
+        let values = vec![Empty {}, Empty {}, Empty {}];
+        assert_eq!(
+            decode::<Vec<Empty>>(&encode(&values).unwrap()).unwrap(),
+            values
+        );
+        let mut w = Writer::default();
+        w.count(0);
+        w.collection(SEQ, 1_048_577);
+        assert!(decode::<Vec<Empty>>(&w.0).is_err());
+        let tuple = (17u32, "text", Some(false));
+        assert_eq!(
+            decode::<(u32, String, Option<bool>)>(&encode(&tuple).unwrap()).unwrap(),
+            (17, "text".into(), Some(false))
+        );
+    }
+}
