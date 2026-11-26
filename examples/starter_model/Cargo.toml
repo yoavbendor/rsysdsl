@@ -1,0 +1,11 @@
+[package]
+name = "starter-model"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Copy-pasteable starter template for authoring new systems in rsysdsl (Visio -> Rust DSL -> SysML v2)"
+
+[dependencies]
+sysml-dsl = { workspace = true }
+sysml-emit = { workspace = true }

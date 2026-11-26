@@ -1,9 +1,13 @@
-//! Normative SysML v2 validation using Open-MBEE `sysmlv2-syntax` and `sysmlv2-model`.
+//! Normative SysML v2 validation using Open-MBEE `sysmlv2-syntax` and `sysmlv2-model`,
+//! with automatic OMG Standard Library (`sysml.library`) resolution for 0-warning validation.
 
 use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::{Path, PathBuf};
 use sysmlv2_model::check::{validate_model_with, validate_semantics_with};
 use sysmlv2_model::json::ResolvedModel;
 use sysmlv2_model::model::Model as ToolkitModel;
+use sysmlv2_model::prepared::load_library_with_cache;
 use sysmlv2_syntax::check::validate as validate_syntax_context;
 use sysmlv2_syntax::diag::{Diagnostic, Severity};
 use sysmlv2_syntax::parser::parse_source;
@@ -22,12 +26,63 @@ pub struct ValidationDiagnostic {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ValidationReport {
     pub valid: bool,
+    pub stdlib_loaded: bool,
+    pub stdlib_units: usize,
     pub error_count: usize,
     pub warning_count: usize,
     pub syntax_errors: Vec<ValidationDiagnostic>,
     pub context_errors: Vec<ValidationDiagnostic>,
     pub model_errors: Vec<ValidationDiagnostic>,
     pub warnings: Vec<ValidationDiagnostic>,
+}
+
+/// Auto-discover the official OMG SysML v2 Standard Library (`sysml.library`) directory.
+///
+/// Search order:
+/// 1. `SYSML_LIBRARY_DIR` environment variable
+/// 2. Cargo's checked-out `Open-MBEE/sysml-toolkit` submodule (`spec-refs/SysML-v2-Release/sysml.library`)
+///    under `$CARGO_HOME`, `/opt/cargo`, or `$HOME/.cargo`
+pub fn discover_omg_stdlib() -> Option<PathBuf> {
+    if let Ok(env_dir) = std::env::var("SYSML_LIBRARY_DIR") {
+        let p = PathBuf::from(env_dir);
+        if p.is_dir() {
+            return Some(p);
+        }
+    }
+
+    let mut cargo_homes = Vec::new();
+    if let Ok(ch) = std::env::var("CARGO_HOME") {
+        cargo_homes.push(PathBuf::from(ch));
+    }
+    cargo_homes.push(PathBuf::from("/opt/cargo"));
+    if let Ok(home) = std::env::var("HOME") {
+        cargo_homes.push(PathBuf::from(home).join(".cargo"));
+    }
+
+    for ch in cargo_homes {
+        let checkouts = ch.join("git/checkouts");
+        let Ok(entries) = fs::read_dir(&checkouts) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            if !name.to_string_lossy().starts_with("sysml-toolkit-") {
+                continue;
+            }
+            let Ok(revs) = fs::read_dir(entry.path()) else {
+                continue;
+            };
+            for rev in revs.flatten() {
+                let candidate = rev
+                    .path()
+                    .join("spec-refs/SysML-v2-Release/sysml.library");
+                if candidate.is_dir() {
+                    return Some(candidate);
+                }
+            }
+        }
+    }
+    None
 }
 
 fn to_diag(unit: &str, stage: &str, lines: &LineIndex, d: &Diagnostic) -> ValidationDiagnostic {
@@ -46,22 +101,55 @@ fn to_diag(unit: &str, stage: &str, lines: &LineIndex, d: &Diagnostic) -> Valida
     }
 }
 
-/// Validate a single `.sysml` source unit through:
-/// 1. `sysmlv2-syntax` parser (OMG 2025 SysML v2 textual grammar)
-/// 2. `sysmlv2-syntax` body-context legality validator
-/// 3. `sysmlv2-model` referential + semantic validator
+/// Validate a single `.sysml` source unit without loading the OMG standard library (fast path).
 pub fn validate_sysml_source(name: &str, source: &str) -> ValidationReport {
-    validate_sysml_units(&[(name.to_string(), source.to_string())])
+    validate_sysml_units_with_lib(&[(name.to_string(), source.to_string())], None)
 }
 
-/// Validate multiple `.sysml` units together in one shared global resolution namespace.
+/// Validate a single `.sysml` source unit against the OMG Standard Library (explicit path or auto-discovered).
+pub fn validate_sysml_source_with_stdlib(
+    name: &str,
+    source: &str,
+    lib_dir: Option<&Path>,
+) -> ValidationReport {
+    let discovered;
+    let resolved_lib = match lib_dir {
+        Some(p) => Some(p),
+        None => {
+            discovered = discover_omg_stdlib();
+            discovered.as_deref()
+        }
+    };
+    validate_sysml_units_with_lib(&[(name.to_string(), source.to_string())], resolved_lib)
+}
+
+/// Validate multiple `.sysml` units together in one shared global resolution namespace (fast path).
 pub fn validate_sysml_units(units: &[(String, String)]) -> ValidationReport {
+    validate_sysml_units_with_lib(units, None)
+}
+
+/// Validate multiple `.sysml` units with optional OMG Standard Library loading (`load_library_with_cache`).
+pub fn validate_sysml_units_with_lib(
+    units: &[(String, String)],
+    lib_dir: Option<&Path>,
+) -> ValidationReport {
     let mut syntax_errors = Vec::new();
     let mut context_errors = Vec::new();
     let mut model_errors = Vec::new();
     let mut warnings = Vec::new();
 
     let mut model = ToolkitModel::new();
+    let mut stdlib_loaded = false;
+    let mut stdlib_units = 0usize;
+
+    if let Some(dir) = lib_dir {
+        if load_library_with_cache(&mut model, dir).is_ok() {
+            stdlib_loaded = true;
+            stdlib_units = model.loaded_library_unit_count();
+        }
+    }
+
+    let user_unit_offset = model.units().len();
     let mut line_indices = Vec::with_capacity(units.len());
 
     for (name, src) in units {
@@ -92,7 +180,10 @@ pub fn validate_sysml_units(units: &[(String, String)]) -> ValidationReport {
         let mut resolved = ResolvedModel::build(&model);
         let ref_diags = validate_model_with(&mut resolved, &model);
         for (unit_idx, d) in ref_diags {
-            let (uname, lines) = &line_indices[unit_idx];
+            if unit_idx < user_unit_offset {
+                continue;
+            }
+            let (uname, lines) = &line_indices[unit_idx - user_unit_offset];
             let vd = to_diag(uname, "model_ref", lines, &d);
             if d.severity == Severity::Error {
                 model_errors.push(vd);
@@ -102,7 +193,10 @@ pub fn validate_sysml_units(units: &[(String, String)]) -> ValidationReport {
         }
         let sem_diags = validate_semantics_with(&mut resolved, &model);
         for (unit_idx, d) in sem_diags {
-            let (uname, lines) = &line_indices[unit_idx];
+            if unit_idx < user_unit_offset {
+                continue;
+            }
+            let (uname, lines) = &line_indices[unit_idx - user_unit_offset];
             let vd = to_diag(uname, "semantics", lines, &d);
             if d.severity == Severity::Error {
                 model_errors.push(vd);
@@ -116,6 +210,8 @@ pub fn validate_sysml_units(units: &[(String, String)]) -> ValidationReport {
     let warning_count = warnings.len();
     ValidationReport {
         valid: error_count == 0,
+        stdlib_loaded,
+        stdlib_units,
         error_count,
         warning_count,
         syntax_errors,

@@ -43,6 +43,12 @@ pub struct SemanticGraph {
     pub satisfy_links: BTreeSet<String>,
     pub verify_links: BTreeSet<String>,
     pub constraints: BTreeSet<String>,
+    pub refinements: BTreeSet<String>,
+    pub calc_defs: BTreeSet<String>,
+    pub analysis_defs: BTreeSet<String>,
+    pub analysis_usages: BTreeSet<String>,
+    pub portions: BTreeSet<String>,
+    pub views: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -172,6 +178,32 @@ fn extract_pkg(pkg: &Package, prefix: &str, g: &mut SemanticGraph) {
                         ));
                     }
                 }
+                for rf in &p.refinements {
+                    g.refinements.insert(format!(
+                        "{qp}: {} -> {}",
+                        norm_simple_ref(&rf.client),
+                        norm_simple_ref(&rf.supplier)
+                    ));
+                }
+            }
+            PackageMember::PartUsage(pu) => {
+                let pname = pu.name.as_deref().unwrap_or("_");
+                let qp = format!("{qpkg}::{pname}");
+                let tys = pu.type_names.join(",");
+                g.nested_parts.insert(format!("{qp} : {tys}"));
+                for a in &pu.attributes {
+                    record_attr(&qp, a, g);
+                }
+                for req in &pu.requirements {
+                    g.requirement_usages.insert(format!(
+                        "{qp}.{} : {}",
+                        norm_simple_ref(&req.name),
+                        req.type_name.as_deref().unwrap_or("")
+                    ));
+                }
+                for po in &pu.portions {
+                    record_portion(&qp, po, g);
+                }
             }
             PackageMember::PortDef(p) => {
                 let qp = format!("{qpkg}::{}", p.name);
@@ -213,6 +245,13 @@ fn extract_pkg(pkg: &Package, prefix: &str, g: &mut SemanticGraph) {
                 for s in &a.specializes {
                     g.specializations.insert(format!("{qa} :> {}", norm_simple_ref(s)));
                 }
+                for rf in &a.refinements {
+                    g.refinements.insert(format!(
+                        "{qa}: {} -> {}",
+                        norm_simple_ref(&rf.client),
+                        norm_simple_ref(&rf.supplier)
+                    ));
+                }
             }
             PackageMember::StateDef(s) => {
                 let qs = format!("{qpkg}::{}", s.name);
@@ -239,6 +278,13 @@ fn extract_pkg(pkg: &Package, prefix: &str, g: &mut SemanticGraph) {
                 for c in &r.require_constraints {
                     g.constraints.insert(format!("{qr}: {}", norm_ws(c)));
                 }
+                for rf in &r.refinements {
+                    g.refinements.insert(format!(
+                        "{qr}: {} -> {}",
+                        norm_simple_ref(&rf.client),
+                        norm_simple_ref(&rf.supplier)
+                    ));
+                }
             }
             PackageMember::RequirementUsage(ru) => {
                 let qr = format!("{qpkg}::{}", ru.name);
@@ -258,8 +304,87 @@ fn extract_pkg(pkg: &Package, prefix: &str, g: &mut SemanticGraph) {
                     ));
                 }
             }
+            PackageMember::CalcDef(c) | PackageMember::CalcUsage(c) => {
+                let qc = format!("{qpkg}::{}", c.name);
+                let pnames = c
+                    .params
+                    .iter()
+                    .map(|p| p.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(",");
+                g.calc_defs
+                    .insert(format!("{qc}({pnames}) = {}", norm_ws(&c.result_expr)));
+            }
+            PackageMember::AttributeDef(a) => {
+                let qa = format!("{qpkg}::{}", a.name);
+                for sub in &a.attributes {
+                    record_attr(&qa, sub, g);
+                }
+            }
+            PackageMember::AttributeUsage(a) => {
+                record_attr(&qpkg, a, g);
+            }
+            PackageMember::AnalysisDef(a) => {
+                let qa = format!("{qpkg}::{}", a.name);
+                g.analysis_defs.insert(qa.clone());
+                for c in &a.assert_constraints {
+                    g.constraints.insert(format!("{qa}: {}", norm_ws(c)));
+                }
+            }
+            PackageMember::AnalysisUsage(a) => {
+                let qa = format!("{qpkg}::{}", a.name);
+                g.analysis_usages.insert(format!(
+                    "{qa} : {}",
+                    a.type_name.as_deref().unwrap_or("")
+                ));
+                for c in &a.assert_constraints {
+                    g.constraints.insert(format!("{qa}: {}", norm_ws(c)));
+                }
+            }
+            PackageMember::ViewUsage(v) => {
+                g.views.insert(format!("{qpkg}::{}", v.name));
+            }
             _ => {}
         }
+    }
+}
+
+fn record_portion(owner: &str, p: &PortionUsage, g: &mut SemanticGraph) {
+    let kind = match p.kind {
+        PortionKind::Timeslice => "timeslice",
+        PortionKind::Snapshot => "snapshot",
+    };
+    let qp = format!("{owner}.{}", norm_simple_ref(&p.name));
+    g.portions.insert(format!("{kind}:{qp}"));
+    for c in &p.assert_constraints {
+        g.constraints.insert(format!("{qp}: {}", norm_ws(c)));
+    }
+    for a in &p.attributes {
+        record_attr(&qp, a, g);
+    }
+    for sub in &p.parts {
+        let sname = sub
+            .name
+            .as_deref()
+            .or_else(|| sub.redefines.first().map(|s| s.as_str()))
+            .unwrap_or("_");
+        let qs = format!("{qp}.{}", norm_simple_ref(sname));
+        for a in &sub.attributes {
+            record_attr(&qs, a, g);
+        }
+        for perf in &sub.performs {
+            g.perform_actions.insert(format!(
+                "{qs} perform {}",
+                perf.references
+                    .as_deref()
+                    .or(perf.name.as_deref())
+                    .map(norm_simple_ref)
+                    .unwrap_or_default()
+            ));
+        }
+    }
+    for child in &p.portions {
+        record_portion(&qp, child, g);
     }
 }
 
@@ -269,13 +394,18 @@ fn record_attr(owner: &str, a: &AttributeUsage, g: &mut SemanticGraph) {
         .as_deref()
         .map(norm_simple_ref)
         .or_else(|| a.redefines.first().map(|r| format!(":>>{}", norm_simple_ref(r))))
+        .or_else(|| a.subsets.first().map(|s| format!(":>{}", norm_simple_ref(s))))
         .unwrap_or_else(|| "_".to_string());
     let val = match (&a.value, &a.unit) {
         (Some(v), Some(u)) => format!("={} [{}]", norm_ws(v), norm_simple_ref(u)),
         (Some(v), None) => format!("={}", norm_ws(v)),
         _ => String::new(),
     };
-    g.attributes.insert(format!("{owner}.{key}{val}"));
+    let qa = format!("{owner}.{key}");
+    g.attributes.insert(format!("{qa}{val}"));
+    for sub in &a.nested_attributes {
+        record_attr(&qa, sub, g);
+    }
 }
 
 fn diff_set(name: &str, orig: &BTreeSet<String>, reemit: &BTreeSet<String>) -> CategoryDiff {
@@ -323,6 +453,12 @@ pub fn compare_sysml_roundtrip(
         diff_set("satisfy_links", &og.satisfy_links, &rg.satisfy_links),
         diff_set("verify_links", &og.verify_links, &rg.verify_links),
         diff_set("constraints", &og.constraints, &rg.constraints),
+        diff_set("refinements", &og.refinements, &rg.refinements),
+        diff_set("calc_defs", &og.calc_defs, &rg.calc_defs),
+        diff_set("analysis_defs", &og.analysis_defs, &rg.analysis_defs),
+        diff_set("analysis_usages", &og.analysis_usages, &rg.analysis_usages),
+        diff_set("portions", &og.portions, &rg.portions),
+        diff_set("views", &og.views, &rg.views),
     ];
 
     let total_original_facts: usize = categories.iter().map(|c| c.original_count).sum();

@@ -1,18 +1,28 @@
-//! Closed-loop executable verification & fault-injection simulation running
-//! directly on the `#[sysml::*]` Rust DSL structs and state-machine enum.
+//! Closed-loop executable verification & fault-injection runner.
+//!
+//! Strictly separated from `apollo11-model` (Tier 3 runner -> Tier 1/2 model):
+//! - Uses auto-generated `ApolloSpacecraft::default()` (thresholds/masses live ONLY in SysML attrs).
+//! - Feeds `TouchdownTelemetry` directly into `Apollo11MissionPhases::step_with(&event, &ds)`
+//!   (no duplicated abort `if` logic!).
+//! - Calls `apollo11_model::calculations_package::ascent_burn_duration(...)` and `total_stage_mass(...)`.
+//! - Calls `EvaluableRequirement::evaluate(&req)` directly on `HLR-R002`, `CLR-R050`, `CLR-R057`,
+//!   `CLR-R058` (zero duplicated requirement comparisons!).
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sysml_ir::{
-    Quantity, SysmlRequirement, VerificationReport, VerificationStatus, VerificationVerdict,
+    EvaluableRequirement, Quantity, SysmlRequirementCore, VerificationReport, VerificationStatus,
+    VerificationVerdict,
 };
 
-use crate::mission_phases_package::*;
-use crate::requirements_package::*;
-use crate::technical_components_package::*;
+use apollo11_model::calculations_package::{
+    ascent_burn_duration, exhaust_velocity, total_stage_mass,
+};
+use apollo11_model::mission_phases_package::*;
+use apollo11_model::requirements_package::*;
+use apollo11_model::technical_components_package::*;
 
 const LUNAR_GRAVITY_M_S2: f64 = 1.625;
-const G0_M_S2: f64 = 9.80665;
 
 /// Optional fault-injection profile applied directly to the SysML hardware model.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -33,7 +43,7 @@ impl FaultProfile {
         Self {
             stuck_min_throttle_percent: None,
             guidance_lateral_drift_m_s: 0.0,
-            landing_zone_offset_m: 185.0, // Eagle landed well within the 1000 m Tranquility Base target
+            landing_zone_offset_m: 185.0,
             ascent_thrust_scale: 1.0,
         }
     }
@@ -49,7 +59,7 @@ impl FaultProfile {
 }
 
 /// Telemetry snapshot produced by executing the Powered Descent & Ascent simulation
-/// directly on `ApolloLunarModule`.
+/// directly on `ApolloSpacecraft`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DescentTelemetry {
     pub phase_history: Vec<String>,
@@ -96,23 +106,22 @@ pub fn simulate_powered_descent(
     let ds = &lm.lunar_module_descent_stage;
     let as_ = &lm.lunar_module_ascent_stage;
 
-    // Terminal final-approach physics (from 150 m altitude, -12 m/s descent rate)
+    // Terminal final-approach physics plant (environment model in external runner crate)
     let mut altitude_m = 150.0_f64;
-    let mut vy_m_s = -12.0_f64; // negative = downward
-    let mut prop_remaining_kg = ds.propellant_mass.value() * 0.14; // ~1155 kg at terminal approach
-    let dry_total_kg =
-        ds.dry_mass.value() + as_.dry_mass.value() + as_.propellant_mass.value();
-    let max_thrust_n = ds.max_thrust.value() * 1000.0;
+    let mut vy_m_s = -12.0_f64;
+    let mut prop_remaining_kg = ds.propellant_mass.value() * 0.14;
+    let dry_total_kg = ds.dry_mass.value()
+        + total_stage_mass(as_.dry_mass.value(), as_.propellant_mass.value());
+    let max_thrust_n = ds.max_thrust.value();
     let min_frac = ds.min_throttle_percent.value() / 100.0;
     let max_frac = ds.max_throttle_percent.value() / 100.0;
-    let ve_m_s = ds.specific_impulse.value() * G0_M_S2;
+    let ve_m_s = exhaust_velocity(ds.specific_impulse.value());
 
     let dt = 0.05_f64;
     let mut steps = 0usize;
     while altitude_m > 0.0 && steps < 4000 {
         steps += 1;
         let mass_kg = dry_total_kg + prop_remaining_kg;
-        // Desired soft descent profile: target -0.8 m/s near surface
         let target_vy = -(0.8 + 0.075 * altitude_m).min(12.0);
         let desired_accel = LUNAR_GRAVITY_M_S2 + 1.8 * (target_vy - vy_m_s);
         let desired_thrust_n = (mass_kg * desired_accel).max(0.0);
@@ -130,7 +139,6 @@ pub fn simulate_powered_descent(
         vy_m_s += accel_y * dt;
         altitude_m += vy_m_s * dt;
 
-        // If stuck throttle causes upward climb > 250 m without settling, simulate emergency cutoff
         if altitude_m > 250.0 {
             vy_m_s = -4.2;
             break;
@@ -140,27 +148,23 @@ pub fn simulate_powered_descent(
     let touchdown_vy = vy_m_s.abs();
     let touchdown_vx = 0.22 + fault.guidance_lateral_drift_m_s;
 
-    // Ascent burn duration check from LMAS propellant mass, thrust, and Isp (Apollo 11: ~360-380s)
-    let ascent_thrust_n = as_.max_thrust.value() * 1000.0 * fault.ascent_thrust_scale.max(0.1);
-    let ascent_ve = as_.specific_impulse.value() * G0_M_S2;
-    let ascent_mdot = ascent_thrust_n / ascent_ve;
-    // Apollo 11 burned ~2030 kg of the 2370 kg LMAS propellant to reach lunar orbit
-    let ascent_prop_burned_kg = (as_.propellant_mass.value() * 0.86).min(as_.propellant_mass.value());
-    let ascent_burn_duration_s = ascent_prop_burned_kg / ascent_mdot;
+    // Modeled #[sysml::calc] calculation invoked directly from `apollo11-model`!
+    let burn_s = ascent_burn_duration(
+        as_.propellant_mass.value(),
+        as_.max_thrust.value() * fault.ascent_thrust_scale.max(0.1),
+        as_.specific_impulse.value(),
+        0.86,
+    );
 
-    // Transition to LunarSurfaceOps if within structural velocity limits, else AbortToLunarOrbit
-    let vel_req = LMDSVelocityLimits::default();
-    if touchdown_vy <= vel_req.max_touchdown_vertical_velocity.value()
-        && touchdown_vx <= vel_req.max_touchdown_horizontal_velocity.value()
-    {
-        phases
-            .step_on::<PoweredDescentPhaseCompletedNotification>()
-            .expect("PoweredDescent -> LunarSurfaceOps");
-    } else {
-        phases
-            .step_on::<PoweredDescentAbortTrigger>()
-            .expect("PoweredDescent -> AbortToLunarOrbit");
-    }
+    // Feed typed `TouchdownTelemetry` directly into the guarded SysML state machine —
+    // the landing vs. abort decision executes the EXACT guard expression emitted to `.sysml`!
+    let touchdown_event = TouchdownTelemetry {
+        vertical_velocity: Quantity::m_per_s(touchdown_vy),
+        horizontal_velocity: Quantity::m_per_s(touchdown_vx),
+    };
+    phases
+        .step_with(&touchdown_event, ds)
+        .expect("PoweredDescent -> LunarSurfaceOps or AbortToLunarOrbit via compiled SysML guard");
     phase_history.push(phases.sysml_state_name().to_string());
 
     DescentTelemetry {
@@ -172,30 +176,26 @@ pub fn simulate_powered_descent(
         remaining_descent_propellant_kg: round3(prop_remaining_kg),
         dps_min_throttle_percent: ds.min_throttle_percent.value(),
         dps_max_throttle_percent: ds.max_throttle_percent.value(),
-        ascent_burn_duration_s: round3(ascent_burn_duration_s),
+        ascent_burn_duration_s: round3(burn_s),
     }
 }
 
-/// Evaluate all Apollo 11 Powered Descent requirements against simulated telemetry
-/// and return a JSON-serializable `VerificationReport`.
+/// Evaluate all Apollo 11 Powered Descent requirements using the macro-compiled
+/// `EvaluableRequirement::evaluate(&req)` methods (zero duplicated predicates!).
 pub fn verify_scenario(scenario_name: &str, fault: &FaultProfile) -> VerificationReport {
-    let mut spacecraft = ApolloSpacecraft::apollo11();
+    // Auto-generated Default from SysML `#[sysml::attr(value = ..., unit = ...)]`!
+    let mut spacecraft = ApolloSpacecraft::default();
     let telemetry = simulate_powered_descent(&mut spacecraft, fault);
 
     let mut verdicts = Vec::new();
 
-    // 1. HLR-R002: LunarLanderSoftLandingRequirement
+    // 1. HLR-R002: LunarLanderSoftLandingRequirement (thresholds auto-populated by Default!)
     let mut hlr_r002 = LunarLanderSoftLandingRequirement::default();
     hlr_r002.actual_vertical_velocity = Quantity::m_per_s(telemetry.touchdown_vertical_velocity_m_s);
     hlr_r002.actual_horizontal_velocity =
         Quantity::m_per_s(telemetry.touchdown_horizontal_velocity_m_s);
     hlr_r002.actual_landing_zone_deviation = Quantity::m(telemetry.landing_zone_deviation_m);
-    let hlr_ok = hlr_r002.actual_vertical_velocity.value()
-        <= hlr_r002.max_vertical_velocity.value()
-        && hlr_r002.actual_horizontal_velocity.value()
-            <= hlr_r002.max_horizontal_velocity.value()
-        && hlr_r002.actual_landing_zone_deviation.value()
-            <= hlr_r002.max_landing_zone_deviation.value();
+    let hlr_ok = hlr_r002.evaluate();
     verdicts.push(VerificationVerdict {
         req_id: LunarLanderSoftLandingRequirement::REQ_ID.to_string(),
         req_name: LunarLanderSoftLandingRequirement::SYSML_NAME.to_string(),
@@ -227,10 +227,7 @@ pub fn verify_scenario(scenario_name: &str, fault: &FaultProfile) -> Verificatio
     clr_r050.actual_vertical_velocity = Quantity::m_per_s(telemetry.touchdown_vertical_velocity_m_s);
     clr_r050.actual_horizontal_velocity =
         Quantity::m_per_s(telemetry.touchdown_horizontal_velocity_m_s);
-    let vel_ok = clr_r050.actual_vertical_velocity.value()
-        <= clr_r050.max_touchdown_vertical_velocity.value()
-        && clr_r050.actual_horizontal_velocity.value()
-            <= clr_r050.max_touchdown_horizontal_velocity.value();
+    let vel_ok = clr_r050.evaluate();
     verdicts.push(VerificationVerdict {
         req_id: LMDSVelocityLimits::REQ_ID.to_string(),
         req_name: LMDSVelocityLimits::SYSML_NAME.to_string(),
@@ -258,10 +255,7 @@ pub fn verify_scenario(scenario_name: &str, fault: &FaultProfile) -> Verificatio
     let mut clr_r057 = DPSThrottlingRange::default();
     clr_r057.actual_min_throttle_percentage = Quantity::percent(telemetry.dps_min_throttle_percent);
     clr_r057.actual_max_throttle_percentage = Quantity::percent(telemetry.dps_max_throttle_percent);
-    let dps_ok = clr_r057.actual_min_throttle_percentage.value()
-        <= clr_r057.min_required_throttle_percentage.value()
-        && clr_r057.actual_max_throttle_percentage.value()
-            >= clr_r057.max_required_throttle_percentage.value();
+    let dps_ok = clr_r057.evaluate();
     verdicts.push(VerificationVerdict {
         req_id: DPSThrottlingRange::REQ_ID.to_string(),
         req_name: DPSThrottlingRange::SYSML_NAME.to_string(),
@@ -288,8 +282,7 @@ pub fn verify_scenario(scenario_name: &str, fault: &FaultProfile) -> Verificatio
     // 4. CLR-R058: LMASBurnDuration
     let mut clr_r058 = LMASBurnDuration::default();
     clr_r058.actual_ascent_burn_duration = Quantity::seconds(telemetry.ascent_burn_duration_s);
-    let lmas_ok = clr_r058.actual_ascent_burn_duration.value()
-        <= clr_r058.max_ascent_burn_duration.value();
+    let lmas_ok = clr_r058.evaluate();
     verdicts.push(VerificationVerdict {
         req_id: LMASBurnDuration::REQ_ID.to_string(),
         req_name: LMASBurnDuration::SYSML_NAME.to_string(),
@@ -312,7 +305,7 @@ pub fn verify_scenario(scenario_name: &str, fault: &FaultProfile) -> Verificatio
         },
     });
 
-    VerificationReport::from_verdicts("Apollo11PoweredDescentSlice", verdicts)
+    VerificationReport::from_verdicts("Apollo11PoweredDescentModel", verdicts)
 }
 
 pub fn run_nominal_verification() -> VerificationReport {
@@ -335,7 +328,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn gate4_nominal_powered_descent_verifies_all_requirements() {
+    fn gate4_nominal_powered_descent_verifies_all_requirements_via_compiled_constraints() {
         let report = run_nominal_verification();
         assert!(
             report.all_passed,
@@ -344,16 +337,18 @@ mod tests {
         );
         assert_eq!(report.passed, 4);
         assert_eq!(report.failed, 0);
-        // Verify JSON serialization contains exact Apollo 11 requirement IDs
-        let json_str = serde_json::to_string(&report).unwrap();
-        assert!(json_str.contains("HLR-R002"));
-        assert!(json_str.contains("CLR-R050"));
-        assert!(json_str.contains("CLR-R057"));
-        assert!(json_str.contains("CLR-R058"));
+        // Verify auto-generated Default populated real Airbus Apollo 11 masses from SysML attributes
+        let sc = ApolloSpacecraft::default();
+        assert_eq!(sc.lunar_module.lunar_module_descent_stage.dry_mass.value(), 2100.0);
+        assert_eq!(sc.lunar_module.lunar_module_descent_stage.dry_mass.unit, "kg");
+        assert_eq!(sc.lunar_module.lunar_module_ascent_stage.max_thrust.value(), 16000.0);
+        assert_eq!(sc.lunar_module.lunar_module_ascent_stage.max_thrust.unit, "N");
+        // Verify nominal touchdown reached LunarSurfaceOps via compiled SysML guard
+        assert_eq!(report.verdicts[0].evidence["final_phase"], "lunarSurfaceOps");
     }
 
     #[test]
-    fn gate4_fault_injection_detects_requirement_violations() {
+    fn gate4_fault_injection_triggers_abort_guard_and_requirement_failures() {
         let report = run_fault_injection_verification();
         assert!(!report.all_passed);
         let hlr = report
@@ -368,20 +363,23 @@ mod tests {
             .unwrap();
         assert_eq!(hlr.status, VerificationStatus::Fail);
         assert_eq!(dps.status, VerificationStatus::Fail);
+        // Compiled SysML state-machine guard routed faulted touchdown to AbortToLunarOrbit!
+        assert_eq!(hlr.evidence["final_phase"], "abortToLunarOrbit");
     }
 
     #[test]
     fn gate4_state_machine_rejects_illegal_mission_phase_jump() {
         let mut phases = Apollo11MissionPhases::initial_state();
+        let ds = LunarModuleDescentStage::default();
         assert_eq!(phases, Apollo11MissionPhases::Initial);
         phases.step("auto").unwrap();
         assert_eq!(phases, Apollo11MissionPhases::Preparation);
-        // Trying to fire PoweredDescentPhaseCompletedNotification directly from Preparation must fail!
+        // Trying to fire TouchdownTelemetry directly from Preparation must fail!
         let err = phases
-            .step_on::<PoweredDescentPhaseCompletedNotification>()
+            .step_with(&TouchdownTelemetry::default(), &ds)
             .unwrap_err();
         assert_eq!(err.from, "preparation");
-        assert_eq!(err.trigger, "PoweredDescentPhaseCompletedNotification");
+        assert_eq!(err.trigger, "TouchdownTelemetry");
         assert_eq!(phases, Apollo11MissionPhases::Preparation);
     }
 }

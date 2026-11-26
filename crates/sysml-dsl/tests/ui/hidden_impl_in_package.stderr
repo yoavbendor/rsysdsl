@@ -1,0 +1,10 @@
+error: raw `impl` blocks are forbidden inside `#[sysml::package]` (semantic leakage prevented): `Default` is auto-generated from `#[sysml::attr(value = ...)]`, constraints generate `evaluate()`, and imperative runners belong in a separate crate
+  --> tests/ui/hidden_impl_in_package.rs:14:5
+   |
+14 | /     impl Valve {
+15 | |         pub fn secret_interlock(&self) -> bool {
+16 | |             if self.pressure > 100.0 {
+17 | |                 false
+...  |
+22 | |     }
+   | |_____^

@@ -1,4 +1,6 @@
 /target
+/vendor
+/vendor-stdlib
 **/*.rs.bk
 *.pdb
 .DS_Store

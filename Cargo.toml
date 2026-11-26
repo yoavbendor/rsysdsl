@@ -1,13 +1,17 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/sysml-core",
     "crates/sysml-ir",
     "crates/sysml-macros",
     "crates/sysml-dsl",
     "crates/sysml-emit",
     "crates/sysml-lift",
     "crates/sysml-cli",
-    "examples/apollo11_slice",
+    "examples/apollo11_model",
+    "examples/apollo11_sim",
+    "examples/embedded_flight_controller",
+    "examples/starter_model",
 ]
 
 [workspace.package]
@@ -17,12 +21,15 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/yoavbendor/rsysdsl"
 
 [workspace.dependencies]
+sysml-core = { path = "crates/sysml-core" }
 sysml-ir = { path = "crates/sysml-ir" }
 sysml-macros = { path = "crates/sysml-macros" }
 sysml-dsl = { path = "crates/sysml-dsl" }
 sysml-emit = { path = "crates/sysml-emit" }
 sysml-lift = { path = "crates/sysml-lift" }
-apollo11-slice = { path = "examples/apollo11_slice" }
+apollo11-model = { path = "examples/apollo11_model" }
+apollo11-sim = { path = "examples/apollo11_sim" }
+embedded-flight-controller = { path = "examples/embedded_flight_controller" }
 
 # Primary SysML v2 parser & validation oracle (Open-MBEE/sysml-toolkit, pinned rev)
 sysmlv2-syntax = { git = "https://github.com/Open-MBEE/sysml-toolkit", rev = "c8d256bdf6638d3f867e61850df332da43a0f9e9", features = ["serde"] }

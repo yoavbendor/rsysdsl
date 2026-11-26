@@ -33,20 +33,72 @@ fn apollo11_fixture(rel: &str) -> (String, String) {
     (rel.to_string(), src)
 }
 
-/// Gate 2: Validate the hand-written 5-layer Apollo 11 Rust DSL slice with Open-MBEE `sysml-toolkit`.
+/// Gate 2: Validate the pure declarative 5-layer Apollo 11 Rust DSL model (`apollo11-model`)
+/// with Open-MBEE `sysml-toolkit` AND run full traceability audit (`audit_model`) with verification.
 #[test]
-fn gate2_handwritten_apollo11_slice_validates_with_zero_errors() {
-    let emitted = apollo11_slice::emit_apollo11_slice_sysml();
-    let report = validate_sysml_source("apollo11_slice.sysml", &emitted);
+fn gate2_handwritten_apollo11_model_validates_and_audits_cleanly() {
+    let model = apollo11_model::build_apollo11_model();
+    let emitted = apollo11_model::emit_apollo11_model_sysml();
+    let report = validate_sysml_source("apollo11_model.sysml", &emitted);
     assert!(
         report.valid,
-        "Expected 0 Open-MBEE validation errors on emitted Apollo 11 slice, got:\n{}\n\nEmitted SysML:\n{}",
+        "Expected 0 Open-MBEE validation errors on emitted Apollo 11 model, got:\n{}\n\nEmitted SysML:\n{}",
         serde_json::to_string_pretty(&report).unwrap(),
         emitted
     );
     assert_eq!(report.syntax_errors.len(), 0);
     assert_eq!(report.context_errors.len(), 0);
     assert_eq!(report.model_errors.len(), 0);
+    // Verify modeled #[sysml::calc] defs and compiled state guards appear in emitted .sysml!
+    assert!(emitted.contains("calc def ascentBurnDuration"));
+    assert!(emitted.contains("if (payload.verticalVelocity <= target.maxTouchdownVerticalVelocity)"));
+
+    let verification = apollo11_sim::run_nominal_verification();
+    let audit = sysml_emit::audit_model("apollo11_model", &model, Some(&verification));
+    assert!(
+        audit.ok,
+        "Expected 0 traceability audit findings on apollo11-model, got:\n{}",
+        serde_json::to_string_pretty(&audit).unwrap()
+    );
+    assert_eq!(audit.orphan_requirements.len(), 0);
+    assert_eq!(audit.unverified_constrained_requirements.len(), 0);
+    assert_eq!(audit.total_calcs, 3);
+}
+
+/// Gate 2 (Strict OMG Standard Library): Validate and audit `apollo11-model` against
+/// the full official OMG SysML v2 Standard Library (`sysml.library`) with 0 errors AND 0 warnings.
+#[test]
+fn gate2_apollo11_model_zero_errors_zero_warnings_with_omg_stdlib() {
+    let model = apollo11_model::build_apollo11_model();
+    let emitted = apollo11_model::emit_apollo11_model_sysml();
+    let report = sysml_emit::validate_sysml_source_with_stdlib(
+        "apollo11_model.sysml",
+        &emitted,
+        None,
+    );
+    assert!(
+        report.stdlib_loaded,
+        "Expected OMG sysml.library to be discovered and loaded"
+    );
+    assert!(
+        report.valid && report.warning_count == 0,
+        "Expected 0 errors and 0 warnings with OMG stdlib, got:\n{}",
+        serde_json::to_string_pretty(&report).unwrap()
+    );
+
+    let verification = apollo11_sim::run_nominal_verification();
+    let audit = sysml_emit::audit_model_with_stdlib(
+        "apollo11_model",
+        &model,
+        Some(&verification),
+        None,
+        true,
+    );
+    assert!(
+        audit.ok && audit.stdlib_loaded && audit.validation_warnings == 0,
+        "Expected 0 findings and 0 warnings in strict stdlib audit, got:\n{}",
+        serde_json::to_string_pretty(&audit).unwrap()
+    );
 }
 
 /// Gate 2 + Gate 3: Full end-to-end Apollo 11 bidirectional round-trip INCLUDING
@@ -56,6 +108,7 @@ fn gate3_apollo11_vertical_slice_full_compiled_roundtrip() {
     let slice_files = [
         "CoSMA/CoSMAPackage.sysml",
         "Operation/OperationsPackage.sysml",
+        "Purpose/CapabilitiesPackage.sysml",
         "Purpose/MissionPhasesPackage.sysml",
         "Function/FunctionsPackage.sysml",
         "Logical/LogicalComponentsPackage.sysml",
@@ -64,6 +117,8 @@ fn gate3_apollo11_vertical_slice_full_compiled_roundtrip() {
         "Requirements/MissionRequirementsPackage.sysml",
         "Requirements/TechnicalRequirementsPackage.sysml",
         "Technical/SystemSpecificationPackage.sysml",
+        "Analysis/CalculationsPackage.sysml",
+        "Analysis/AnalysisPackage.sysml",
     ];
     let original_units: Vec<(String, String)> =
         slice_files.iter().map(|f| apollo11_fixture(f)).collect();
@@ -76,10 +131,20 @@ fn gate3_apollo11_vertical_slice_full_compiled_roundtrip() {
         lifted.parse_errors
     );
     assert_eq!(lifted.stats.packages, slice_files.len());
-    assert!(lifted.stats.part_defs >= 30);
+    assert_eq!(
+        lifted.unsupported.len(),
+        0,
+        "Expected 0 unsupported constructs in 13-package vertical slice, got: {:?}",
+        lifted.unsupported
+    );
+    assert!(lifted.stats.part_defs >= 50);
     assert!(lifted.stats.perform_actions >= 30);
     assert!(lifted.stats.requirement_defs >= 100);
     assert!(lifted.stats.satisfy_links >= 50);
+    assert_eq!(lifted.stats.calc_defs, 14);
+    assert_eq!(lifted.stats.analysis_defs, 3);
+    assert_eq!(lifted.stats.analysis_usages, 5);
+    assert!(lifted.stats.refinements >= 42);
 
     let generated_rs = generate_rust_dsl(
         &lifted.model,
@@ -154,7 +219,7 @@ sysml-emit = {{ path = "{}/crates/sysml-emit", default-features = false }}
     );
     assert_eq!(diff.missing_count, 0);
     assert_eq!(diff.extra_count, 0);
-    assert!(diff.total_original_facts > 500);
+    assert!(diff.total_original_facts > 1400);
 }
 
 /// Full 28-file Airbus Apollo 11 corpus lift + re-emit validation check.
@@ -180,6 +245,19 @@ fn gate2_and_gate3_full_apollo11_corpus_audit() {
         "Parse errors on Apollo 11 corpus: {:?}",
         lifted.parse_errors
     );
+    assert_eq!(
+        lifted.unsupported.len(),
+        0,
+        "Expected 0 unsupported constructs across full 28-file Apollo 11 corpus (100.0%), got: {:#?}",
+        lifted.unsupported
+    );
+    assert_eq!(lifted.stats.calc_defs, 15);
+    assert_eq!(lifted.stats.analysis_defs, 3);
+    assert_eq!(lifted.stats.analysis_usages, 5);
+    assert_eq!(lifted.stats.comments, 3);
+    assert!(lifted.stats.portions >= 60);
+    assert_eq!(lifted.stats.views, 1);
+    assert!(lifted.stats.refinements >= 42);
 
     let reemitted = emit_model(&lifted.model);
     let val = validate_sysml_source("apollo11_full_reemitted.sysml", &reemitted);
@@ -194,6 +272,11 @@ fn gate2_and_gate3_full_apollo11_corpus_audit() {
         diff.fidelity_ok,
         "Full Apollo 11 corpus IR round-trip mismatch:\n{}",
         serde_json::to_string_pretty(&diff).unwrap()
+    );
+    assert!(diff.total_original_facts >= 2800);
+    eprintln!(
+        "FULL 28-FILE APOLLO 11 CORPUS: 0 unsupported (100.0%), {} / {} semantic facts matched, stats={:?}",
+        diff.total_original_facts, diff.total_reemitted_facts, lifted.stats
     );
 }
 

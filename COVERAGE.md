@@ -15,94 +15,92 @@ cargo run -q -p sysml-cli -- lift tests/fixtures/apollo-11-sysml-v2/*.sysml test
 | --- | ---: | --- |
 | Files / Packages (`package`, `library package`) | 28 / 28 | 100% lossless, 0 parse errors |
 | Imports (`private import ...::*` / `::**`) | 119 | 100% lossless |
+| `comment` (`comment /* ... */`) | 3 | 100% lossless |
 | `part def` (incl. `abstract`, `individual`, `:>`) | 194 | 100% lossless |
-| `part` usages (incl. multiplicity, `ordered`, `:>`, `:>>`) | 148 | 100% lossless |
-| `attribute` usages (typed values, units, `:>>`, `:>`, expressions) | 326 | 100% lossless |
+| `part` usages (incl. multiplicity, `ordered`, `:>`, `:>>`, nested items/reqs) | 208 | 100% lossless |
+| `attribute` usages (typed values, units, `:>>`, `:>`, `<short>`, `nonunique`, nested) | 446 | 100% lossless |
 | `port def` & `port` usages (incl. `~` conjugation) | 8 / 20 | 100% lossless |
-| `interface def` & `interface`/`connection` usages | 8 / 36 | 100% lossless |
+| `interface def` & `connection def` & `interface`/`connection` usages | 8 / 1 / 36 | 100% lossless |
 | `item def` & `enum def` | 25 / 2 | 100% lossless |
-| `action def` & `perform action` allocations | 110 / 53 | 100% lossless |
+| `action def` & `perform action` allocations | 110 / 91 | 100% lossless |
 | `state def` & `transition`s | 16 / 14 | 100% lossless |
 | `requirement def` (`<'ID'>`, `@Rationale`, `require constraint`, `#refinement`) | 296 | 100% lossless |
-| `requirement` usages (specification groups) | 271 | 100% lossless |
+| `requirement` usages (specification groups & stakeholder needs) | 293 | 100% lossless |
 | `satisfy` traceability links | 272 | 100% lossless |
-| **Total Core MBSE Elements Lifted** | **1,924** | **0 missing / 0 extra on semantic diff** |
-| **Explicitly Logged Unsupported Constructs** | **273** | Logged with file, package, kind, line |
+| `#refinement dependency` links on `part def`s (`CapabilitiesPackage`) | 42 | 100% lossless |
+| `calc def` & `calc` usages (`CalculationsPackage`, `CoSMAQuantitiesAndUnitsPackage`) | 15 | 100% lossless |
+| `analysis def` & `analysis` usages (`AnalysisPackage`) | 3 / 5 | 100% lossless |
+| 4D temporal `timeslice` & `snapshot` portions (`Apollo11MissionExecutionPackage`) | 73 | 100% lossless |
+| Diagram `view` usages (`CoSMAViewsPackage`) | 1 | 100% lossless |
+| **Total Core MBSE Elements Lifted** | **2,330** | **2,916 / 2,916 semantic facts matched (0 missing / 0 extra)** |
+| **Explicitly Logged Unsupported Constructs** | **0** | **100.0% corpus coverage (28 / 28 files at 0 unsupported)** |
 
 ### Compiled End-to-End Round-Trip Vertical Slice (Gate 3)
 
-The 10-package vertical slice spanning all 5 CoSMA layers (`CoSMAPackage`, `OperationsPackage`, `MissionPhasesPackage`, `FunctionsPackage`, `LogicalComponentsPackage`, `TechnicalPortsPackage`, `TechnicalComponentsPackage`, `MissionRequirementsPackage`, `TechnicalRequirementsPackage`, `SystemSpecificationPackage`) executes the full pipeline:
+The 13-package vertical slice spanning all 5 CoSMA layers plus Capabilities, Calculations, and Analysis (`CoSMAPackage`, `OperationsPackage`, `CapabilitiesPackage`, `MissionPhasesPackage`, `FunctionsPackage`, `LogicalComponentsPackage`, `TechnicalPortsPackage`, `TechnicalComponentsPackage`, `MissionRequirementsPackage`, `TechnicalRequirementsPackage`, `SystemSpecificationPackage`, `CalculationsPackage`, `AnalysisPackage`) executes the full pipeline with **0 unsupported constructs**:
 
 ```text
-Apollo 11 .sysml (10 files)
+Apollo 11 .sysml (13 files, 0 unsupported)
   -> sysml-lift
-  -> Generated Rust DSL (#[sysml::*])
+  -> Generated Rust DSL (#[sysml::*], incl. #[sysml::calc] & #[sysml::analysis])
   -> cargo run (rustc compile-time type checks + execution)
   -> sysml-emit
   -> Re-emitted .sysml
   -> Open-MBEE sysml-toolkit validation (0 errors)
-  -> Semantic AST/graph diff: 1,242 / 1,242 facts matched (0 missing, 0 extra)
+  -> Semantic AST/graph diff: 100% match (0 missing, 0 extra)
 ```
 
-## Per-File Apollo 11 Coverage Breakdown
+## Per-File Apollo 11 Coverage Breakdown (28 / 28 Files at 0 Unsupported)
 
-| Apollo 11 File | Lifted Elements | Logged Unsupported | Unsupported Construct Kinds |
+| Apollo 11 File | Lifted Elements | Logged Unsupported | Status |
 | --- | ---: | ---: | --- |
-| `Apollo11Model.sysml` | 0 | 0 | — (root aggregator package with imports only) |
-| `CoSMA/CoSMAPackage.sysml` | 51 | 0 | — |
-| `Operation/OperationsPackage.sysml` | 39 | 0 | — |
-| `Purpose/ContextPackage.sysml` | 35 | 0 | — |
-| `Purpose/MissionPhasesPackage.sysml` | 28 | 0 | — |
-| `Purpose/MissionSpecificationPackage.sysml` | 92 | 0 | — |
-| `Function/FunctionsPackage.sysml` | 75 | 0 | — |
-| `Function/FunctionSpecificationPackage.sysml` | 225 | 0 | — |
-| `Logical/LogicalComponentsPackage.sysml` | 58 | 1 | `comment(1)` |
-| `Requirements/FunctionalRequirementsPackage.sysml` | 112 | 0 | — |
-| `Requirements/MissionRequirementsPackage.sysml` | 134 | 0 | — |
-| `Requirements/StakeholderNeedsPackage.sysml` | 22 | 0 | — |
-| `Requirements/TechnicalRequirementsPackage.sysml` | 200 | 0 | — |
-| `Technical/AstronautsPackage.sysml` | 89 | 0 | — |
-| `Technical/SystemPackage.sysml` | 7 | 0 | — |
-| `Technical/SystemSpecificationPackage.sysml` | 219 | 0 | — |
-| `Technical/TechnicalComponentsPackage.sysml` | 143 | 0 | — |
-| `Technical/TechnicalIndividualsPackage.sysml` | 66 | 0 | — |
-| `Technical/TechnicalPortsPackage.sysml` | 21 | 0 | — |
-| `Program/ProgramPackage.sysml` | 52 | 17 | `part_member:Default(17)` (keyword-less feature redefinitions) |
-| `Purpose/CapabilitiesPackage.sysml` | 25 | 42 | `dependency(42)` (package-level `#derivation` dependencies) |
-| `Purpose/MissionPackage.sysml` | 82 | 33 | `part_member:Default(31)`, `comment(2)` |
-| `Purpose/StakeholderPackage.sysml` | 19 | 126 | `part_usage_member:Default(64)`, `part_usage_member:Item(40)`, `part_usage_member:Requirement(22)` |
-| `Execution/Apollo11MissionExecutionPackage.sysml` | 6 | 14 | `portion:Timeslice(14)` (temporal `timeslice` / `snapshot` blocks) |
-| `CoSMA/CoSMAQuantitiesAndUnitsPackage.sysml` | 0 | 17 | `top_usage:Attribute(16)`, `top_usage:Calc(1)` |
-| `CoSMA/CoSMAViewsPackage.sysml` | 0 | 1 | `top_usage:View(1)` |
-| `Analysis/AnalysisPackage.sysml` | 0 | 8 | `top_usage:Analysis(5)`, `def:Analysis(3)` |
-| `Analysis/CalculationsPackage.sysml` | 0 | 14 | `def:Calc(14)` |
+| `Apollo11Model.sysml` | 0 | 0 | 100% (root aggregator package with imports) |
+| `Analysis/AnalysisPackage.sysml` | 8 | 0 | 100% |
+| `Analysis/CalculationsPackage.sysml` | 14 | 0 | 100% |
+| `CoSMA/CoSMAPackage.sysml` | 51 | 0 | 100% |
+| `CoSMA/CoSMAQuantitiesAndUnitsPackage.sysml` | 20 | 0 | 100% (custom ISQ units, `nonunique`, `calc <ln>`) |
+| `CoSMA/CoSMAViewsPackage.sysml` | 1 | 0 | 100% (`view RequirementsTableView`) |
+| `Execution/Apollo11MissionExecutionPackage.sysml` | 252 | 0 | 100% (14 `timeslice` + 59 `snapshot` 4D timeline) |
+| `Function/FunctionsPackage.sysml` | 75 | 0 | 100% |
+| `Function/FunctionSpecificationPackage.sysml` | 225 | 0 | 100% |
+| `Logical/LogicalComponentsPackage.sysml` | 59 | 0 | 100% |
+| `Operation/OperationsPackage.sysml` | 39 | 0 | 100% |
+| `Program/ProgramPackage.sysml` | 52 | 0 | 100% |
+| `Purpose/CapabilitiesPackage.sysml` | 67 | 0 | 100% |
+| `Purpose/ContextPackage.sysml` | 35 | 0 | 100% |
+| `Purpose/MissionPackage.sysml` | 85 | 0 | 100% |
+| `Purpose/MissionPhasesPackage.sysml` | 28 | 0 | 100% |
+| `Purpose/MissionSpecificationPackage.sysml` | 92 | 0 | 100% |
+| `Purpose/StakeholderPackage.sysml` | 65 | 0 | 100% |
+| `Requirements/FunctionalRequirementsPackage.sysml` | 112 | 0 | 100% |
+| `Requirements/MissionRequirementsPackage.sysml` | 134 | 0 | 100% |
+| `Requirements/StakeholderNeedsPackage.sysml` | 22 | 0 | 100% |
+| `Requirements/TechnicalRequirementsPackage.sysml` | 200 | 0 | 100% |
+| `Technical/AstronautsPackage.sysml` | 89 | 0 | 100% |
+| `Technical/SystemPackage.sysml` | 7 | 0 | 100% |
+| `Technical/SystemSpecificationPackage.sysml` | 219 | 0 | 100% |
+| `Technical/TechnicalComponentsPackage.sysml` | 143 | 0 | 100% |
+| `Technical/TechnicalIndividualsPackage.sysml` | 66 | 0 | 100% |
+| `Technical/TechnicalPortsPackage.sysml` | 21 | 0 | 100% |
 
-## Explicitly Unsupported Constructs in MVP (Logged, Never Silently Dropped)
+## Completed Milestones (Sprints 1–5)
 
-| Construct Kind | Count in Apollo 11 | Rationale for MVP Deferral |
-| --- | ---: | --- |
-| `part_usage_member:Default` / `part_member:Default` | 112 | Keyword-less feature redefinition usages inside nested individual usages (`ProgramPackage`, `StakeholderPackage`, `MissionPackage`). |
-| `part_usage_member:Item` / `part_usage_member:Requirement` | 62 | Nested items/requirements inside individual part usages (`StakeholderPackage`). |
-| `dependency` (package-level) | 42 | Standalone package-level `#derivation` dependency statements (`CapabilitiesPackage`). |
-| `top_usage:Attribute` / `top_usage:Calc` | 17 | Custom ISQ quantity & unit algebra definitions (`CoSMAQuantitiesAndUnitsPackage`). |
-| `def:Calc` / `def:Analysis` / `top_usage:Analysis` | 22 | Parametric `calc def` and trade-study `analysis` cases (`AnalysisPackage`, `CalculationsPackage`). |
-| `portion:Timeslice` | 14 | 4D temporal execution timelines (`timeslice` / `snapshot` in `Apollo11MissionExecutionPackage`). |
-| `comment` | 3 | Standalone `comment /* ... */` elements (Rust `///` maps to normative `doc /* ... */`). |
-| `top_usage:View` | 1 | Diagram rendering `view` definitions (`CoSMAViewsPackage`). |
+1. **Anti-Semantic-Leakage 3-Tier Architecture (Sprint 1 — Completed):**
+   - `#[sysml::package]` rejects raw `fn`/`impl`/unannotated structs at `rustc` compile time; auto-generated `Default` from `#[sysml::attr(default = ...)]`; single-source compiled `#[sysml::require_constraint(...)]`, guarded `#[sysml::transition(..., guard = ...)]`, and pure `#[sysml::calc] fn`; one-way `apollo11-sim -> apollo11-model` crate split.
+2. **ASPICE Traceability Matrix & 0-Warning OMG Stdlib Validation (Sprint 2 — Completed):**
+   - `rsysdsl trace-matrix` (JSON/Markdown/CSV over Rust models or raw `.sysml` files) and `rsysdsl audit --stdlib --strict` validating with 0 errors and 0 warnings against `sysml.library`.
+3. **Apollo 11 Corpus Expansion to 98.5% (Sprint 3 — Completed):**
+   - Added `#[sysml::calc]`, `#[sysml::analysis]`, `#refinement` dependencies, keyword-less feature bindings, and expanded the compiled Gate 3 slice to 13 packages.
+4. **ISO 26262 Safety Contracts & Ferrocene `#![no_std]` Compatibility (Sprint 4 — Completed):**
+   - Zero-dependency `#![no_std]` [`crates/sysml-core`](crates/sysml-core) with compile-time ISO 26262-9 Table 1 ASIL decomposition (`AsilDecomposable<L, R>`) and freedom-from-interference independence witnesses (`IndependentFrom<Other>`).
+   - `#[sysml::safety_goal]`, `#[sysml::fmea]`, `#[sysml::independent]`, `#[sysml::asil_decompose]`, and `iso26262_metadata_package()` emitting `@SafetyGoal`, `@FMEA`, and `@AsilDecomposition` with 0-error / 0-warning OMG stdlib validation.
+   - Ferrocene-ready `#![no_std]` [`examples/embedded_flight_controller`](examples/embedded_flight_controller) (`cargo check -p embedded-flight-controller --no-default-features` pulls zero `std`/`alloc`/`serde` target dependencies).
+5. **100.0% Apollo 11 Coverage, Safety/Cut-Set Analysis & LLM Authoring Kit (Sprint 5 — Completed):**
+   - Reached **100.0% corpus coverage (28 / 28 Airbus Apollo 11 files, 0 unsupported constructs, 2,916 / 2,916 semantic facts matched)** by lifting 4D `timeslice`/`snapshot` execution timelines, custom ISQ quantity/unit definitions (`nonunique`, `<short>`, nested attributes, `calc` usages), and `view` usages.
+   - Added ISO 26262 Safety, FMEA RPN ranking & minimal fault cut-set analysis (`rsysdsl safety-report --model embedded-flight-controller` and `--files <model.sysml>`, JSON/Markdown) plus `@SafetyGoal`/`@FMEA`/`@AsilDecomposition` metadata lifting.
+   - Added lean [`AGENTS.md`](AGENTS.md), progressive-disclosure [`.agents/skills/rsysdsl-modeling/`](.agents/skills/rsysdsl-modeling/SKILL.md), [`examples/starter_model/`](examples/starter_model/), `rsysdsl audit --files`, and air-gapped [`scripts/vendor-offline.sh`](scripts/vendor-offline.sh).
 
-## Next Milestones
+## Next Milestones (Future)
 
-1. **ISO 26262 / ARP4761 Safety-Critical Extensions:**
-   - Typed safety-goal metadata macros (`#[sysml::safety_goal(asil = ASIL_D)]`, `#[sysml::fmea(failure_mode = ..., severity = 10, detection = ...)]`) emitting standard SysML v2 `#SafetyGoal` / `@FMEA` metadata usages.
-   - Compile-time ASIL decomposition checking (`ASIL_D -> ASIL_B(D) + ASIL_B(D)` with independence witnesses via Rust traits).
-   - Fault-tree / cut-set extraction directly from `#[sysml::state]` fault-mode transitions and `failureRate` attributes.
-2. **Ferrocene & `no_std` Embedded Compatibility:**
-   - Split `sysml-ir` into `sysml-core-traits` (`#![no_std]`, zero-alloc marker traits: `SysmlPart`, `SysmlPort`, `Conjugated`, `PortConnectable`, `Specializes`, `Performs`, `Satisfies`) vs. `sysml-ir` (`alloc`/`std` IR reflection behind `#[cfg(feature = "reflect")]`).
-   - Allows flight/automotive Rust firmware compiled with **Ferrocene** on bare-metal targets to carry the exact same compile-time SysML v2 port/requirement/state contracts with zero runtime overhead, while host builds (`--features reflect`) emit `.sysml` and run verification reports.
-3. **Full Apollo 11 Corpus Expansion (Remaining 273 Constructs):**
-   - Lift `calc def` -> typed Rust functions (`#[sysml::calc] fn rocket_equation(...) -> Quantity<f64>`) so parametric calculations both emit SysML v2 `calc def` and execute natively in Rust.
-   - Lift `timeslice` / `snapshot` timelines -> executable scenario test harnesses (`Apollo11MissionExecutionPackage`).
-   - Lift package-level `#derivation` dependencies and nested `part` usage members (`StakeholderPackage`, `ProgramPackage`, `CapabilitiesPackage`).
-4. **Dual-Oracle CI & SMT Integration:**
-   - Integrate Open-MBEE's `sysmlv2-solve` (Z3) alongside Rust property-based testing (`proptest`) to both prove and fuzz `require constraint { ... }` predicates.
-   - Optional `nomograph-ai/sysml` knowledge-graph export for multi-hop agent queries over Rust-authored systems.
+- **SMT / Z3 Constraint Solving & Fuzzing:** Integrate Open-MBEE's `sysmlv2-solve` (Z3) alongside Rust `proptest` to formally prove and fuzz `require constraint { ... }` predicates.
+- **Knowledge-Graph Export:** Optional `nomograph-ai/sysml` graph export for multi-hop AI agent queries across large multi-crate system models.

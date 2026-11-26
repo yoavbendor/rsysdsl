@@ -361,6 +361,18 @@ fn emit_rust_package(
             escape_rust_str(&pkg.name)
         );
     }
+    for c in &pkg.comments {
+        if let Some(cname) = &c.name {
+            let _ = writeln!(
+                out,
+                "#[sysml::comment(name = \"{}\", body = \"{}\")]",
+                escape_rust_str(cname),
+                escape_rust_str(&c.body)
+            );
+        } else {
+            let _ = writeln!(out, "#[sysml::comment(\"{}\")]", escape_rust_str(&c.body));
+        }
+    }
     for imp in &pkg.imports {
         let suffix = match imp.wildcard {
             ImportWildcard::None => "",
@@ -449,6 +461,21 @@ fn emit_rust_package(
             PackageMember::PartDef(p) => {
                 if local_names.insert(to_pascal_ident(&p.name)) {
                     emit_rust_part_def(p, global_defs, out);
+                }
+            }
+            PackageMember::CalcDef(c) => {
+                if local_names.insert(to_pascal_ident(&c.name)) {
+                    emit_rust_calc_def(c, out);
+                }
+            }
+            PackageMember::AnalysisDef(a) => {
+                if local_names.insert(to_pascal_ident(&a.name)) {
+                    emit_rust_analysis_def(a, out);
+                }
+            }
+            PackageMember::AnalysisUsage(a) => {
+                if local_names.insert(to_pascal_ident(&a.name)) {
+                    emit_rust_analysis_usage(a, out);
                 }
             }
             _ => {}
@@ -971,6 +998,31 @@ fn emit_rust_part_def(
         }
     }
 
+    for c in &p.comments {
+        if let Some(cname) = &c.name {
+            let _ = writeln!(
+                out,
+                "    #[sysml::comment(name = \"{}\", body = \"{}\")]",
+                escape_rust_str(cname),
+                escape_rust_str(&c.body)
+            );
+        } else {
+            let _ = writeln!(
+                out,
+                "    #[sysml::comment(\"{}\")]",
+                escape_rust_str(&c.body)
+            );
+        }
+    }
+    for rf in &p.refinements {
+        let _ = writeln!(
+            out,
+            "    #[sysml::refines(client = \"{}\", supplier = \"{}\")]",
+            escape_rust_str(&rf.client),
+            escape_rust_str(&rf.supplier)
+        );
+    }
+
     // Emit `#[sysml::connect(...)]` for interface/connection usages with `from` & `to`
     for conn in &p.connections {
         if let (Some(from), Some(to)) = (&conn.from, &conn.to) {
@@ -1097,12 +1149,12 @@ fn emit_rust_part_def(
         } else {
             base_ty
         };
-        let _ = writeln!(out, "        #[sysml::item]");
-        let _ = writeln!(
-            out,
-            "        #[sysml::name = \"{}\"]",
-            escape_rust_str(&it.name)
-        );
+        let mut iopts = vec![format!("name = \"{}\"", escape_rust_str(&it.name))];
+        for s in &it.subsets {
+            iopts.push(format!("subsets = \"{}\"", escape_rust_str(s)));
+        }
+        emit_doc_comments(&it.doc, "        ", out);
+        let _ = writeln!(out, "        #[sysml::item({})]", iopts.join(", "));
         let _ = writeln!(out, "        pub {fname}: {rty},");
     }
     for req in &p.requirements {
@@ -1110,6 +1162,9 @@ fn emit_rust_part_def(
         let mut opts = vec![format!("name = \"{}\"", escape_rust_str(&req.name))];
         if let Some(m) = &req.multiplicity {
             opts.push(format!("mult = \"{}\"", m.render()));
+        }
+        for s in &req.subsets {
+            opts.push(format!("subsets = \"{}\"", escape_rust_str(s)));
         }
         let base_ty = req
             .type_name
@@ -1121,10 +1176,177 @@ fn emit_rust_part_def(
         } else {
             base_ty
         };
+        emit_doc_comments(&req.doc, "        ", out);
         let _ = writeln!(out, "        #[sysml::requirement_ref({})]", opts.join(", "));
         let _ = writeln!(out, "        pub {fname}: {rty},");
     }
     let _ = writeln!(out, "    }}");
+    out.push('\n');
+}
+
+fn emit_rust_calc_def(c: &CalcDef, out: &mut String) {
+    let rname = to_pascal_ident(&c.name);
+    emit_doc_comments(&c.doc, "    ", out);
+    let _ = writeln!(
+        out,
+        "    #[sysml::calc(name = \"{}\")]",
+        escape_rust_str(&c.name)
+    );
+    for loc in &c.locals {
+        let _ = writeln!(
+            out,
+            "    #[sysml::local(name = \"{}\", expr = \"{}\")]",
+            escape_rust_str(&loc.name),
+            escape_rust_str(&loc.expr)
+        );
+    }
+    let mut ret_opts = Vec::new();
+    if !c.return_name.is_empty() {
+        ret_opts.push(format!("name = \"{}\"", escape_rust_str(&c.return_name)));
+    }
+    if !c.return_type.is_empty() {
+        ret_opts.push(format!("ty = \"{}\"", escape_rust_str(&c.return_type)));
+    }
+    if let Some(sub) = &c.return_subsets {
+        ret_opts.push(format!("subsets = \"{}\"", escape_rust_str(sub)));
+    }
+    if !c.result_expr.is_empty() {
+        ret_opts.push(format!("expr = \"{}\"", escape_rust_str(&c.result_expr)));
+    }
+    if !ret_opts.is_empty() {
+        let _ = writeln!(out, "    #[sysml::return_expr({})]", ret_opts.join(", "));
+    }
+    let _ = writeln!(out, "    #[derive(Debug, Clone, Default)]");
+    if c.params.is_empty() {
+        let _ = writeln!(out, "    pub struct {rname};");
+    } else {
+        let _ = writeln!(out, "    pub struct {rname} {{");
+        let mut used = BTreeSet::new();
+        for p in &c.params {
+            let fname = unique_ident(&to_snake_ident(&p.name), &mut used);
+            let mut opts = vec![format!("name = \"{}\"", escape_rust_str(&p.name))];
+            if !p.type_name.is_empty() {
+                opts.push(format!("ty = \"{}\"", escape_rust_str(&p.type_name)));
+            }
+            if let Some(sub) = &p.subsets {
+                opts.push(format!("subsets = \"{}\"", escape_rust_str(sub)));
+            }
+            if let Some(mult) = &p.multiplicity {
+                opts.push(format!("mult = \"{}\"", mult.render()));
+            }
+            let _ = writeln!(out, "        #[sysml::in_param({})]", opts.join(", "));
+            let _ = writeln!(out, "        pub {fname}: f64,");
+        }
+        let _ = writeln!(out, "    }}");
+    }
+    out.push('\n');
+}
+
+fn emit_rust_analysis_params(params: &[AnalysisParam], out: &mut String) {
+    let mut used = BTreeSet::new();
+    for p in params {
+        let fname = unique_ident(&to_snake_ident(&p.name), &mut used);
+        let attr_name = match p.direction {
+            Some(Direction::In) => "in_param",
+            Some(Direction::Out) => "out_param",
+            Some(Direction::InOut) => "inout_param",
+            None => "attr",
+        };
+        let mut opts = vec![format!("name = \"{}\"", escape_rust_str(&p.name))];
+        if let Some(ty) = &p.type_name {
+            opts.push(format!("ty = \"{}\"", escape_rust_str(ty)));
+        }
+        for sub in &p.subsets {
+            opts.push(format!("subsets = \"{}\"", escape_rust_str(sub)));
+        }
+        if let Some(mult) = &p.multiplicity {
+            opts.push(format!("mult = \"{}\"", mult.render()));
+        }
+        if let Some(val) = &p.value {
+            opts.push(format!("value = \"{}\"", escape_rust_str(val)));
+        }
+        if let Some(unit) = &p.unit {
+            opts.push(format!("unit = \"{}\"", escape_rust_str(unit)));
+        }
+        let _ = writeln!(out, "        #[sysml::{attr_name}({})]", opts.join(", "));
+        let _ = writeln!(out, "        pub {fname}: f64,");
+    }
+}
+
+fn emit_rust_analysis_def(a: &AnalysisDef, out: &mut String) {
+    let rname = to_pascal_ident(&a.name);
+    emit_doc_comments(&a.doc, "    ", out);
+    let _ = writeln!(
+        out,
+        "    #[sysml::analysis(name = \"{}\")]",
+        escape_rust_str(&a.name)
+    );
+    if let Some(subj) = &a.subject {
+        let _ = writeln!(
+            out,
+            "    #[sysml::subject(name = \"{}\", ty = \"{}\")]",
+            escape_rust_str(&subj.name),
+            escape_rust_str(&subj.type_name)
+        );
+    }
+    for c in &a.assert_constraints {
+        let _ = writeln!(
+            out,
+            "    #[sysml::assert_constraint(\"{}\")]",
+            escape_rust_str(c)
+        );
+    }
+    let _ = writeln!(out, "    #[derive(Debug, Clone, Default)]");
+    if a.params.is_empty() {
+        let _ = writeln!(out, "    pub struct {rname};");
+    } else {
+        let _ = writeln!(out, "    pub struct {rname} {{");
+        emit_rust_analysis_params(&a.params, out);
+        let _ = writeln!(out, "    }}");
+    }
+    out.push('\n');
+}
+
+fn emit_rust_analysis_usage(a: &AnalysisUsage, out: &mut String) {
+    let rname = to_pascal_ident(&a.name);
+    emit_doc_comments(&a.doc, "    ", out);
+    if let Some(ty) = &a.type_name {
+        let _ = writeln!(
+            out,
+            "    #[sysml::analysis(usage, name = \"{}\", ty = \"{}\")]",
+            escape_rust_str(&a.name),
+            escape_rust_str(ty)
+        );
+    } else {
+        let _ = writeln!(
+            out,
+            "    #[sysml::analysis(usage, name = \"{}\")]",
+            escape_rust_str(&a.name)
+        );
+    }
+    if let Some(subj) = &a.subject {
+        let _ = writeln!(
+            out,
+            "    #[sysml::subject(name = \"{}\", ty = \"{}\")]",
+            escape_rust_str(&subj.name),
+            escape_rust_str(&subj.type_name)
+        );
+    }
+    for c in &a.assert_constraints {
+        let _ = writeln!(
+            out,
+            "    #[sysml::assert_constraint(\"{}\")]",
+            escape_rust_str(c)
+        );
+    }
+    let _ = writeln!(out, "    #[derive(Debug, Clone, Default)]");
+    if a.params.is_empty() {
+        let _ = writeln!(out, "    pub struct {rname};");
+    } else {
+        let _ = writeln!(out, "    pub struct {rname} {{");
+        emit_rust_analysis_params(&a.params, out);
+        let _ = writeln!(out, "    }}");
+    }
     out.push('\n');
 }
 
@@ -1138,6 +1360,9 @@ fn emit_rust_attr_field(a: &AttributeUsage, used: &mut BTreeSet<String>, out: &m
     let fname = unique_ident(&to_snake_ident(base_name), used);
 
     let mut opts = Vec::new();
+    if a.is_keywordless {
+        opts.push("keywordless".to_string());
+    }
     if let Some(n) = &a.name {
         opts.push(format!("name = \"{}\"", escape_rust_str(n)));
         if !a.redefines.is_empty() {

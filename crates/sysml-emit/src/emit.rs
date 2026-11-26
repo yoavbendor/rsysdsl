@@ -148,6 +148,19 @@ fn emit_doc(doc: &Option<String>, level: usize, out: &mut String) {
     }
 }
 
+fn emit_comment(c: &Comment, level: usize, out: &mut String) {
+    let ind = indent(level);
+    let clean = sanitize_doc(c.body.trim());
+    match &c.name {
+        Some(name) => {
+            let _ = writeln!(out, "{ind}comment {} /* {clean} */", escape_sysml_name(name));
+        }
+        None => {
+            let _ = writeln!(out, "{ind}comment /* {clean} */");
+        }
+    }
+}
+
 fn emit_package_into(pkg: &Package, level: usize, out: &mut String) {
     let ind = indent(level);
     let lib_prefix = if pkg.is_library { "library " } else { "" };
@@ -157,6 +170,9 @@ fn emit_package_into(pkg: &Package, level: usize, out: &mut String) {
         escape_sysml_name(&pkg.name)
     );
     emit_doc(&pkg.doc, level + 1, out);
+    for c in &pkg.comments {
+        emit_comment(c, level + 1, out);
+    }
 
     if !pkg.imports.is_empty() {
         for imp in &pkg.imports {
@@ -203,11 +219,18 @@ fn emit_member(member: &PackageMember, level: usize, out: &mut String) {
         PackageMember::ItemDef(i) => emit_item_def(i, level, out),
         PackageMember::EnumDef(e) => emit_enum_def(e, level, out),
         PackageMember::AttributeDef(a) => emit_attribute_def(a, level, out),
+        PackageMember::AttributeUsage(a) => emit_attribute_usage(a, level, out),
         PackageMember::ActionDef(a) => emit_action_def(a, level, out),
         PackageMember::StateDef(s) => emit_state_def(s, level, out),
         PackageMember::RequirementDef(r) => emit_requirement_def(r, level, out),
         PackageMember::RequirementUsage(r) => emit_requirement_usage(r, level, out),
         PackageMember::VerificationDef(v) => emit_verification_def(v, level, out),
+        PackageMember::CalcDef(c) => emit_calc(c, true, level, out),
+        PackageMember::CalcUsage(c) => emit_calc(c, false, level, out),
+        PackageMember::AnalysisDef(a) => emit_analysis_def(a, level, out),
+        PackageMember::AnalysisUsage(a) => emit_analysis_usage(a, level, out),
+        PackageMember::ViewUsage(v) => emit_view_usage(v, level, out),
+        PackageMember::MetadataDef(m) => emit_metadata_def(m, level, out),
     }
 }
 
@@ -227,9 +250,12 @@ fn emit_attribute_def(a: &AttributeDef, level: usize, out: &mut String) {
     let abs = if a.is_abstract { "abstract " } else { "" };
     let _ = write!(out, "{ind}{abs}attribute def {}", escape_sysml_name(&a.name));
     emit_specializes(&a.specializes, out);
-    if a.doc.is_some() {
+    if a.doc.is_some() || !a.attributes.is_empty() {
         let _ = writeln!(out, " {{");
         emit_doc(&a.doc, level + 1, out);
+        for sub in &a.attributes {
+            emit_attribute_usage(sub, level + 1, out);
+        }
         let _ = writeln!(out, "{ind}}}");
     } else {
         let _ = writeln!(out, ";");
@@ -238,15 +264,48 @@ fn emit_attribute_def(a: &AttributeDef, level: usize, out: &mut String) {
 
 fn emit_attribute_usage(a: &AttributeUsage, level: usize, out: &mut String) {
     let ind = indent(level);
-    let _ = write!(out, "{ind}attribute");
-    if let Some(name) = &a.name {
-        let _ = write!(out, " {}", escape_sysml_name(name));
+    let priv_kw = if a.is_private { "private " } else { "" };
+    let mut need_space = false;
+    if a.is_keywordless {
+        let _ = write!(out, "{ind}{priv_kw}");
+    } else {
+        let _ = write!(out, "{ind}{priv_kw}attribute");
+        need_space = true;
     }
-    if let Some(mult) = &a.multiplicity {
-        let _ = write!(out, " {}", mult.render());
+    if let Some(short) = &a.short_name {
+        if need_space {
+            out.push(' ');
+        }
+        let _ = write!(out, "<{}>", escape_sysml_name(short));
+        need_space = true;
+    }
+    if let Some(name) = &a.name {
+        if need_space {
+            out.push(' ');
+        }
+        let _ = write!(out, "{}", escape_sysml_name(name));
+        need_space = true;
     }
     if let Some(ty) = &a.type_name {
-        let _ = write!(out, " : {}", format_qualified(ty));
+        if need_space {
+            out.push(' ');
+        }
+        let _ = write!(out, ": {}", format_qualified(ty));
+        need_space = true;
+    }
+    if let Some(mult) = &a.multiplicity {
+        if need_space && a.type_name.is_none() {
+            out.push(' ');
+        }
+        let _ = write!(out, "{}", mult.render());
+        need_space = true;
+    }
+    if a.is_nonunique {
+        if need_space {
+            out.push(' ');
+        }
+        let _ = write!(out, "nonunique");
+        need_space = true;
     }
     if !a.subsets.is_empty() {
         let joined = a
@@ -255,7 +314,11 @@ fn emit_attribute_usage(a: &AttributeUsage, level: usize, out: &mut String) {
             .map(|s| format_ref(s))
             .collect::<Vec<_>>()
             .join(", ");
-        let _ = write!(out, " :> {joined}");
+        if need_space {
+            out.push(' ');
+        }
+        let _ = write!(out, ":> {joined}");
+        need_space = true;
     }
     if !a.redefines.is_empty() {
         let joined = a
@@ -264,7 +327,10 @@ fn emit_attribute_usage(a: &AttributeUsage, level: usize, out: &mut String) {
             .map(|s| format_ref(s))
             .collect::<Vec<_>>()
             .join(", ");
-        let _ = write!(out, " :>> {joined}");
+        if need_space {
+            out.push(' ');
+        }
+        let _ = write!(out, ":>> {joined}");
     }
     if let Some(val) = &a.value {
         let op = match a.value_kind {
@@ -278,9 +344,12 @@ fn emit_attribute_usage(a: &AttributeUsage, level: usize, out: &mut String) {
             let _ = write!(out, " {}", format_unit(unit));
         }
     }
-    if a.doc.is_some() {
+    if a.doc.is_some() || !a.nested_attributes.is_empty() {
         let _ = writeln!(out, " {{");
         emit_doc(&a.doc, level + 1, out);
+        for sub in &a.nested_attributes {
+            emit_attribute_usage(sub, level + 1, out);
+        }
         let _ = writeln!(out, "{ind}}}");
     } else {
         let _ = writeln!(out, ";");
@@ -327,12 +396,30 @@ fn emit_directed_item(it: &DirectedItem, level: usize, out: &mut String) {
         .as_ref()
         .map(|m| m.render())
         .unwrap_or_default();
-    let _ = writeln!(
+    let _ = write!(
         out,
-        "{ind}{dir}item {}{mult} : {};",
+        "{ind}{dir}item {}{mult}",
         escape_sysml_name(&it.name),
-        format_qualified(&it.type_name)
     );
+    if !it.type_name.is_empty() {
+        let _ = write!(out, " : {}", format_qualified(&it.type_name));
+    }
+    if !it.subsets.is_empty() {
+        let joined = it
+            .subsets
+            .iter()
+            .map(|s| format_ref(s))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let _ = write!(out, " :> {joined}");
+    }
+    if it.doc.is_some() {
+        let _ = writeln!(out, " {{");
+        emit_doc(&it.doc, level + 1, out);
+        let _ = writeln!(out, "{ind}}}");
+    } else {
+        let _ = writeln!(out, ";");
+    }
 }
 
 fn emit_port_def(p: &PortDef, level: usize, out: &mut String) {
@@ -450,6 +537,15 @@ fn emit_connection_usage(c: &ConnectionUsage, level: usize, out: &mut String) {
     if let Some(ty) = &c.type_name {
         let _ = write!(out, " : {}", format_qualified(ty));
     }
+    if !c.subsets.is_empty() {
+        let joined = c
+            .subsets
+            .iter()
+            .map(|s| format_ref(s))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let _ = write!(out, " :> {joined}");
+    }
     if let (Some(from), Some(to)) = (&c.from, &c.to) {
         let _ = write!(out, " connect {} to {}", format_ref(from), format_ref(to));
     }
@@ -536,8 +632,11 @@ fn emit_part_usage(p: &PartUsage, level: usize, out: &mut String) {
         || !p.attributes.is_empty()
         || !p.nested_parts.is_empty()
         || !p.ports.is_empty()
+        || !p.items.is_empty()
         || !p.performs.is_empty()
-        || !p.connections.is_empty();
+        || !p.connections.is_empty()
+        || !p.requirements.is_empty()
+        || !p.portions.is_empty();
     if !has_body {
         let _ = writeln!(out, ";");
     } else {
@@ -552,11 +651,76 @@ fn emit_part_usage(p: &PartUsage, level: usize, out: &mut String) {
         for port in &p.ports {
             emit_port_usage(port, level + 1, out);
         }
+        for it in &p.items {
+            emit_directed_item(it, level + 1, out);
+        }
         for perf in &p.performs {
             emit_perform_action(perf, level + 1, out);
         }
         for conn in &p.connections {
             emit_connection_usage(conn, level + 1, out);
+        }
+        for req in &p.requirements {
+            emit_requirement_usage(req, level + 1, out);
+        }
+        for portion in &p.portions {
+            emit_portion_usage(portion, level + 1, out);
+        }
+        let _ = writeln!(out, "{ind}}}");
+    }
+}
+
+fn emit_portion_usage(p: &PortionUsage, level: usize, out: &mut String) {
+    let ind = indent(level);
+    let then_kw = if p.is_then { "then " } else { "" };
+    let kind_kw = match p.kind {
+        PortionKind::Timeslice => "timeslice",
+        PortionKind::Snapshot => "snapshot",
+    };
+    let _ = write!(out, "{ind}{then_kw}{kind_kw} {}", escape_sysml_name(&p.name));
+    if !p.subsets.is_empty() {
+        let joined = p
+            .subsets
+            .iter()
+            .map(|s| format_ref(s))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let _ = write!(out, " :> {joined}");
+    }
+    if !p.type_names.is_empty() {
+        let joined = p
+            .type_names
+            .iter()
+            .map(|t| format_qualified(t))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let _ = write!(out, " : {joined}");
+    }
+    let has_body = p.doc.is_some()
+        || !p.assert_constraints.is_empty()
+        || !p.attributes.is_empty()
+        || !p.parts.is_empty()
+        || !p.performs.is_empty()
+        || !p.portions.is_empty();
+    if !has_body {
+        let _ = writeln!(out, ";");
+    } else {
+        let _ = writeln!(out, " {{");
+        emit_doc(&p.doc, level + 1, out);
+        for c in &p.assert_constraints {
+            let _ = writeln!(out, "{}assert constraint {{ {c} }}", indent(level + 1));
+        }
+        for a in &p.attributes {
+            emit_attribute_usage(a, level + 1, out);
+        }
+        for sub in &p.parts {
+            emit_part_usage(sub, level + 1, out);
+        }
+        for perf in &p.performs {
+            emit_perform_action(perf, level + 1, out);
+        }
+        for child in &p.portions {
+            emit_portion_usage(child, level + 1, out);
         }
         let _ = writeln!(out, "{ind}}}");
     }
@@ -574,6 +738,7 @@ fn emit_part_def(p: &PartDef, level: usize, out: &mut String) {
     emit_specializes(&p.specializes, out);
 
     let has_body = p.doc.is_some()
+        || !p.comments.is_empty()
         || !p.attributes.is_empty()
         || !p.parts.is_empty()
         || !p.ports.is_empty()
@@ -583,7 +748,10 @@ fn emit_part_def(p: &PartDef, level: usize, out: &mut String) {
         || !p.exhibit_states.is_empty()
         || !p.requirements.is_empty()
         || !p.satisfies.is_empty()
-        || !p.verifies.is_empty();
+        || !p.verifies.is_empty()
+        || !p.refinements.is_empty()
+        || !p.fmea.is_empty()
+        || !p.asil_decompositions.is_empty();
 
     if !has_body {
         let _ = writeln!(out, ";");
@@ -592,6 +760,33 @@ fn emit_part_def(p: &PartDef, level: usize, out: &mut String) {
 
     let _ = writeln!(out, " {{");
     emit_doc(&p.doc, level + 1, out);
+    for c in &p.comments {
+        emit_comment(c, level + 1, out);
+    }
+    for f in &p.fmea {
+        let fm = f.failure_mode.replace('\\', "\\\\").replace('"', "\\\"");
+        let eff = f.effect.replace('\\', "\\\\").replace('"', "\\\"");
+        let _ = writeln!(out, "{}@FMEA {{", indent(level + 1));
+        let _ = writeln!(out, "{}failureMode = \"{fm}\";", indent(level + 2));
+        let _ = writeln!(out, "{}effect = \"{eff}\";", indent(level + 2));
+        let _ = writeln!(out, "{}severity = {};", indent(level + 2), f.severity);
+        let _ = writeln!(out, "{}'occurrence' = {};", indent(level + 2), f.occurrence);
+        let _ = writeln!(out, "{}detection = {};", indent(level + 2), f.detection);
+        let _ = writeln!(out, "{}rpn = {};", indent(level + 2), f.rpn());
+        if let Some(asil) = &f.asil {
+            let _ = writeln!(out, "{}asil = \"{asil}\";", indent(level + 2));
+        }
+        let _ = writeln!(out, "{}}}", indent(level + 1));
+    }
+    for d in &p.asil_decompositions {
+        let _ = writeln!(out, "{}@AsilDecomposition {{", indent(level + 1));
+        let _ = writeln!(out, "{}goal = \"{}\";", indent(level + 2), d.goal);
+        let _ = writeln!(out, "{}leftPart = \"{}\";", indent(level + 2), d.left_part);
+        let _ = writeln!(out, "{}leftAsil = \"{}\";", indent(level + 2), d.left_asil);
+        let _ = writeln!(out, "{}rightPart = \"{}\";", indent(level + 2), d.right_part);
+        let _ = writeln!(out, "{}rightAsil = \"{}\";", indent(level + 2), d.right_asil);
+        let _ = writeln!(out, "{}}}", indent(level + 1));
+    }
     for a in &p.attributes {
         emit_attribute_usage(a, level + 1, out);
     }
@@ -621,6 +816,15 @@ fn emit_part_def(p: &PartDef, level: usize, out: &mut String) {
     }
     for ver in &p.verifies {
         emit_verify(ver, level + 1, out);
+    }
+    for rf in &p.refinements {
+        let _ = writeln!(
+            out,
+            "{}#refinement dependency {} to {};",
+            indent(level + 1),
+            format_qualified(&rf.client),
+            format_qualified(&rf.supplier)
+        );
     }
     let _ = writeln!(out, "{ind}}}");
 }
@@ -746,7 +950,16 @@ fn emit_transition(t: &Transition, level: usize, out: &mut String) {
     }
     let _ = write!(out, " first {}", format_ref(&t.source));
     if let Some(trig) = &t.trigger {
-        let _ = write!(out, " accept {}", format_qualified(trig));
+        if let Some(pname) = &t.trigger_payload_name {
+            let _ = write!(
+                out,
+                " accept {} : {}",
+                escape_sysml_name(pname),
+                format_qualified(trig)
+            );
+        } else {
+            let _ = write!(out, " accept {}", format_qualified(trig));
+        }
     }
     if let Some(guard) = &t.guard {
         let _ = write!(out, " if {guard}");
@@ -807,6 +1020,7 @@ fn emit_state_def(s: &StateDef, level: usize, out: &mut String) {
     let _ = write!(out, "{ind}{abs}state def {}", escape_sysml_name(&s.name));
     emit_specializes(&s.specializes, out);
     let has_body = s.doc.is_some()
+        || s.subject_type.is_some()
         || s.entry_action.is_some()
         || s.do_action.is_some()
         || s.exit_action.is_some()
@@ -818,6 +1032,14 @@ fn emit_state_def(s: &StateDef, level: usize, out: &mut String) {
     }
     let _ = writeln!(out, " {{");
     emit_doc(&s.doc, level + 1, out);
+    if let Some(subj_ty) = &s.subject_type {
+        let _ = writeln!(
+            out,
+            "{}ref part target : {};",
+            indent(level + 1),
+            format_qualified(subj_ty)
+        );
+    }
     if let Some(e) = &s.entry_action {
         emit_action_usage(e, "entry ", level + 1, out);
     }
@@ -847,6 +1069,7 @@ fn emit_requirement_def(r: &RequirementDef, level: usize, out: &mut String) {
     emit_specializes(&r.specializes, out);
     let has_body = r.doc.is_some()
         || r.rationale.is_some()
+        || r.safety_goal.is_some()
         || r.subject.is_some()
         || !r.attributes.is_empty()
         || !r.require_constraints.is_empty()
@@ -862,6 +1085,14 @@ fn emit_requirement_def(r: &RequirementDef, level: usize, out: &mut String) {
         let escaped = rat.replace('\\', "\\\\").replace('"', "\\\"");
         let _ = writeln!(out, "{}@Rationale {{", indent(level + 1));
         let _ = writeln!(out, "{}text = \"{escaped}\";", indent(level + 2));
+        let _ = writeln!(out, "{}}}", indent(level + 1));
+    }
+    if let Some(sg) = &r.safety_goal {
+        let ss = sg.safe_state.replace('\\', "\\\\").replace('"', "\\\"");
+        let _ = writeln!(out, "{}@SafetyGoal {{", indent(level + 1));
+        let _ = writeln!(out, "{}asil = \"{}\";", indent(level + 2), sg.asil);
+        let _ = writeln!(out, "{}safeState = \"{ss}\";", indent(level + 2));
+        let _ = writeln!(out, "{}fttiMs = {};", indent(level + 2), sg.ftti_ms);
         let _ = writeln!(out, "{}}}", indent(level + 1));
     }
     if let Some(subj) = &r.subject {
@@ -992,4 +1223,239 @@ fn emit_verification_def(v: &VerificationDef, level: usize, out: &mut String) {
         emit_verify(ver, level + 1, out);
     }
     let _ = writeln!(out, "{ind}}}");
+}
+
+fn emit_calc(c: &CalcDef, is_def: bool, level: usize, out: &mut String) {
+    let ind = indent(level);
+    let def_kw = if is_def { " def" } else { "" };
+    let _ = write!(out, "{ind}calc{def_kw}");
+    if let Some(short) = &c.short_name {
+        let _ = write!(out, " <{}>", escape_sysml_name(short));
+    }
+    let _ = writeln!(out, " {} {{", escape_sysml_name(&c.name));
+    emit_doc(&c.doc, level + 1, out);
+    for p in &c.params {
+        let mult = p
+            .multiplicity
+            .as_ref()
+            .map(|m| m.render())
+            .unwrap_or_default();
+        let _ = write!(out, "{}in {}", indent(level + 1), escape_sysml_name(&p.name));
+        if !p.type_name.is_empty() {
+            let _ = write!(out, " : {}{mult}", format_qualified(&p.type_name));
+        } else if let Some(sub) = &p.subsets {
+            let _ = write!(out, " :> {}{mult}", format_ref(sub));
+        } else if !mult.is_empty() {
+            let _ = write!(out, "{mult}");
+        }
+        let _ = writeln!(out, ";");
+    }
+    for local in &c.locals {
+        let _ = writeln!(
+            out,
+            "{}attribute {} = {};",
+            indent(level + 1),
+            escape_sysml_name(&local.name),
+            local.expr
+        );
+    }
+    let _ = write!(out, "{}return", indent(level + 1));
+    if !c.return_name.is_empty() {
+        let _ = write!(out, " {}", escape_sysml_name(&c.return_name));
+    }
+    if !c.return_type.is_empty() {
+        let _ = write!(out, " : {}", format_qualified(&c.return_type));
+    } else if let Some(sub) = &c.return_subsets {
+        let _ = write!(out, " :> {}", format_ref(sub));
+    }
+    if !c.result_expr.is_empty() {
+        let _ = write!(out, " = {}", c.result_expr);
+    }
+    let _ = writeln!(out, ";");
+    let _ = writeln!(out, "{ind}}}");
+}
+
+fn emit_view_usage(v: &ViewUsage, level: usize, out: &mut String) {
+    let ind = indent(level);
+    let _ = write!(out, "{ind}view {}", escape_sysml_name(&v.name));
+    if let Some(ty) = &v.type_name {
+        let _ = write!(out, " : {}", format_qualified(ty));
+    }
+    if v.doc.is_some() {
+        let _ = writeln!(out, " {{");
+        emit_doc(&v.doc, level + 1, out);
+        let _ = writeln!(out, "{ind}}}");
+    } else {
+        let _ = writeln!(out, ";");
+    }
+}
+
+fn emit_analysis_param(p: &AnalysisParam, level: usize, out: &mut String) {
+    let ind = indent(level);
+    let dir = match p.direction {
+        Some(Direction::In) => "in ",
+        Some(Direction::Out) => "out ",
+        Some(Direction::InOut) => "inout ",
+        None => "",
+    };
+    let mult = p
+        .multiplicity
+        .as_ref()
+        .map(|m| m.render())
+        .unwrap_or_default();
+    let _ = write!(out, "{ind}{dir}{}", escape_sysml_name(&p.name));
+    if let Some(ty) = &p.type_name {
+        let _ = write!(out, " : {}{mult}", format_qualified(ty));
+    } else if !p.subsets.is_empty() {
+        let joined = p
+            .subsets
+            .iter()
+            .map(|s| format_ref(s))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let _ = write!(out, " :> {joined}{mult}");
+    } else if !mult.is_empty() {
+        let _ = write!(out, "{mult}");
+    }
+    if let Some(val) = &p.value {
+        let _ = write!(out, " = {val}");
+        if let Some(unit) = &p.unit {
+            let _ = write!(out, " {}", format_unit(unit));
+        }
+    }
+    let _ = writeln!(out, ";");
+}
+
+fn emit_analysis_def(a: &AnalysisDef, level: usize, out: &mut String) {
+    let ind = indent(level);
+    let _ = write!(out, "{ind}analysis def {}", escape_sysml_name(&a.name));
+    emit_specializes(&a.specializes, out);
+    let has_body = a.doc.is_some()
+        || a.subject.is_some()
+        || !a.params.is_empty()
+        || !a.assert_constraints.is_empty();
+    if !has_body {
+        let _ = writeln!(out, ";");
+        return;
+    }
+    let _ = writeln!(out, " {{");
+    emit_doc(&a.doc, level + 1, out);
+    if let Some(subj) = &a.subject {
+        let _ = writeln!(
+            out,
+            "{}subject {} : {};",
+            indent(level + 1),
+            escape_sysml_name(&subj.name),
+            format_qualified(&subj.type_name)
+        );
+    }
+    for p in &a.params {
+        emit_analysis_param(p, level + 1, out);
+    }
+    for c in &a.assert_constraints {
+        let _ = writeln!(out, "{}assert constraint {{ {c} }}", indent(level + 1));
+    }
+    let _ = writeln!(out, "{ind}}}");
+}
+
+fn emit_analysis_usage(a: &AnalysisUsage, level: usize, out: &mut String) {
+    let ind = indent(level);
+    let _ = write!(out, "{ind}analysis {}", escape_sysml_name(&a.name));
+    if let Some(ty) = &a.type_name {
+        let _ = write!(out, " : {}", format_qualified(ty));
+    }
+    let has_body = a.doc.is_some()
+        || a.subject.is_some()
+        || !a.params.is_empty()
+        || !a.assert_constraints.is_empty();
+    if !has_body {
+        let _ = writeln!(out, ";");
+        return;
+    }
+    let _ = writeln!(out, " {{");
+    emit_doc(&a.doc, level + 1, out);
+    if let Some(subj) = &a.subject {
+        let _ = writeln!(
+            out,
+            "{}subject {} : {};",
+            indent(level + 1),
+            escape_sysml_name(&subj.name),
+            format_qualified(&subj.type_name)
+        );
+    }
+    for p in &a.params {
+        emit_analysis_param(p, level + 1, out);
+    }
+    for c in &a.assert_constraints {
+        let _ = writeln!(out, "{}assert constraint {{ {c} }}", indent(level + 1));
+    }
+    let _ = writeln!(out, "{ind}}}");
+}
+
+fn emit_metadata_def(m: &MetadataDef, level: usize, out: &mut String) {
+    let ind = indent(level);
+    let _ = write!(out, "{ind}metadata def {}", escape_sysml_name(&m.name));
+    if m.doc.is_none() && m.attributes.is_empty() {
+        let _ = writeln!(out, ";");
+    } else {
+        let _ = writeln!(out, " {{");
+        emit_doc(&m.doc, level + 1, out);
+        for a in &m.attributes {
+            emit_attribute_usage(a, level + 1, out);
+        }
+        let _ = writeln!(out, "{ind}}}");
+    }
+}
+
+/// Normative SysML v2 `library package ISO26262Metadata` defining `@SafetyGoal`,
+/// `@FMEA`, and `@AsilDecomposition` metadata definitions so models using ISO 26262
+/// annotations validate with 0 errors and 0 warnings against Open-MBEE + OMG stdlib.
+pub fn iso26262_metadata_package() -> Package {
+    let attr = |name: &str, ty: &str| AttributeUsage {
+        name: Some(name.to_string()),
+        type_name: Some(ty.to_string()),
+        ..Default::default()
+    };
+    Package {
+        name: "ISO26262Metadata".to_string(),
+        is_library: true,
+        doc: Some("ISO 26262 functional safety metadata definitions (@SafetyGoal, @FMEA, @AsilDecomposition).".to_string()),
+        comments: Vec::new(),
+        imports: vec![Import::private_star("ScalarValues")],
+        members: vec![
+            PackageMember::MetadataDef(MetadataDef {
+                name: "SafetyGoal".to_string(),
+                doc: Some("ISO 26262-3 top-level safety goal metadata.".to_string()),
+                attributes: vec![
+                    attr("asil", "String"),
+                    attr("safeState", "String"),
+                    attr("fttiMs", "Integer"),
+                ],
+            }),
+            PackageMember::MetadataDef(MetadataDef {
+                name: "FMEA".to_string(),
+                doc: Some("ISO 26262 / ARP4761 Failure Modes and Effects Analysis entry.".to_string()),
+                attributes: vec![
+                    attr("failureMode", "String"),
+                    attr("effect", "String"),
+                    attr("severity", "Integer"),
+                    attr("occurrence", "Integer"),
+                    attr("detection", "Integer"),
+                    attr("rpn", "Integer"),
+                    attr("asil", "String"),
+                ],
+            }),
+            PackageMember::MetadataDef(MetadataDef {
+                name: "AsilDecomposition".to_string(),
+                doc: Some("ISO 26262-9 Clause 5 verified ASIL decomposition witness.".to_string()),
+                attributes: vec![
+                    attr("goal", "String"),
+                    attr("leftPart", "String"),
+                    attr("leftAsil", "String"),
+                    attr("rightPart", "String"),
+                    attr("rightAsil", "String"),
+                ],
+            }),
+        ],
+    }
 }

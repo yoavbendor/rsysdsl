@@ -1,0 +1,29 @@
+error[E0277]: the trait bound `sysml_dsl::AsilD: AsilDecomposable<sysml_dsl::AsilB, sysml_dsl::AsilA>` is not satisfied
+  --> tests/ui/bad_asil_decomposition.rs:20:12
+   |
+20 |     goal = TopSafetyGoal,
+   |            ^^^^^^^^^^^^^ the trait `AsilDecomposable<sysml_dsl::AsilB, sysml_dsl::AsilA>` is not implemented for `sysml_dsl::AsilD`
+   |
+   = help: `sysml_dsl::AsilD` implements trait `AsilDecomposable<Left, Right>`:
+             AsilDecomposable<AsilC, AsilC>
+             AsilDecomposable<AsilC, sysml_dsl::AsilA>
+             AsilDecomposable<AsilC, sysml_dsl::AsilB>
+             AsilDecomposable<AsilC, sysml_dsl::AsilD>
+             AsilDecomposable<sysml_dsl::AsilA, AsilC>
+             AsilDecomposable<sysml_dsl::AsilA, sysml_dsl::AsilD>
+             AsilDecomposable<sysml_dsl::AsilB, AsilC>
+             AsilDecomposable<sysml_dsl::AsilB, sysml_dsl::AsilB>
+             AsilDecomposable<sysml_dsl::AsilB, sysml_dsl::AsilD>
+             AsilDecomposable<sysml_dsl::AsilD, AsilC>
+             AsilDecomposable<sysml_dsl::AsilD, sysml_dsl::AsilA>
+             AsilDecomposable<sysml_dsl::AsilD, sysml_dsl::AsilB>
+             AsilDecomposable<sysml_dsl::AsilD, sysml_dsl::AsilD>
+             AsilDecomposable<sysml_dsl::AsilD, sysml_dsl::Qm>
+             AsilDecomposable<sysml_dsl::Qm, sysml_dsl::AsilD>
+note: required by a bound in `assert_asil_decomposition`
+  --> $WORKSPACE/crates/sysml-core/src/safety.rs
+   |
+   | pub const fn assert_asil_decomposition<G, LeftPart, LeftAsil, RightPart, RightAsil>()
+...
+   |     G::Asil: AsilDecomposable<LeftAsil, RightAsil>,
+   |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `assert_asil_decomposition`

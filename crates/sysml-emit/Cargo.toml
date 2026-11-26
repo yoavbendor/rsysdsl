@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Deterministic 1:1 SysML v2 textual emitter and Open-MBEE sysml-toolkit validation bridge"
+description = "Deterministic 1:1 SysML v2 textual emitter, Open-MBEE validator with OMG stdlib, traceability audit, and ASPICE matrix generator"
 
 [features]
 default = ["validate"]
@@ -13,5 +13,6 @@ validate = ["dep:sysmlv2-syntax", "dep:sysmlv2-model"]
 [dependencies]
 sysml-ir = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 sysmlv2-syntax = { workspace = true, optional = true }
 sysmlv2-model = { workspace = true, optional = true }

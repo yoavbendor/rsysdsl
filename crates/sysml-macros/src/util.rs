@@ -290,7 +290,7 @@ pub fn quote_opt_mult(opt: &Option<(Option<String>, String)>) -> TokenStream {
     match opt {
         Some((lower, upper)) => {
             let l = quote_opt_str(lower);
-            quote!(::std::option::Option::Some(::sysml_ir::Multiplicity {
+            quote!(::std::option::Option::Some(::sysml_dsl::ir::Multiplicity {
                 lower: #l,
                 upper: ::std::string::String::from(#upper),
             }))
@@ -338,11 +338,58 @@ pub fn strip_sysml_attrs(attrs: Vec<Attribute>) -> Vec<Attribute> {
         "step",
         "subaction",
         "requirement_ref",
+        "comment",
+        "assert_constraint",
+        "local",
+        "return_expr",
+        "safety_goal",
+        "fmea",
+        "independent",
+        "asil_decompose",
+        "no_std_reflect",
     ];
     attrs
         .into_iter()
         .filter(|a| !HELPER_NAMES.iter().any(|h| is_sysml_attr(a, h)))
         .collect()
+}
+
+/// Returns `true` when an item or its enclosing `#[sysml::package(no_std)]` opted into
+/// `#![no_std]` Ferrocene-compatible compilation with `#[cfg(feature = "reflect")]` IR gating.
+pub fn has_no_std_mode(kv: &KvArgs, attrs: &[Attribute]) -> bool {
+    kv.has_flag("no_std") || attrs.iter().any(|a| is_sysml_attr(a, "no_std_reflect"))
+}
+
+/// Returns `#[cfg(feature = "reflect")]` in `no_std` mode, or empty tokens on standard host builds.
+pub fn reflect_cfg(is_no_std: bool) -> TokenStream {
+    if is_no_std {
+        quote!(#[cfg(feature = "reflect")])
+    } else {
+        quote!()
+    }
+}
+
+/// Parse `#[sysml::comment("...")]` or `#[sysml::comment(name = "...", body = "...")]`.
+pub fn extract_comments(attrs: &[Attribute]) -> syn::Result<Vec<(Option<String>, String)>> {
+    let mut out = Vec::new();
+    for attr in attrs {
+        if is_sysml_attr(attr, "comment") {
+            if let Ok(lit) = attr.parse_args::<syn::LitStr>() {
+                out.push((None, lit.value()));
+            } else {
+                let kv: KvArgs = attr.parse_args()?;
+                let name = kv.get_str("name");
+                let body = kv.get_str("body").ok_or_else(|| {
+                    syn::Error::new_spanned(
+                        attr,
+                        "expected `body = \"...\"` in #[sysml::comment(...)]",
+                    )
+                })?;
+                out.push((name, body));
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// Parse `#refinement dependency` helper attributes:
@@ -383,7 +430,10 @@ pub fn build_attr_usage_tokens(
     let name_override = extract_sysml_name_override(attrs)?.or_else(|| kv.get_str("name"));
     let redefines = kv.get_all_str("redefines");
     let subsets = kv.get_all_str("subsets");
-    let is_anonymous_redef = kv.has_flag("anonymous") || (!redefines.is_empty() && name_override.is_none() && kv.get_str("keep_name").is_none());
+    let is_keywordless = kv.has_flag("keywordless");
+    let is_anonymous_redef = kv.has_flag("anonymous")
+        || (!redefines.is_empty() && name_override.is_none() && kv.get_str("keep_name").is_none())
+        || (is_keywordless && !subsets.is_empty() && name_override.is_none() && kv.get_str("keep_name").is_none());
 
     let attr_name: Option<String> = if is_anonymous_redef {
         None
@@ -395,9 +445,9 @@ pub fn build_attr_usage_tokens(
     let explicit_ty = kv.get_str("ty").or_else(|| kv.get_str("type"));
     let type_name: Option<String> = if let Some(t) = explicit_ty {
         if t.is_empty() { None } else { Some(t) }
-    } else if !subsets.is_empty() || !redefines.is_empty() {
-        // In SysML v2, `attribute mass :> ISQ::mass` or `attribute :>> dryMass = 2100 [kg]`
-        // does not also emit `: Real`.
+    } else if !subsets.is_empty() || !redefines.is_empty() || is_keywordless {
+        // In SysML v2, `attribute mass :> ISQ::mass`, `attribute :>> dryMass = 2100 [kg]`,
+        // or `:> influenceLevel = ...` does not also emit `: Real`.
         None
     } else {
         Some(rust_ty_name)
@@ -409,14 +459,14 @@ pub fn build_attr_usage_tokens(
         .or(rust_mult);
 
     let value_kind = match kv.get_str("value_kind").as_deref() {
-        Some("initial") => quote!(::sysml_ir::ValueKind::Initial),
-        Some("default") => quote!(::sysml_ir::ValueKind::Default),
-        Some("default_initial") => quote!(::sysml_ir::ValueKind::DefaultInitial),
+        Some("initial") => quote!(::sysml_dsl::ir::ValueKind::Initial),
+        Some("default") => quote!(::sysml_dsl::ir::ValueKind::Default),
+        Some("default_initial") => quote!(::sysml_dsl::ir::ValueKind::DefaultInitial),
         _ => {
             if kv.get_str("default").is_some() {
-                quote!(::sysml_ir::ValueKind::Default)
+                quote!(::sysml_dsl::ir::ValueKind::Default)
             } else {
-                quote!(::sysml_ir::ValueKind::Bound)
+                quote!(::sysml_dsl::ir::ValueKind::Bound)
             }
         }
     };
@@ -436,8 +486,11 @@ pub fn build_attr_usage_tokens(
     let unit_tok = quote_opt_str(&unit);
 
     Ok(quote! {
-        ::sysml_ir::AttributeUsage {
+        ::sysml_dsl::ir::AttributeUsage {
+            short_name: ::std::option::Option::None,
             name: #name_tok,
+            is_private: false,
+            is_nonunique: false,
             type_name: #ty_tok,
             subsets: #subsets_tok,
             redefines: #redefines_tok,
@@ -446,6 +499,140 @@ pub fn build_attr_usage_tokens(
             value: #val_tok,
             unit: #unit_tok,
             doc: #doc_tok,
+            is_keywordless: #is_keywordless,
+            nested_attributes: ::std::vec![],
         }
     })
+}
+
+/// Returns `true` if `#[derive(..., Default, ...)]` is already present on `attrs`.
+pub fn has_derive_default(attrs: &[Attribute]) -> bool {
+    for attr in attrs {
+        if attr.path().is_ident("derive") {
+            let mut found = false;
+            let _ = attr.parse_nested_meta(|meta| {
+                if meta.path.is_ident("Default") {
+                    found = true;
+                }
+                Ok(())
+            });
+            if found {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Auto-generates `impl Default for #ident` from `#[sysml::attr(value = "...", default = "...", unit = "...")]`
+/// metadata whenever `#[derive(Default)]` is NOT explicitly present on a named-field struct.
+///
+/// Works in both `std` and `#![no_std]` crates.
+pub fn build_auto_default_impl(item: &syn::ItemStruct) -> syn::Result<TokenStream> {
+    if has_derive_default(&item.attrs) {
+        return Ok(quote!());
+    }
+    let syn::Fields::Named(fields) = &item.fields else {
+        return Ok(quote!());
+    };
+
+    let mut has_any_literal_default = false;
+    let mut field_inits = Vec::new();
+    for field in &fields.named {
+        let fname = field.ident.as_ref().unwrap();
+        let mut kv = KvArgs::default();
+        for attr in &field.attrs {
+            if is_sysml_attr(attr, "attr") {
+                if let Meta::List(_) = &attr.meta {
+                    kv = attr.parse_args()?;
+                }
+            }
+        }
+        let raw_val = kv.get_str("value").or_else(|| kv.get_str("default"));
+        let unit = kv.get_str("unit").unwrap_or_default();
+
+        let init_expr = if let Some(val_str) = raw_val {
+            let trimmed = val_str.trim();
+            if is_quantity_type(&field.ty) {
+                if let Ok(num) = trimmed.parse::<f64>() {
+                    has_any_literal_default = true;
+                    quote!(::sysml_dsl::core_contracts::Quantity::new(#num, #unit))
+                } else {
+                    quote!(::core::default::Default::default())
+                }
+            } else if is_prim_ident(&field.ty, "f64") || is_prim_ident(&field.ty, "f32") {
+                if let Ok(num) = trimmed.parse::<f64>() {
+                    has_any_literal_default = true;
+                    quote!(#num as _)
+                } else {
+                    quote!(::core::default::Default::default())
+                }
+            } else if is_prim_ident(&field.ty, "i64")
+                || is_prim_ident(&field.ty, "i32")
+                || is_prim_ident(&field.ty, "u32")
+                || is_prim_ident(&field.ty, "u64")
+                || is_prim_ident(&field.ty, "usize")
+            {
+                if let Ok(num) = trimmed.parse::<i64>() {
+                    has_any_literal_default = true;
+                    quote!(#num as _)
+                } else {
+                    quote!(::core::default::Default::default())
+                }
+            } else if is_prim_ident(&field.ty, "bool") {
+                if let Ok(b) = trimmed.parse::<bool>() {
+                    has_any_literal_default = true;
+                    quote!(#b)
+                } else {
+                    quote!(::core::default::Default::default())
+                }
+            } else if is_prim_ident(&field.ty, "String") {
+                has_any_literal_default = true;
+                let unquoted = trimmed
+                    .strip_prefix('"')
+                    .and_then(|s| s.strip_suffix('"'))
+                    .unwrap_or(trimmed);
+                quote!(::std::string::String::from(#unquoted))
+            } else {
+                quote!(::core::default::Default::default())
+            }
+        } else if is_quantity_type(&field.ty) && !unit.is_empty() {
+            has_any_literal_default = true;
+            quote!(::sysml_dsl::core_contracts::Quantity::new(0.0, #unit))
+        } else {
+            quote!(::core::default::Default::default())
+        };
+
+        field_inits.push(quote!(#fname: #init_expr));
+    }
+
+    let _ = has_any_literal_default;
+    let ident = &item.ident;
+    Ok(quote! {
+        impl ::core::default::Default for #ident {
+            fn default() -> Self {
+                Self {
+                    #(#field_inits),*
+                }
+            }
+        }
+    })
+}
+
+fn is_quantity_type(ty: &Type) -> bool {
+    if let Type::Path(tp) = ty {
+        if let Some(last) = tp.path.segments.last() {
+            return last.ident == "Quantity";
+        }
+    }
+    false
+}
+
+fn is_prim_ident(ty: &Type, name: &str) -> bool {
+    if let Type::Path(tp) = ty {
+        if let Some(last) = tp.path.segments.last() {
+            return last.ident == name;
+        }
+    }
+    false
 }

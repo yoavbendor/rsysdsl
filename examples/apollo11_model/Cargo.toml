@@ -1,0 +1,12 @@
+[package]
+name = "apollo11-model"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Pure 100% declarative 5-layer Apollo 11 SysML v2 model in strict Rust DSL (zero hidden imperative logic)"
+
+[dependencies]
+sysml-dsl = { workspace = true }
+sysml-ir = { workspace = true }
+sysml-emit = { path = "../../crates/sysml-emit", default-features = false }

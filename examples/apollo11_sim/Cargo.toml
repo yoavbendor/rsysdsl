@@ -1,0 +1,13 @@
+[package]
+name = "apollo11-sim"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Closed-loop physics, fault-injection, and executable verification runner depending one-way on apollo11-model"
+
+[dependencies]
+apollo11-model = { workspace = true }
+sysml-ir = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

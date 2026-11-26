@@ -25,7 +25,10 @@ use proc_macro::TokenStream;
 use quote::quote;
 use syn::{parse_macro_input, Attribute, Item, ItemEnum, ItemMod, ItemStruct};
 
+mod analysis;
 mod behavior;
+mod calc;
+mod expr_transpile;
 mod package;
 mod part;
 mod port;
@@ -33,6 +36,22 @@ mod requirement;
 mod util;
 
 use util::{is_sysml_attr, PathList};
+
+#[proc_macro_attribute]
+pub fn calc(args: TokenStream, input: TokenStream) -> TokenStream {
+    let item = parse_macro_input!(input as Item);
+    calc::expand_calc(args.into(), item)
+        .unwrap_or_else(|e| e.to_compile_error())
+        .into()
+}
+
+#[proc_macro_attribute]
+pub fn analysis(args: TokenStream, input: TokenStream) -> TokenStream {
+    let item = parse_macro_input!(input as ItemStruct);
+    analysis::expand_analysis(args.into(), item)
+        .unwrap_or_else(|e| e.to_compile_error())
+        .into()
+}
 
 #[proc_macro_attribute]
 pub fn package(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -149,6 +168,8 @@ fn reorder_below_primary(
         "requirement",
         "specification",
         "verification",
+        "calc",
+        "analysis",
     ];
     let attrs = match item {
         Item::Struct(s) => &mut s.attrs,
@@ -190,7 +211,7 @@ pub fn specializes(args: TokenStream, input: TokenStream) -> TokenStream {
         }
     };
     let impls = list.paths.iter().map(|base| {
-        quote! { impl ::sysml_ir::Specializes<#base> for #ident {} }
+        quote! { impl ::sysml_dsl::core_contracts::Specializes<#base> for #ident {} }
     });
     quote! {
         #item
@@ -221,8 +242,8 @@ pub fn perform(args: TokenStream, input: TokenStream) -> TokenStream {
     let apath = parsed.action_path;
     quote! {
         #item
-        impl ::sysml_ir::Performs<#apath> for #ident {}
-        const _: fn() = || { ::sysml_ir::assert_action::<#apath>(); };
+        impl ::sysml_dsl::core_contracts::Performs<#apath> for #ident {}
+        const _: fn() = || { ::sysml_dsl::core_contracts::assert_action_core::<#apath>(); };
     }
     .into()
 }
@@ -250,7 +271,7 @@ pub fn satisfy(args: TokenStream, input: TokenStream) -> TokenStream {
     let id_check = if let Some(exp_id) = parsed.expected_id {
         quote! {
             const _: () = {
-                if !::sysml_ir::const_str_eq(<#rpath as ::sysml_ir::SysmlRequirement>::REQ_ID, #exp_id) {
+                if !::sysml_dsl::core_contracts::const_str_eq(<#rpath as ::sysml_dsl::core_contracts::SysmlRequirementCore>::REQ_ID, #exp_id) {
                     panic!("SysML requirement ID mismatch in #[sysml::satisfy]");
                 }
             };
@@ -260,8 +281,8 @@ pub fn satisfy(args: TokenStream, input: TokenStream) -> TokenStream {
     };
     quote! {
         #item
-        impl ::sysml_ir::Satisfies<#rpath> for #ident {}
-        const _: fn() = || { ::sysml_ir::assert_requirement::<#rpath>(); };
+        impl ::sysml_dsl::core_contracts::Satisfies<#rpath> for #ident {}
+        const _: fn() = || { ::sysml_dsl::core_contracts::assert_requirement_core::<#rpath>(); };
         #id_check
     }
     .into()
@@ -289,8 +310,8 @@ pub fn verify(args: TokenStream, input: TokenStream) -> TokenStream {
     let rpath = parsed.req_path;
     quote! {
         #item
-        impl ::sysml_ir::Verifies<#rpath> for #ident {}
-        const _: fn() = || { ::sysml_ir::assert_requirement::<#rpath>(); };
+        impl ::sysml_dsl::core_contracts::Verifies<#rpath> for #ident {}
+        const _: fn() = || { ::sysml_dsl::core_contracts::assert_requirement_core::<#rpath>(); };
     }
     .into()
 }
@@ -305,6 +326,66 @@ pub fn connect(args: TokenStream, input: TokenStream) -> TokenStream {
     syn::Error::new_spanned(
         item,
         "#[sysml::connect] must be attached to a #[sysml::part] struct",
+    )
+    .to_compile_error()
+    .into()
+}
+
+#[proc_macro_attribute]
+pub fn safety_goal(args: TokenStream, input: TokenStream) -> TokenStream {
+    let args2: proc_macro2::TokenStream = args.into();
+    let mut item = parse_macro_input!(input as Item);
+    if let Some(reordered) = reorder_below_primary("safety_goal", args2, &mut item) {
+        return reordered.into();
+    }
+    syn::Error::new_spanned(
+        item,
+        "#[sysml::safety_goal] must be attached to a #[sysml::requirement] struct",
+    )
+    .to_compile_error()
+    .into()
+}
+
+#[proc_macro_attribute]
+pub fn fmea(args: TokenStream, input: TokenStream) -> TokenStream {
+    let args2: proc_macro2::TokenStream = args.into();
+    let mut item = parse_macro_input!(input as Item);
+    if let Some(reordered) = reorder_below_primary("fmea", args2, &mut item) {
+        return reordered.into();
+    }
+    syn::Error::new_spanned(
+        item,
+        "#[sysml::fmea] must be attached to a #[sysml::part] struct",
+    )
+    .to_compile_error()
+    .into()
+}
+
+#[proc_macro_attribute]
+pub fn independent(args: TokenStream, input: TokenStream) -> TokenStream {
+    let args2: proc_macro2::TokenStream = args.into();
+    let mut item = parse_macro_input!(input as Item);
+    if let Some(reordered) = reorder_below_primary("independent", args2, &mut item) {
+        return reordered.into();
+    }
+    syn::Error::new_spanned(
+        item,
+        "#[sysml::independent] must be attached to a #[sysml::part] struct",
+    )
+    .to_compile_error()
+    .into()
+}
+
+#[proc_macro_attribute]
+pub fn asil_decompose(args: TokenStream, input: TokenStream) -> TokenStream {
+    let args2: proc_macro2::TokenStream = args.into();
+    let mut item = parse_macro_input!(input as Item);
+    if let Some(reordered) = reorder_below_primary("asil_decompose", args2, &mut item) {
+        return reordered.into();
+    }
+    syn::Error::new_spanned(
+        item,
+        "#[sysml::asil_decompose] must be attached to a #[sysml::part] struct",
     )
     .to_compile_error()
     .into()

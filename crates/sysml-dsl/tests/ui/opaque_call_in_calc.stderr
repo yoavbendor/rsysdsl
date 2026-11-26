@@ -1,0 +1,5 @@
+error[E0425]: cannot find type `__sysml_calc_marker_secret_unmodeled_helper` in this scope
+  --> tests/ui/opaque_call_in_calc.rs:16:9
+   |
+16 |         secret_unmodeled_helper(x) * 2.0
+   |         ^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope

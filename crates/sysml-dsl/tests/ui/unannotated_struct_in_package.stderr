@@ -1,0 +1,5 @@
+error: unannotated `struct` is forbidden inside `#[sysml::package]` (semantic leakage prevented): annotate with a `#[sysml::*]` macro or move outside the model package
+  --> tests/ui/unannotated_struct_in_package.rs:12:16
+   |
+12 |     pub struct ShadowSafetyState {
+   |                ^^^^^^^^^^^^^^^^^

@@ -26,6 +26,7 @@ pub struct LiftStats {
     pub files: usize,
     pub packages: usize,
     pub imports: usize,
+    pub comments: usize,
     pub part_defs: usize,
     pub part_usages: usize,
     pub attributes: usize,
@@ -44,6 +45,12 @@ pub struct LiftStats {
     pub requirement_usages: usize,
     pub satisfy_links: usize,
     pub verify_links: usize,
+    pub refinements: usize,
+    pub calc_defs: usize,
+    pub analysis_defs: usize,
+    pub analysis_usages: usize,
+    pub portions: usize,
+    pub views: usize,
     pub unsupported_count: usize,
 }
 
@@ -109,6 +116,15 @@ pub fn lift_sysml_units(units: &[(String, String)]) -> LiftReport {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LastMemberKind {
+    Part,
+    Requirement,
+    Item,
+    Connection,
+    Other,
+}
+
 struct LifterCtx {
     parse_errors: Vec<String>,
     unsupported: Vec<UnsupportedConstruct>,
@@ -147,6 +163,7 @@ impl LifterCtx {
             name: pkg_name.clone(),
             is_library: pkg.is_library,
             doc: None,
+            comments: Vec::new(),
             imports: Vec::new(),
             members: Vec::new(),
         };
@@ -177,17 +194,11 @@ impl LifterCtx {
                         }
                     }
                     ast::MemberKind::Comment(c) => {
-                        self.record_unsupported(
-                            file,
-                            &pkg_name,
-                            &pkg_name,
-                            "comment",
-                            c.id.name
-                                .as_ref()
-                                .map(|n| n.value.clone())
-                                .unwrap_or_else(|| "anonymous comment".to_string()),
-                            line,
-                        );
+                        self.stats.comments += 1;
+                        out.comments.push(Comment {
+                            name: c.id.name.as_ref().map(|n| n.value.clone()),
+                            body: c.body.trim().to_string(),
+                        });
                     }
                     other => {
                         self.record_unsupported(
@@ -234,8 +245,17 @@ impl LifterCtx {
                     ..Default::default()
                 };
                 if let Some(body) = &def.body {
+                    let mut last_kind = LastMemberKind::Other;
                     for m in body {
-                        self.lift_part_def_member(file, pkg_name, &name, lines, m, &mut pd);
+                        last_kind = self.lift_part_def_member(
+                            file,
+                            pkg_name,
+                            &name,
+                            lines,
+                            m,
+                            &mut pd,
+                            last_kind,
+                        );
                     }
                 }
                 Some(PackageMember::PartDef(pd))
@@ -460,11 +480,23 @@ impl LifterCtx {
                     is_abstract: def.prefix.is_abstract,
                     doc: None,
                     specializes: specs,
+                    attributes: Vec::new(),
                 };
                 if let Some(body) = &def.body {
                     for m in body {
-                        if let ast::MemberKind::Doc(d) = &m.kind {
-                            append_doc(&mut ad.doc, &d.body);
+                        match &m.kind {
+                            ast::MemberKind::Doc(d) => append_doc(&mut ad.doc, &d.body),
+                            ast::MemberKind::Usage(u)
+                                if u.kind == ast::UsageKind::Attribute
+                                    || u.kind == ast::UsageKind::Default =>
+                            {
+                                self.stats.attributes += 1;
+                                let mut au = lift_attribute_usage(u);
+                                au.is_private = matches!(m.visibility, Some(ast::Visibility::Private));
+                                au.is_keywordless = u.kind == ast::UsageKind::Default;
+                                ad.attributes.push(au);
+                            }
+                            _ => {}
                         }
                     }
                 }
@@ -600,6 +632,7 @@ impl LifterCtx {
                     is_abstract: def.prefix.is_abstract,
                     doc: None,
                     rationale: None,
+                    safety_goal: None,
                     specializes: specs,
                     subject: None,
                     attributes: Vec::new(),
@@ -642,16 +675,18 @@ impl LifterCtx {
                                 rd.attributes.push(lift_attribute_usage(u));
                             }
                             ast::MemberKind::Usage(u) if u.kind == ast::UsageKind::Metadata => {
-                                // Extract `@Rationale { text = "..."; }`
+                                // Extract `@Rationale { text = "..."; }` or `@SafetyGoal { ... }`
                                 if let Some(txt) = extract_rationale_text(u) {
                                     rd.rationale = Some(txt);
+                                } else if let Some(sg) = extract_safety_goal_meta(u) {
+                                    rd.safety_goal = Some(sg);
                                 } else {
                                     self.record_unsupported(
                                         file,
                                         pkg_name,
                                         &name,
                                         "metadata_usage",
-                                        "non-Rationale metadata annotation",
+                                        "unsupported requirement metadata annotation",
                                         mline,
                                     );
                                 }
@@ -693,6 +728,23 @@ impl LifterCtx {
                 }
                 Some(PackageMember::VerificationDef(vd))
             }
+            ast::DefKind::Calc => {
+                self.stats.calc_defs += 1;
+                Some(PackageMember::CalcDef(self.lift_calc_body(
+                    file,
+                    pkg_name,
+                    def.id.short_name.as_ref().map(|n| n.value.clone()),
+                    &name,
+                    lines,
+                    def.body.as_deref(),
+                )))
+            }
+            ast::DefKind::Analysis => {
+                self.stats.analysis_defs += 1;
+                Some(PackageMember::AnalysisDef(
+                    self.lift_analysis_def(file, pkg_name, &name, specs, lines, def),
+                ))
+            }
             other_kind => {
                 self.record_unsupported(
                     file,
@@ -705,6 +757,228 @@ impl LifterCtx {
                 None
             }
         }
+    }
+
+    fn lift_calc_body(
+        &mut self,
+        file: &str,
+        pkg_name: &str,
+        short_name: Option<String>,
+        name: &str,
+        lines: &LineIndex,
+        body: Option<&[ast::Member]>,
+    ) -> CalcDef {
+        let mut cd = CalcDef {
+            short_name,
+            name: name.to_string(),
+            ..Default::default()
+        };
+        if let Some(body) = body {
+            for m in body {
+                let mline = lines.line_col(m.span.start).line as usize;
+                match &m.kind {
+                    ast::MemberKind::Doc(d) => append_doc(&mut cd.doc, &d.body),
+                    ast::MemberKind::Return(u) => {
+                        cd.return_name = u
+                            .declaration
+                            .id
+                            .name
+                            .as_ref()
+                            .map(|n| n.value.clone())
+                            .unwrap_or_default();
+                        let (ty, _) = first_typed_by(&u.declaration);
+                        cd.return_type = ty.unwrap_or_default();
+                        cd.return_subsets = all_subsets(&u.declaration).into_iter().next();
+                        if let Some(fv) = &u.value {
+                            cd.result_expr = print_expr_source(&fv.expr, Dialect::Sysml);
+                        }
+                    }
+                    ast::MemberKind::Result(expr) => {
+                        cd.result_expr = print_expr_source(expr, Dialect::Sysml);
+                    }
+                    ast::MemberKind::Usage(u) => {
+                        if u.prefix.direction == Some(ast::FeatureDirection::In) {
+                            let pname = u
+                                .declaration
+                                .id
+                                .name
+                                .as_ref()
+                                .map(|n| n.value.clone())
+                                .unwrap_or_default();
+                            let (ty, _) = first_typed_by(&u.declaration);
+                            cd.params.push(CalcParam {
+                                name: pname,
+                                type_name: ty.unwrap_or_default(),
+                                subsets: all_subsets(&u.declaration).into_iter().next(),
+                                multiplicity: lift_multiplicity(
+                                    u.declaration.multiplicity.as_deref(),
+                                ),
+                            });
+                        } else if let (Some(lname), Some(fv)) = (
+                            u.declaration.id.name.as_ref().map(|n| n.value.clone()),
+                            &u.value,
+                        ) {
+                            cd.locals.push(CalcLocal {
+                                name: lname,
+                                expr: print_expr_source(&fv.expr, Dialect::Sysml),
+                            });
+                        } else {
+                            self.record_unsupported(
+                                file,
+                                pkg_name,
+                                name,
+                                format!("calc_usage:{:?}", u.kind),
+                                "unsupported calc def member usage",
+                                mline,
+                            );
+                        }
+                    }
+                    other => {
+                        self.record_unsupported(
+                            file,
+                            pkg_name,
+                            name,
+                            member_kind_label(other),
+                            "unsupported calc def member",
+                            mline,
+                        );
+                    }
+                }
+            }
+        }
+        cd
+    }
+
+    fn lift_analysis_body(
+        &mut self,
+        file: &str,
+        pkg_name: &str,
+        owner: &str,
+        lines: &LineIndex,
+        body: &[ast::Member],
+        doc: &mut Option<String>,
+        subject: &mut Option<SubjectDecl>,
+        params: &mut Vec<AnalysisParam>,
+        assert_constraints: &mut Vec<String>,
+    ) {
+        for m in body {
+            let mline = lines.line_col(m.span.start).line as usize;
+            match &m.kind {
+                ast::MemberKind::Doc(d) => append_doc(doc, &d.body),
+                ast::MemberKind::Subject(su) => *subject = Some(lift_subject(su)),
+                ast::MemberKind::Usage(u) if u.kind == ast::UsageKind::AssertConstraint => {
+                    if let Some(expr) = extract_constraint_expr(u) {
+                        assert_constraints.push(expr);
+                    }
+                }
+                ast::MemberKind::Usage(u) => {
+                    let pname = u
+                        .declaration
+                        .id
+                        .name
+                        .as_ref()
+                        .map(|n| n.value.clone())
+                        .unwrap_or_default();
+                    let (ty, _) = first_typed_by(&u.declaration);
+                    let (value, unit) = if let Some(fv) = &u.value {
+                        match &fv.expr.kind {
+                            ast::ExprKind::Bracket { target, arg } => {
+                                let val_str = print_expr_source(target, Dialect::Sysml);
+                                let unit_raw = print_expr_source(arg, Dialect::Sysml);
+                                let unit_clean = unit_raw
+                                    .strip_prefix('\'')
+                                    .and_then(|s| s.strip_suffix('\''))
+                                    .unwrap_or(&unit_raw)
+                                    .to_string();
+                                (Some(val_str), Some(unit_clean))
+                            }
+                            _ => (Some(print_expr_source(&fv.expr, Dialect::Sysml)), None),
+                        }
+                    } else {
+                        (None, None)
+                    };
+                    params.push(AnalysisParam {
+                        direction: u.prefix.direction.map(lift_direction),
+                        name: pname,
+                        type_name: ty,
+                        subsets: all_subsets(&u.declaration),
+                        multiplicity: lift_multiplicity(u.declaration.multiplicity.as_deref()),
+                        value,
+                        unit,
+                    });
+                }
+                other => {
+                    self.record_unsupported(
+                        file,
+                        pkg_name,
+                        owner,
+                        member_kind_label(other),
+                        "unsupported analysis member",
+                        mline,
+                    );
+                }
+            }
+        }
+    }
+
+    fn lift_analysis_def(
+        &mut self,
+        file: &str,
+        pkg_name: &str,
+        name: &str,
+        specs: Vec<String>,
+        lines: &LineIndex,
+        def: &ast::Definition,
+    ) -> AnalysisDef {
+        let mut ad = AnalysisDef {
+            name: name.to_string(),
+            specializes: specs,
+            ..Default::default()
+        };
+        if let Some(body) = &def.body {
+            self.lift_analysis_body(
+                file,
+                pkg_name,
+                name,
+                lines,
+                body,
+                &mut ad.doc,
+                &mut ad.subject,
+                &mut ad.params,
+                &mut ad.assert_constraints,
+            );
+        }
+        ad
+    }
+
+    fn lift_analysis_usage(
+        &mut self,
+        file: &str,
+        pkg_name: &str,
+        name: &str,
+        lines: &LineIndex,
+        u: &ast::Usage,
+    ) -> AnalysisUsage {
+        let (ty, _) = first_typed_by(&u.declaration);
+        let mut au = AnalysisUsage {
+            name: name.to_string(),
+            type_name: ty,
+            ..Default::default()
+        };
+        if let Some(body) = &u.body {
+            self.lift_analysis_body(
+                file,
+                pkg_name,
+                name,
+                lines,
+                body,
+                &mut au.doc,
+                &mut au.subject,
+                &mut au.params,
+                &mut au.assert_constraints,
+            );
+        }
+        au
     }
 
     fn lift_top_usage(
@@ -735,6 +1009,44 @@ impl LifterCtx {
                     self.lift_part_usage(file, pkg_name, &name, lines, u),
                 ))
             }
+            ast::UsageKind::Analysis => {
+                self.stats.analysis_usages += 1;
+                Some(PackageMember::AnalysisUsage(
+                    self.lift_analysis_usage(file, pkg_name, &name, lines, u),
+                ))
+            }
+            ast::UsageKind::Attribute => {
+                self.stats.attributes += 1;
+                Some(PackageMember::AttributeUsage(lift_attribute_usage(u)))
+            }
+            ast::UsageKind::Calc => {
+                self.stats.calc_defs += 1;
+                Some(PackageMember::CalcUsage(self.lift_calc_body(
+                    file,
+                    pkg_name,
+                    u.declaration.id.short_name.as_ref().map(|n| n.value.clone()),
+                    &name,
+                    lines,
+                    u.body.as_deref(),
+                )))
+            }
+            ast::UsageKind::View => {
+                self.stats.views += 1;
+                let (ty, _) = first_typed_by(&u.declaration);
+                let mut doc = None;
+                if let Some(body) = &u.body {
+                    for m in body {
+                        if let ast::MemberKind::Doc(d) = &m.kind {
+                            append_doc(&mut doc, &d.body);
+                        }
+                    }
+                }
+                Some(PackageMember::ViewUsage(ViewUsage {
+                    name,
+                    type_name: ty,
+                    doc,
+                }))
+            }
             other => {
                 self.record_unsupported(
                     file,
@@ -749,6 +1061,7 @@ impl LifterCtx {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn lift_part_def_member(
         &mut self,
         file: &str,
@@ -757,49 +1070,123 @@ impl LifterCtx {
         lines: &LineIndex,
         m: &ast::Member,
         pd: &mut PartDef,
-    ) {
+        last_kind: LastMemberKind,
+    ) -> LastMemberKind {
         let line = lines.line_col(m.span.start).line as usize;
         match &m.kind {
-            ast::MemberKind::Doc(d) => append_doc(&mut pd.doc, &d.body),
+            ast::MemberKind::Doc(d) => {
+                append_doc(&mut pd.doc, &d.body);
+                LastMemberKind::Other
+            }
             ast::MemberKind::Usage(u) => match u.kind {
                 ast::UsageKind::Attribute => {
                     self.stats.attributes += 1;
                     pd.attributes.push(lift_attribute_usage(u));
+                    LastMemberKind::Other
                 }
                 ast::UsageKind::Part => {
                     self.stats.part_usages += 1;
                     pd.parts
                         .push(self.lift_part_usage(file, pkg_name, part_name, lines, u));
+                    LastMemberKind::Part
                 }
                 ast::UsageKind::Port => {
                     self.stats.port_usages += 1;
                     pd.ports.push(lift_port_usage(u));
+                    LastMemberKind::Other
                 }
                 ast::UsageKind::Item => {
                     if let Some(di) = lift_directed_item(u) {
                         pd.items.push(di);
+                        LastMemberKind::Item
+                    } else {
+                        LastMemberKind::Other
                     }
                 }
                 ast::UsageKind::Perform => {
                     self.stats.perform_actions += 1;
                     pd.performs.push(lift_perform_action(u));
+                    LastMemberKind::Other
                 }
                 ast::UsageKind::Interface | ast::UsageKind::Connection => {
                     self.stats.connections += 1;
                     pd.connections.push(lift_connection_usage(u));
+                    LastMemberKind::Connection
                 }
                 ast::UsageKind::Exhibit => {
                     pd.exhibit_states
                         .push(self.lift_state_usage(file, pkg_name, part_name, lines, u, true));
+                    LastMemberKind::Other
                 }
                 ast::UsageKind::Requirement => {
                     self.stats.requirement_usages += 1;
                     pd.requirements
                         .push(self.lift_requirement_usage(file, pkg_name, lines, u));
+                    LastMemberKind::Requirement
                 }
                 ast::UsageKind::Satisfy => {
                     self.stats.satisfy_links += 1;
                     pd.satisfies.push(lift_satisfy(u));
+                    LastMemberKind::Other
+                }
+                ast::UsageKind::Metadata => {
+                    if let Some(fmea) = extract_fmea_meta(u) {
+                        pd.fmea.push(fmea);
+                    } else if let Some(decomp) = extract_asil_decomp_meta(u) {
+                        pd.asil_decompositions.push(decomp);
+                    } else {
+                        self.record_unsupported(
+                            file,
+                            pkg_name,
+                            part_name,
+                            "part_member:Metadata",
+                            "unsupported part metadata annotation",
+                            line,
+                        );
+                    }
+                    LastMemberKind::Other
+                }
+                ast::UsageKind::Default => {
+                    let subsets = all_subsets(&u.declaration);
+                    let is_trailing_subset = u.declaration.id.name.is_none()
+                        && u.value.is_none()
+                        && first_typed_by(&u.declaration).0.is_none()
+                        && all_redefines(&u.declaration).is_empty()
+                        && !subsets.is_empty();
+                    if is_trailing_subset {
+                        match last_kind {
+                            LastMemberKind::Part => {
+                                if let Some(last) = pd.parts.last_mut() {
+                                    last.subsets.extend(subsets);
+                                    return LastMemberKind::Other;
+                                }
+                            }
+                            LastMemberKind::Requirement => {
+                                if let Some(last) = pd.requirements.last_mut() {
+                                    last.subsets.extend(subsets);
+                                    return LastMemberKind::Other;
+                                }
+                            }
+                            LastMemberKind::Item => {
+                                if let Some(last) = pd.items.last_mut() {
+                                    last.subsets.extend(subsets);
+                                    return LastMemberKind::Other;
+                                }
+                            }
+                            LastMemberKind::Connection => {
+                                if let Some(last) = pd.connections.last_mut() {
+                                    last.subsets.extend(subsets);
+                                    return LastMemberKind::Other;
+                                }
+                            }
+                            LastMemberKind::Other => {}
+                        }
+                    }
+                    self.stats.attributes += 1;
+                    let mut attr = lift_attribute_usage(u);
+                    attr.is_keywordless = true;
+                    pd.attributes.push(attr);
+                    LastMemberKind::Other
                 }
                 other => {
                     self.record_unsupported(
@@ -815,24 +1202,31 @@ impl LifterCtx {
                             .unwrap_or_else(|| format!("{other:?}")),
                         line,
                     );
+                    LastMemberKind::Other
                 }
             },
             ast::MemberKind::RequirementVerification(u) => {
                 self.stats.verify_links += 1;
                 pd.verifies.push(lift_verify(u));
+                LastMemberKind::Other
+            }
+            ast::MemberKind::Dependency(dep) => {
+                if let (Some(c), Some(s)) = (dep.clients.first(), dep.suppliers.first()) {
+                    self.stats.refinements += 1;
+                    pd.refinements.push(RefinementDependency {
+                        client: c.to_display_string(),
+                        supplier: s.to_display_string(),
+                    });
+                }
+                LastMemberKind::Other
             }
             ast::MemberKind::Comment(c) => {
-                self.record_unsupported(
-                    file,
-                    pkg_name,
-                    part_name,
-                    "comment",
-                    c.id.name
-                        .as_ref()
-                        .map(|n| n.value.clone())
-                        .unwrap_or_else(|| "comment".to_string()),
-                    line,
-                );
+                self.stats.comments += 1;
+                pd.comments.push(Comment {
+                    name: c.id.name.as_ref().map(|n| n.value.clone()),
+                    body: c.body.trim().to_string(),
+                });
+                LastMemberKind::Other
             }
             other => {
                 self.record_unsupported(
@@ -843,8 +1237,117 @@ impl LifterCtx {
                     "unsupported part def member",
                     line,
                 );
+                LastMemberKind::Other
             }
         }
+    }
+
+    fn lift_portion_usage(
+        &mut self,
+        file: &str,
+        pkg_name: &str,
+        parent: &str,
+        lines: &LineIndex,
+        is_then: bool,
+        kind: PortionKind,
+        u: &ast::Usage,
+    ) -> PortionUsage {
+        self.stats.portions += 1;
+        let name = u
+            .declaration
+            .id
+            .name
+            .as_ref()
+            .map(|n| n.value.clone())
+            .unwrap_or_else(|| "unnamed".to_string());
+        let label = format!("{parent}.{name}");
+        let mut po = PortionUsage {
+            kind,
+            is_then,
+            name,
+            type_names: all_typed_by(&u.declaration),
+            subsets: all_subsets(&u.declaration),
+            doc: None,
+            assert_constraints: Vec::new(),
+            attributes: Vec::new(),
+            parts: Vec::new(),
+            performs: Vec::new(),
+            portions: Vec::new(),
+        };
+        if let Some(body) = &u.body {
+            for m in body {
+                let line = lines.line_col(m.span.start).line as usize;
+                match &m.kind {
+                    ast::MemberKind::Doc(d) => append_doc(&mut po.doc, &d.body),
+                    ast::MemberKind::Usage(sub) => {
+                        if let Some(p) = sub.prefix.portion {
+                            let child_kind = match p {
+                                ast::PortionKind::Timeslice => PortionKind::Timeslice,
+                                ast::PortionKind::Snapshot => PortionKind::Snapshot,
+                            };
+                            po.portions.push(self.lift_portion_usage(
+                                file,
+                                pkg_name,
+                                &label,
+                                lines,
+                                m.leading_then,
+                                child_kind,
+                                sub,
+                            ));
+                            continue;
+                        }
+                        match sub.kind {
+                            ast::UsageKind::Attribute => {
+                                self.stats.attributes += 1;
+                                po.attributes.push(lift_attribute_usage(sub));
+                            }
+                            ast::UsageKind::Part => {
+                                self.stats.part_usages += 1;
+                                po.parts.push(
+                                    self.lift_part_usage(file, pkg_name, &label, lines, sub),
+                                );
+                            }
+                            ast::UsageKind::Perform => {
+                                self.stats.perform_actions += 1;
+                                po.performs.push(lift_perform_action(sub));
+                            }
+                            ast::UsageKind::AssertConstraint => {
+                                if let Some(expr) = extract_constraint_expr(sub) {
+                                    po.assert_constraints.push(expr);
+                                }
+                            }
+                            ast::UsageKind::Default => {
+                                self.stats.attributes += 1;
+                                let mut attr = lift_attribute_usage(sub);
+                                attr.is_keywordless = true;
+                                po.attributes.push(attr);
+                            }
+                            other => {
+                                self.record_unsupported(
+                                    file,
+                                    pkg_name,
+                                    &label,
+                                    format!("portion_member:{other:?}"),
+                                    "unsupported portion member usage",
+                                    line,
+                                );
+                            }
+                        }
+                    }
+                    other => {
+                        self.record_unsupported(
+                            file,
+                            pkg_name,
+                            &label,
+                            member_kind_label(other),
+                            "unsupported portion member",
+                            line,
+                        );
+                    }
+                }
+            }
+        }
+        po
     }
 
     fn lift_part_usage(
@@ -874,58 +1377,144 @@ impl LifterCtx {
             attributes: Vec::new(),
             nested_parts: Vec::new(),
             ports: Vec::new(),
+            items: Vec::new(),
             performs: Vec::new(),
             connections: Vec::new(),
+            requirements: Vec::new(),
+            portions: Vec::new(),
         };
 
         if let Some(body) = &u.body {
+            let mut last_kind = LastMemberKind::Other;
             for m in body {
                 let line = lines.line_col(m.span.start).line as usize;
                 match &m.kind {
-                    ast::MemberKind::Doc(d) => append_doc(&mut pu.doc, &d.body),
-                    ast::MemberKind::Usage(sub) => match sub.kind {
-                        ast::UsageKind::Attribute => {
-                            self.stats.attributes += 1;
-                            pu.attributes.push(lift_attribute_usage(sub));
-                        }
-                        ast::UsageKind::Part => {
-                            self.stats.part_usages += 1;
-                            pu.nested_parts
-                                .push(self.lift_part_usage(file, pkg_name, &label, lines, sub));
-                        }
-                        ast::UsageKind::Port => {
-                            self.stats.port_usages += 1;
-                            pu.ports.push(lift_port_usage(sub));
-                        }
-                        ast::UsageKind::Perform => {
-                            self.stats.perform_actions += 1;
-                            pu.performs.push(lift_perform_action(sub));
-                        }
-                        ast::UsageKind::Interface | ast::UsageKind::Connection => {
-                            self.stats.connections += 1;
-                            pu.connections.push(lift_connection_usage(sub));
-                        }
-                        other => {
-                            let kind_label = if let Some(p) = sub.prefix.portion {
-                                format!("portion:{p:?}")
-                            } else {
-                                format!("part_usage_member:{other:?}")
+                    ast::MemberKind::Doc(d) => {
+                        append_doc(&mut pu.doc, &d.body);
+                        last_kind = LastMemberKind::Other;
+                    }
+                    ast::MemberKind::Usage(sub) => {
+                        if let Some(p) = sub.prefix.portion {
+                            let kind = match p {
+                                ast::PortionKind::Timeslice => PortionKind::Timeslice,
+                                ast::PortionKind::Snapshot => PortionKind::Snapshot,
                             };
-                            self.record_unsupported(
+                            pu.portions.push(self.lift_portion_usage(
                                 file,
                                 pkg_name,
                                 &label,
-                                kind_label,
-                                sub.declaration
-                                    .id
-                                    .name
-                                    .as_ref()
-                                    .map(|n| n.value.clone())
-                                    .unwrap_or_else(|| format!("{other:?}")),
-                                line,
-                            );
+                                lines,
+                                m.leading_then,
+                                kind,
+                                sub,
+                            ));
+                            last_kind = LastMemberKind::Other;
+                            continue;
                         }
-                    },
+                        match sub.kind {
+                            ast::UsageKind::Attribute => {
+                                self.stats.attributes += 1;
+                                pu.attributes.push(lift_attribute_usage(sub));
+                                last_kind = LastMemberKind::Other;
+                            }
+                            ast::UsageKind::Part => {
+                                self.stats.part_usages += 1;
+                                pu.nested_parts
+                                    .push(self.lift_part_usage(file, pkg_name, &label, lines, sub));
+                                last_kind = LastMemberKind::Part;
+                            }
+                            ast::UsageKind::Port => {
+                                self.stats.port_usages += 1;
+                                pu.ports.push(lift_port_usage(sub));
+                                last_kind = LastMemberKind::Other;
+                            }
+                            ast::UsageKind::Item => {
+                                if let Some(di) = lift_directed_item(sub) {
+                                    pu.items.push(di);
+                                    last_kind = LastMemberKind::Item;
+                                } else {
+                                    last_kind = LastMemberKind::Other;
+                                }
+                            }
+                            ast::UsageKind::Perform => {
+                                self.stats.perform_actions += 1;
+                                pu.performs.push(lift_perform_action(sub));
+                                last_kind = LastMemberKind::Other;
+                            }
+                            ast::UsageKind::Interface | ast::UsageKind::Connection => {
+                                self.stats.connections += 1;
+                                pu.connections.push(lift_connection_usage(sub));
+                                last_kind = LastMemberKind::Connection;
+                            }
+                            ast::UsageKind::Requirement => {
+                                self.stats.requirement_usages += 1;
+                                pu.requirements
+                                    .push(self.lift_requirement_usage(file, pkg_name, lines, sub));
+                                last_kind = LastMemberKind::Requirement;
+                            }
+                            ast::UsageKind::Default => {
+                                let subsets = all_subsets(&sub.declaration);
+                                let is_trailing_subset = sub.declaration.id.name.is_none()
+                                    && sub.value.is_none()
+                                    && first_typed_by(&sub.declaration).0.is_none()
+                                    && all_redefines(&sub.declaration).is_empty()
+                                    && !subsets.is_empty();
+                                let mut attached = false;
+                                if is_trailing_subset {
+                                    match last_kind {
+                                        LastMemberKind::Part => {
+                                            if let Some(last) = pu.nested_parts.last_mut() {
+                                                last.subsets.extend(subsets.clone());
+                                                attached = true;
+                                            }
+                                        }
+                                        LastMemberKind::Item => {
+                                            if let Some(last) = pu.items.last_mut() {
+                                                last.subsets.extend(subsets.clone());
+                                                attached = true;
+                                            }
+                                        }
+                                        LastMemberKind::Requirement => {
+                                            if let Some(last) = pu.requirements.last_mut() {
+                                                last.subsets.extend(subsets.clone());
+                                                attached = true;
+                                            }
+                                        }
+                                        LastMemberKind::Connection => {
+                                            if let Some(last) = pu.connections.last_mut() {
+                                                last.subsets.extend(subsets.clone());
+                                                attached = true;
+                                            }
+                                        }
+                                        LastMemberKind::Other => {}
+                                    }
+                                }
+                                if !attached {
+                                    self.stats.attributes += 1;
+                                    let mut attr = lift_attribute_usage(sub);
+                                    attr.is_keywordless = true;
+                                    pu.attributes.push(attr);
+                                }
+                                last_kind = LastMemberKind::Other;
+                            }
+                            other => {
+                                self.record_unsupported(
+                                    file,
+                                    pkg_name,
+                                    &label,
+                                    format!("part_usage_member:{other:?}"),
+                                    sub.declaration
+                                        .id
+                                        .name
+                                        .as_ref()
+                                        .map(|n| n.value.clone())
+                                        .unwrap_or_else(|| format!("{other:?}")),
+                                    line,
+                                );
+                                last_kind = LastMemberKind::Other;
+                            }
+                        }
+                    }
                     other => {
                         self.record_unsupported(
                             file,
@@ -935,6 +1524,7 @@ impl LifterCtx {
                             "unsupported part usage member",
                             line,
                         );
+                        last_kind = LastMemberKind::Other;
                     }
                 }
             }
@@ -1229,10 +1819,21 @@ fn lift_direction(d: ast::FeatureDirection) -> Direction {
 fn lift_attribute_usage(u: &ast::Usage) -> AttributeUsage {
     let (ty, _) = first_typed_by(&u.declaration);
     let mut doc = None;
+    let mut nested_attributes = Vec::new();
     if let Some(body) = &u.body {
         for m in body {
-            if let ast::MemberKind::Doc(d) = &m.kind {
-                append_doc(&mut doc, &d.body);
+            match &m.kind {
+                ast::MemberKind::Doc(d) => append_doc(&mut doc, &d.body),
+                ast::MemberKind::Usage(sub)
+                    if sub.kind == ast::UsageKind::Attribute
+                        || sub.kind == ast::UsageKind::Default =>
+                {
+                    let mut au = lift_attribute_usage(sub);
+                    au.is_private = matches!(m.visibility, Some(ast::Visibility::Private));
+                    au.is_keywordless = sub.kind == ast::UsageKind::Default;
+                    nested_attributes.push(au);
+                }
+                _ => {}
             }
         }
     }
@@ -1261,7 +1862,10 @@ fn lift_attribute_usage(u: &ast::Usage) -> AttributeUsage {
     };
 
     AttributeUsage {
+        short_name: u.declaration.id.short_name.as_ref().map(|n| n.value.clone()),
         name: u.declaration.id.name.as_ref().map(|n| n.value.clone()),
+        is_private: false,
+        is_nonunique: u.declaration.is_nonunique,
         type_name: ty,
         subsets: all_subsets(&u.declaration),
         redefines: all_redefines(&u.declaration),
@@ -1270,17 +1874,29 @@ fn lift_attribute_usage(u: &ast::Usage) -> AttributeUsage {
         value,
         unit,
         doc,
+        is_keywordless: false,
+        nested_attributes,
     }
 }
 
 fn lift_directed_item(u: &ast::Usage) -> Option<DirectedItem> {
     let name = u.declaration.id.name.as_ref()?.value.clone();
     let (ty, _) = first_typed_by(&u.declaration);
+    let mut doc = None;
+    if let Some(body) = &u.body {
+        for m in body {
+            if let ast::MemberKind::Doc(d) = &m.kind {
+                append_doc(&mut doc, &d.body);
+            }
+        }
+    }
     Some(DirectedItem {
         direction: u.prefix.direction.map(lift_direction),
         name,
         type_name: ty.unwrap_or_default(),
         multiplicity: lift_multiplicity(u.declaration.multiplicity.as_deref()),
+        subsets: all_subsets(&u.declaration),
+        doc,
     })
 }
 
@@ -1340,6 +1956,7 @@ fn lift_connection_usage(u: &ast::Usage) -> ConnectionUsage {
         name: u.declaration.id.name.as_ref().map(|n| n.value.clone()),
         type_name: ty,
         multiplicity: lift_multiplicity(u.declaration.multiplicity.as_deref()),
+        subsets: all_subsets(&u.declaration),
         from,
         to,
         doc: None,
@@ -1452,6 +2069,7 @@ fn lift_transition(u: &ast::Usage) -> Option<Transition> {
             name: u.declaration.id.name.as_ref().map(|n| n.value.clone()),
             source: src,
             trigger: trig,
+            trigger_payload_name: None,
             guard: guard_str,
             effect: effect_str,
             target: dst,
@@ -1512,8 +2130,20 @@ fn lift_verify(u: &ast::Usage) -> VerifyStmt {
 fn extract_constraint_expr(u: &ast::Usage) -> Option<String> {
     if let Some(body) = &u.body {
         for m in body {
-            if let ast::MemberKind::Result(expr) = &m.kind {
-                return Some(print_expr_source(expr, Dialect::Sysml));
+            match &m.kind {
+                ast::MemberKind::Result(expr) => {
+                    return Some(print_expr_source(expr, Dialect::Sysml));
+                }
+                ast::MemberKind::Usage(sub) => {
+                    if let (Some(name), Some(fv)) = (&sub.declaration.id.name, &sub.value) {
+                        return Some(format!(
+                            "{} = {};",
+                            name.value,
+                            print_expr_source(&fv.expr, Dialect::Sysml)
+                        ));
+                    }
+                }
+                _ => {}
             }
         }
     }
@@ -1525,27 +2155,82 @@ fn extract_rationale_text(u: &ast::Usage) -> Option<String> {
     if ty.as_deref() != Some("Rationale") {
         return None;
     }
+    extract_metadata_fields(u).get("text").cloned()
+}
+
+fn extract_metadata_fields(u: &ast::Usage) -> std::collections::BTreeMap<String, String> {
+    let mut map = std::collections::BTreeMap::new();
     if let Some(body) = &u.body {
         for m in body {
             if let ast::MemberKind::Usage(sub) = &m.kind {
-                if sub
+                let key = sub
                     .declaration
                     .id
                     .name
                     .as_ref()
-                    .map(|n| n.value.as_str())
-                    == Some("text")
-                {
-                    if let Some(fv) = &sub.value {
-                        if let ast::ExprKind::Literal(ast::Literal::String(s)) = &fv.expr.kind {
-                            return Some(s.clone());
-                        }
-                    }
+                    .map(|n| n.value.trim_matches('\'').to_string());
+                if let (Some(k), Some(fv)) = (key, &sub.value) {
+                    let val = match &fv.expr.kind {
+                        ast::ExprKind::Literal(ast::Literal::String(s)) => s.clone(),
+                        ast::ExprKind::Literal(ast::Literal::Integer(i)) => i.to_string(),
+                        _ => print_expr_source(&fv.expr, Dialect::Sysml),
+                    };
+                    map.insert(k, val);
                 }
             }
         }
     }
-    None
+    map
+}
+
+fn extract_safety_goal_meta(u: &ast::Usage) -> Option<SafetyGoalMeta> {
+    let (ty, _) = first_typed_by(&u.declaration);
+    let simple = ty.as_deref()?.rsplit("::").next()?;
+    if simple != "SafetyGoal" {
+        return None;
+    }
+    let fields = extract_metadata_fields(u);
+    Some(SafetyGoalMeta {
+        asil: fields.get("asil").cloned().unwrap_or_default(),
+        safe_state: fields.get("safeState").cloned().unwrap_or_default(),
+        ftti_ms: fields
+            .get("fttiMs")
+            .and_then(|s| s.parse::<u32>().ok())
+            .unwrap_or(0),
+    })
+}
+
+fn extract_fmea_meta(u: &ast::Usage) -> Option<FmeaEntry> {
+    let (ty, _) = first_typed_by(&u.declaration);
+    let simple = ty.as_deref()?.rsplit("::").next()?;
+    if simple != "FMEA" {
+        return None;
+    }
+    let fields = extract_metadata_fields(u);
+    Some(FmeaEntry {
+        failure_mode: fields.get("failureMode").cloned().unwrap_or_default(),
+        effect: fields.get("effect").cloned().unwrap_or_default(),
+        severity: fields.get("severity").and_then(|s| s.parse().ok()).unwrap_or(1),
+        occurrence: fields.get("occurrence").and_then(|s| s.parse().ok()).unwrap_or(1),
+        detection: fields.get("detection").and_then(|s| s.parse().ok()).unwrap_or(1),
+        asil: fields.get("asil").cloned(),
+    })
+}
+
+fn extract_asil_decomp_meta(u: &ast::Usage) -> Option<AsilDecompositionMeta> {
+    let (ty, _) = first_typed_by(&u.declaration);
+    let simple = ty.as_deref()?.rsplit("::").next()?;
+    if simple != "AsilDecomposition" {
+        return None;
+    }
+    let fields = extract_metadata_fields(u);
+    Some(AsilDecompositionMeta {
+        goal: fields.get("goal").cloned().unwrap_or_default(),
+        left_part: fields.get("leftPart").cloned().unwrap_or_default(),
+        left_asil: fields.get("leftAsil").cloned().unwrap_or_default(),
+        right_part: fields.get("rightPart").cloned().unwrap_or_default(),
+        right_asil: fields.get("rightAsil").cloned().unwrap_or_default(),
+    })
 }
 
 fn member_kind_label(k: &ast::MemberKind) -> String {

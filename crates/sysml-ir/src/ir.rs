@@ -71,10 +71,18 @@ impl Import {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Comment {
+    pub name: Option<String>,
+    pub body: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Package {
     pub name: String,
     pub is_library: bool,
     pub doc: Option<String>,
+    #[serde(default)]
+    pub comments: Vec<Comment>,
     pub imports: Vec<Import>,
     pub members: Vec<PackageMember>,
 }
@@ -96,6 +104,52 @@ pub enum PackageMember {
     RequirementDef(RequirementDef),
     RequirementUsage(RequirementUsage),
     VerificationDef(VerificationDef),
+    CalcDef(CalcDef),
+    CalcUsage(CalcDef),
+    AnalysisDef(AnalysisDef),
+    AnalysisUsage(AnalysisUsage),
+    AttributeUsage(AttributeUsage),
+    ViewUsage(ViewUsage),
+    MetadataDef(MetadataDef),
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct MetadataDef {
+    pub name: String,
+    pub doc: Option<String>,
+    pub attributes: Vec<AttributeUsage>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SafetyGoalMeta {
+    pub asil: String,
+    pub safe_state: String,
+    pub ftti_ms: u32,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FmeaEntry {
+    pub failure_mode: String,
+    pub effect: String,
+    pub severity: u8,
+    pub occurrence: u8,
+    pub detection: u8,
+    pub asil: Option<String>,
+}
+
+impl FmeaEntry {
+    pub const fn rpn(&self) -> u16 {
+        (self.severity as u16) * (self.occurrence as u16) * (self.detection as u16)
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AsilDecompositionMeta {
+    pub goal: String,
+    pub left_part: String,
+    pub left_asil: String,
+    pub right_part: String,
+    pub right_asil: String,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -145,11 +199,19 @@ pub struct AttributeDef {
     pub is_abstract: bool,
     pub doc: Option<String>,
     pub specializes: Vec<String>,
+    #[serde(default)]
+    pub attributes: Vec<AttributeUsage>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct AttributeUsage {
+    #[serde(default)]
+    pub short_name: Option<String>,
     pub name: Option<String>,
+    #[serde(default)]
+    pub is_private: bool,
+    #[serde(default)]
+    pub is_nonunique: bool,
     pub type_name: Option<String>,
     pub subsets: Vec<String>,
     pub redefines: Vec<String>,
@@ -160,6 +222,11 @@ pub struct AttributeUsage {
     /// Optional physical unit symbol (e.g. `"kg"`, `"m/s"`, `"kN"`, `"%"`).
     pub unit: Option<String>,
     pub doc: Option<String>,
+    /// True for keyword-less SysML v2 feature bindings (e.g. `:> influenceLevel = ...;`).
+    #[serde(default)]
+    pub is_keywordless: bool,
+    #[serde(default)]
+    pub nested_attributes: Vec<AttributeUsage>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -168,6 +235,8 @@ pub struct PartDef {
     pub is_abstract: bool,
     pub is_individual: bool,
     pub doc: Option<String>,
+    #[serde(default)]
+    pub comments: Vec<Comment>,
     pub specializes: Vec<String>,
     pub attributes: Vec<AttributeUsage>,
     pub parts: Vec<PartUsage>,
@@ -179,6 +248,12 @@ pub struct PartDef {
     pub requirements: Vec<RequirementUsage>,
     pub satisfies: Vec<SatisfyStmt>,
     pub verifies: Vec<VerifyStmt>,
+    #[serde(default)]
+    pub refinements: Vec<RefinementDependency>,
+    #[serde(default)]
+    pub fmea: Vec<FmeaEntry>,
+    #[serde(default)]
+    pub asil_decompositions: Vec<AsilDecompositionMeta>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -196,8 +271,44 @@ pub struct PartUsage {
     pub attributes: Vec<AttributeUsage>,
     pub nested_parts: Vec<PartUsage>,
     pub ports: Vec<PortUsage>,
+    #[serde(default)]
+    pub items: Vec<DirectedItem>,
     pub performs: Vec<PerformAction>,
     pub connections: Vec<ConnectionUsage>,
+    #[serde(default)]
+    pub requirements: Vec<RequirementUsage>,
+    #[serde(default)]
+    pub portions: Vec<PortionUsage>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PortionKind {
+    #[default]
+    Timeslice,
+    Snapshot,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct PortionUsage {
+    pub kind: PortionKind,
+    pub is_then: bool,
+    pub name: String,
+    pub type_names: Vec<String>,
+    pub subsets: Vec<String>,
+    pub doc: Option<String>,
+    pub assert_constraints: Vec<String>,
+    pub attributes: Vec<AttributeUsage>,
+    pub parts: Vec<PartUsage>,
+    pub performs: Vec<PerformAction>,
+    pub portions: Vec<PortionUsage>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ViewUsage {
+    pub name: String,
+    pub type_name: Option<String>,
+    pub doc: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -219,12 +330,16 @@ pub struct PortUsage {
     pub doc: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct DirectedItem {
     pub direction: Option<Direction>,
     pub name: String,
     pub type_name: String,
     pub multiplicity: Option<Multiplicity>,
+    #[serde(default)]
+    pub subsets: Vec<String>,
+    #[serde(default)]
+    pub doc: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -293,6 +408,8 @@ pub struct ConnectionUsage {
     pub name: Option<String>,
     pub type_name: Option<String>,
     pub multiplicity: Option<Multiplicity>,
+    #[serde(default)]
+    pub subsets: Vec<String>,
     pub from: Option<String>,
     pub to: Option<String>,
     pub doc: Option<String>,
@@ -357,6 +474,8 @@ pub struct Transition {
     pub name: Option<String>,
     pub source: String,
     pub trigger: Option<String>,
+    #[serde(default)]
+    pub trigger_payload_name: Option<String>,
     pub guard: Option<String>,
     pub effect: Option<String>,
     pub target: String,
@@ -382,6 +501,8 @@ pub struct StateDef {
     pub is_abstract: bool,
     pub doc: Option<String>,
     pub specializes: Vec<String>,
+    #[serde(default)]
+    pub subject_type: Option<String>,
     pub entry_action: Option<ActionUsage>,
     pub do_action: Option<ActionUsage>,
     pub exit_action: Option<ActionUsage>,
@@ -402,6 +523,8 @@ pub struct RequirementDef {
     pub is_abstract: bool,
     pub doc: Option<String>,
     pub rationale: Option<String>,
+    #[serde(default)]
+    pub safety_goal: Option<SafetyGoalMeta>,
     pub specializes: Vec<String>,
     pub subject: Option<SubjectDecl>,
     pub attributes: Vec<AttributeUsage>,
@@ -445,4 +568,68 @@ pub struct VerificationDef {
     pub doc: Option<String>,
     pub subject: Option<SubjectDecl>,
     pub verifies: Vec<VerifyStmt>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct CalcParam {
+    pub name: String,
+    pub type_name: String,
+    #[serde(default)]
+    pub subsets: Option<String>,
+    #[serde(default)]
+    pub multiplicity: Option<Multiplicity>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct CalcLocal {
+    pub name: String,
+    pub expr: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct CalcDef {
+    #[serde(default)]
+    pub short_name: Option<String>,
+    pub name: String,
+    pub doc: Option<String>,
+    pub params: Vec<CalcParam>,
+    pub locals: Vec<CalcLocal>,
+    pub return_name: String,
+    pub return_type: String,
+    #[serde(default)]
+    pub return_subsets: Option<String>,
+    pub result_expr: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct AnalysisParam {
+    pub direction: Option<Direction>,
+    pub name: String,
+    pub type_name: Option<String>,
+    #[serde(default)]
+    pub subsets: Vec<String>,
+    #[serde(default)]
+    pub multiplicity: Option<Multiplicity>,
+    pub value: Option<String>,
+    pub unit: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct AnalysisDef {
+    pub name: String,
+    pub doc: Option<String>,
+    pub specializes: Vec<String>,
+    pub subject: Option<SubjectDecl>,
+    pub params: Vec<AnalysisParam>,
+    pub assert_constraints: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct AnalysisUsage {
+    pub name: String,
+    pub type_name: Option<String>,
+    pub doc: Option<String>,
+    pub subject: Option<SubjectDecl>,
+    pub params: Vec<AnalysisParam>,
+    pub assert_constraints: Vec<String>,
 }

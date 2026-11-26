@@ -53,13 +53,21 @@ dependencies = [
 ]
 
 [[package]]
-name = "apollo11-slice"
+name = "apollo11-model"
 version = "0.1.0"
 dependencies = [
- "serde",
- "serde_json",
  "sysml-dsl",
  "sysml-emit",
+ "sysml-ir",
+]
+
+[[package]]
+name = "apollo11-sim"
+version = "0.1.0"
+dependencies = [
+ "apollo11-model",
+ "serde",
+ "serde_json",
  "sysml-ir",
 ]
 
@@ -132,6 +140,14 @@ name = "colorchoice"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
+
+[[package]]
+name = "embedded-flight-controller"
+version = "0.1.0"
+dependencies = [
+ "sysml-dsl",
+ "sysml-emit",
+]
 
 [[package]]
 name = "equivalent"
@@ -433,6 +449,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
+name = "starter-model"
+version = "0.1.0"
+dependencies = [
+ "sysml-dsl",
+ "sysml-emit",
+]
+
+[[package]]
 name = "strsim"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -464,19 +488,30 @@ dependencies = [
 name = "sysml-cli"
 version = "0.1.0"
 dependencies = [
- "apollo11-slice",
+ "apollo11-model",
+ "apollo11-sim",
  "clap",
+ "embedded-flight-controller",
  "serde",
  "serde_json",
  "sysml-emit",
  "sysml-ir",
  "sysml-lift",
+ "tempfile",
+]
+
+[[package]]
+name = "sysml-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
 ]
 
 [[package]]
 name = "sysml-dsl"
 version = "0.1.0"
 dependencies = [
+ "sysml-core",
  "sysml-ir",
  "sysml-macros",
  "trybuild",
@@ -487,6 +522,7 @@ name = "sysml-emit"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "serde_json",
  "sysml-ir",
  "sysmlv2-model",
  "sysmlv2-syntax",
@@ -498,13 +534,15 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "sysml-core",
 ]
 
 [[package]]
 name = "sysml-lift"
 version = "0.1.0"
 dependencies = [
- "apollo11-slice",
+ "apollo11-model",
+ "apollo11-sim",
  "serde",
  "serde_json",
  "sysml-emit",

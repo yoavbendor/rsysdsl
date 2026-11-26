@@ -4,10 +4,15 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Ergonomic facade re-exporting sysml-ir and sysml-macros for authoring System-as-Code in Rust"
+description = "Ergonomic #![no_std]-capable facade re-exporting sysml-core, optional sysml-ir reflection, and sysml-macros"
+
+[features]
+default = ["reflect"]
+reflect = ["dep:sysml-ir"]
 
 [dependencies]
-sysml-ir = { workspace = true }
+sysml-core = { workspace = true }
+sysml-ir = { workspace = true, optional = true }
 sysml-macros = { workspace = true }
 
 [dev-dependencies]
