@@ -17,10 +17,10 @@ use syn::punctuated::Punctuated;
 use syn::{Expr, Fields, Ident, ItemStruct, LitStr, Meta, Path, Token};
 
 use crate::util::{
-    analyze_rust_type, build_attr_usage_tokens, build_auto_default_impl, extract_doc,
-    extract_sysml_name_override, is_sysml_attr, parse_multiplicity_str, path_to_sysml_string,
-    quote_opt_mult, quote_opt_str, quote_vec_str, snake_to_camel, strip_sysml_attrs, KvArgs,
-    PathList,
+    analyze_rust_type, build_attr_usage_tokens, build_auto_default_impl, extract_comments,
+    extract_doc, extract_refinements, extract_sysml_name_override, is_sysml_attr,
+    parse_multiplicity_str, path_to_sysml_string, quote_opt_mult, quote_opt_str, quote_vec_str,
+    snake_to_camel, strip_sysml_attrs, KvArgs, PathList,
 };
 
 /// Parses `#[sysml::perform(execute_descent_burn: ExecuteDescentBurn)]`
@@ -357,8 +357,10 @@ pub fn expand_part(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
                         attributes: ::std::vec![],
                         nested_parts: ::std::vec![],
                         ports: ::std::vec![],
+                        items: ::std::vec![],
                         performs: ::std::vec![],
                         connections: ::std::vec![],
+                        requirements: ::std::vec![],
                     }
                 });
             } else if is_port {
@@ -391,10 +393,21 @@ pub fn expand_part(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
                     }
                 });
             } else if is_item {
+                let mut fkv = KvArgs::default();
+                for a in &field.attrs {
+                    if is_sysml_attr(a, "item") {
+                        if let Meta::List(_) = &a.meta {
+                            fkv = a.parse_args()?;
+                        }
+                    }
+                }
                 let fname_sysml = extract_sysml_name_override(&field.attrs)?
+                    .or_else(|| fkv.get_str("name"))
                     .unwrap_or_else(|| snake_to_camel(&fname_rust));
                 let (ty_name, _, rust_mult) = analyze_rust_type(&field.ty);
                 let mult_tok = quote_opt_mult(&rust_mult);
+                let subsets = fkv.get_all_str("subsets");
+                let subsets_tok = quote_vec_str(&subsets);
                 if let Some(inner_ty) = unwrap_container_type(&field.ty) {
                     field_type_checks.push(quote! { ::sysml_ir::assert_item::<#inner_ty>(); });
                 }
@@ -404,6 +417,8 @@ pub fn expand_part(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
                         name: ::std::string::String::from(#fname_sysml),
                         type_name: ::std::string::String::from(#ty_name),
                         multiplicity: #mult_tok,
+                        subsets: #subsets_tok,
+                        doc: #fdoc_tok,
                     }
                 });
             } else if is_req {
@@ -571,6 +586,7 @@ pub fn expand_part(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
                     name: #cname_tok,
                     type_name: ::std::option::Option::Some(::std::string::String::from(#iface_name)),
                     multiplicity: ::std::option::Option::None,
+                    subsets: ::std::vec![],
                     from: ::std::option::Option::Some(::std::string::String::from(#from_str)),
                     to: ::std::option::Option::Some(::std::string::String::from(#to_str)),
                     doc: ::std::option::Option::None,
@@ -590,6 +606,7 @@ pub fn expand_part(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
                     name: #cname_tok,
                     type_name: #ctype_tok,
                     multiplicity: ::std::option::Option::None,
+                    subsets: ::std::vec![],
                     from: ::std::option::Option::Some(::std::string::String::from(#from_str)),
                     to: ::std::option::Option::Some(::std::string::String::from(#to_str)),
                     doc: ::std::option::Option::None,
@@ -645,6 +662,33 @@ pub fn expand_part(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
         }
     }
 
+    let comments = extract_comments(&item.attrs)?;
+    let comment_tokens: Vec<TokenStream> = comments
+        .iter()
+        .map(|(cname, body)| {
+            let cname_tok = quote_opt_str(cname);
+            quote! {
+                ::sysml_ir::Comment {
+                    name: #cname_tok,
+                    body: ::std::string::String::from(#body),
+                }
+            }
+        })
+        .collect();
+
+    let refinements = extract_refinements(&item.attrs, &sysml_name)?;
+    let ref_tokens: Vec<TokenStream> = refinements
+        .iter()
+        .map(|(c, s)| {
+            quote! {
+                ::sysml_ir::RefinementDependency {
+                    client: ::std::string::String::from(#c),
+                    supplier: ::std::string::String::from(#s),
+                }
+            }
+        })
+        .collect();
+
     let spec_impls = specializes_paths.iter().map(|base| {
         quote! {
             impl ::sysml_ir::Specializes<#base> for #ident {}
@@ -670,6 +714,7 @@ pub fn expand_part(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
                     is_abstract: #is_abstract,
                     is_individual: #is_individual,
                     doc: #doc_tok,
+                    comments: ::std::vec![#(#comment_tokens),*],
                     specializes: #spec_tok,
                     attributes: ::std::vec![#(#attr_tokens),*],
                     parts: ::std::vec![#(#part_tokens),*],
@@ -681,6 +726,7 @@ pub fn expand_part(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
                     requirements: ::std::vec![#(#req_tokens),*],
                     satisfies: ::std::vec![#(#satisfy_tokens),*],
                     verifies: ::std::vec![#(#verify_tokens),*],
+                    refinements: ::std::vec![#(#ref_tokens),*],
                 }
             }
         }

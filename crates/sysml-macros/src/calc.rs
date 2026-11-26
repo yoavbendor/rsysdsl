@@ -10,15 +10,133 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use std::collections::BTreeMap;
-use syn::{FnArg, ItemFn, LocalInit, Pat, ReturnType, Stmt};
+use syn::{Fields, FnArg, Item, ItemFn, ItemStruct, LocalInit, Meta, Pat, ReturnType, Stmt};
 
 use crate::expr_transpile::{calc_marker_path, transpile_expr, ExprContext};
 use crate::util::{
-    analyze_rust_type, extract_doc, extract_sysml_name_override, quote_opt_str, snake_to_camel,
-    strip_sysml_attrs, KvArgs,
+    analyze_rust_type, extract_doc, extract_sysml_name_override, is_sysml_attr,
+    parse_multiplicity_str, quote_opt_mult, quote_opt_str, snake_to_camel, strip_sysml_attrs,
+    KvArgs,
 };
 
-pub fn expand_calc(args: TokenStream, mut func: ItemFn) -> syn::Result<TokenStream> {
+pub fn expand_calc(args: TokenStream, item: Item) -> syn::Result<TokenStream> {
+    match item {
+        Item::Fn(func) => expand_calc_fn(args, func),
+        Item::Struct(st) => expand_calc_struct(args, st),
+        other => Err(syn::Error::new_spanned(
+            other,
+            "#[sysml::calc] can only be applied to a `fn` (executable calc) or `struct` (declarative lifted calc)",
+        )),
+    }
+}
+
+fn expand_calc_struct(args: TokenStream, mut st: ItemStruct) -> syn::Result<TokenStream> {
+    let kv: KvArgs = if args.is_empty() {
+        KvArgs::default()
+    } else {
+        syn::parse2(args)?
+    };
+    let doc = extract_doc(&st.attrs);
+    let sysml_name = extract_sysml_name_override(&st.attrs)?
+        .or_else(|| kv.get_str("name"))
+        .unwrap_or_else(|| st.ident.to_string());
+
+    let mut local_tokens = Vec::new();
+    let mut return_name = String::new();
+    let mut return_type = String::new();
+    let mut return_subsets: Option<String> = None;
+    let mut result_expr = String::new();
+
+    for attr in &st.attrs {
+        if is_sysml_attr(attr, "local") {
+            let lkv: KvArgs = attr.parse_args()?;
+            let lname = lkv.get_str("name").unwrap_or_default();
+            let lexpr = lkv.get_str("expr").unwrap_or_default();
+            local_tokens.push(quote! {
+                ::sysml_ir::CalcLocal {
+                    name: ::std::string::String::from(#lname),
+                    expr: ::std::string::String::from(#lexpr),
+                }
+            });
+        } else if is_sysml_attr(attr, "return_expr") {
+            let rkv: KvArgs = attr.parse_args()?;
+            return_name = rkv.get_str("name").unwrap_or_default();
+            return_type = rkv
+                .get_str("ty")
+                .or_else(|| rkv.get_str("type"))
+                .unwrap_or_default();
+            return_subsets = rkv.get_str("subsets");
+            result_expr = rkv.get_str("expr").unwrap_or_default();
+        }
+    }
+
+    let mut param_tokens = Vec::new();
+    if let Fields::Named(fields) = &mut st.fields {
+        for field in &mut fields.named {
+            let fname_rust = field.ident.as_ref().unwrap().to_string();
+            let mut fkv = KvArgs::default();
+            for attr in &field.attrs {
+                if is_sysml_attr(attr, "in_param") {
+                    if let Meta::List(_) = &attr.meta {
+                        fkv = attr.parse_args()?;
+                    }
+                }
+            }
+            let pname = extract_sysml_name_override(&field.attrs)?
+                .or_else(|| fkv.get_str("name"))
+                .unwrap_or_else(|| snake_to_camel(&fname_rust));
+            let (rust_ty, _, rust_mult) = analyze_rust_type(&field.ty);
+            let subsets = fkv.get_str("subsets");
+            let type_name = fkv
+                .get_str("ty")
+                .or_else(|| fkv.get_str("type"))
+                .unwrap_or_else(|| if subsets.is_some() { String::new() } else { rust_ty });
+            let mult = fkv
+                .get_str("mult")
+                .map(|m| parse_multiplicity_str(&m))
+                .or(rust_mult);
+            let subsets_tok = quote_opt_str(&subsets);
+            let mult_tok = quote_opt_mult(&mult);
+            param_tokens.push(quote! {
+                ::sysml_ir::CalcParam {
+                    name: ::std::string::String::from(#pname),
+                    type_name: ::std::string::String::from(#type_name),
+                    subsets: #subsets_tok,
+                    multiplicity: #mult_tok,
+                }
+            });
+            field.attrs = strip_sysml_attrs(std::mem::take(&mut field.attrs));
+        }
+    }
+
+    st.attrs = strip_sysml_attrs(std::mem::take(&mut st.attrs));
+    let ident = &st.ident;
+    let doc_tok = quote_opt_str(&doc);
+    let ret_sub_tok = quote_opt_str(&return_subsets);
+
+    Ok(quote! {
+        #st
+
+        impl ::sysml_ir::SysmlCalc for #ident {
+            const SYSML_NAME: &'static str = #sysml_name;
+
+            fn calc_def() -> ::sysml_ir::CalcDef {
+                ::sysml_ir::CalcDef {
+                    name: ::std::string::String::from(#sysml_name),
+                    doc: #doc_tok,
+                    params: ::std::vec![#(#param_tokens),*],
+                    locals: ::std::vec![#(#local_tokens),*],
+                    return_name: ::std::string::String::from(#return_name),
+                    return_type: ::std::string::String::from(#return_type),
+                    return_subsets: #ret_sub_tok,
+                    result_expr: ::std::string::String::from(#result_expr),
+                }
+            }
+        }
+    })
+}
+
+fn expand_calc_fn(args: TokenStream, mut func: ItemFn) -> syn::Result<TokenStream> {
     let kv: KvArgs = if args.is_empty() {
         KvArgs::default()
     } else {
@@ -66,6 +184,8 @@ pub fn expand_calc(args: TokenStream, mut func: ItemFn) -> syn::Result<TokenStre
                     ::sysml_ir::CalcParam {
                         name: ::std::string::String::from(#p_sysml),
                         type_name: ::std::string::String::from(#p_ty),
+                        subsets: ::std::option::Option::None,
+                        multiplicity: ::std::option::Option::None,
                     }
                 });
             }
@@ -203,6 +323,7 @@ pub fn expand_calc(args: TokenStream, mut func: ItemFn) -> syn::Result<TokenStre
                     locals: ::std::vec![#(#local_tokens),*],
                     return_name: ::std::string::String::from(#return_name),
                     return_type: ::std::string::String::from(#return_type),
+                    return_subsets: ::std::option::Option::None,
                     result_expr: ::std::string::String::from(#result_expr),
                 }
             }

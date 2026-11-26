@@ -15,33 +15,37 @@ cargo run -q -p sysml-cli -- lift tests/fixtures/apollo-11-sysml-v2/*.sysml test
 | --- | ---: | --- |
 | Files / Packages (`package`, `library package`) | 28 / 28 | 100% lossless, 0 parse errors |
 | Imports (`private import ...::*` / `::**`) | 119 | 100% lossless |
+| `comment` (`comment /* ... */`) | 3 | 100% lossless |
 | `part def` (incl. `abstract`, `individual`, `:>`) | 194 | 100% lossless |
-| `part` usages (incl. multiplicity, `ordered`, `:>`, `:>>`) | 148 | 100% lossless |
-| `attribute` usages (typed values, units, `:>>`, `:>`, expressions) | 326 | 100% lossless |
+| `part` usages (incl. multiplicity, `ordered`, `:>`, `:>>`, nested items/reqs) | 148 | 100% lossless |
+| `attribute` usages (typed values, units, `:>>`, `:>`, keyword-less bindings) | 351 | 100% lossless |
 | `port def` & `port` usages (incl. `~` conjugation) | 8 / 20 | 100% lossless |
-| `interface def` & `interface`/`connection` usages | 8 / 36 | 100% lossless |
+| `interface def` & `connection def` & `interface`/`connection` usages | 8 / 1 / 36 | 100% lossless |
 | `item def` & `enum def` | 25 / 2 | 100% lossless |
 | `action def` & `perform action` allocations | 110 / 53 | 100% lossless |
 | `state def` & `transition`s | 16 / 14 | 100% lossless |
 | `requirement def` (`<'ID'>`, `@Rationale`, `require constraint`, `#refinement`) | 296 | 100% lossless |
-| `requirement` usages (specification groups) | 271 | 100% lossless |
+| `requirement` usages (specification groups & stakeholder needs) | 293 | 100% lossless |
 | `satisfy` traceability links | 272 | 100% lossless |
-| **Total Core MBSE Elements Lifted** | **1,924** | **0 missing / 0 extra on semantic diff** |
-| **Explicitly Logged Unsupported Constructs** | **273** | Logged with file, package, kind, line |
+| `#refinement dependency` links on `part def`s (`CapabilitiesPackage`) | 42 | 100% lossless |
+| `calc def` parametric calculations (`CalculationsPackage`) | 14 | 100% lossless |
+| `analysis def` & `analysis` usages (`AnalysisPackage`) | 3 / 5 | 100% lossless |
+| **Total Core MBSE Elements Lifted** | **2,061** | **2,693 / 2,693 semantic facts matched (0 missing / 0 extra)** |
+| **Explicitly Logged Unsupported Constructs** | **32** | **98.5% corpus coverage (25 / 28 files at 0 unsupported)** |
 
 ### Compiled End-to-End Round-Trip Vertical Slice (Gate 3)
 
-The 10-package vertical slice spanning all 5 CoSMA layers (`CoSMAPackage`, `OperationsPackage`, `MissionPhasesPackage`, `FunctionsPackage`, `LogicalComponentsPackage`, `TechnicalPortsPackage`, `TechnicalComponentsPackage`, `MissionRequirementsPackage`, `TechnicalRequirementsPackage`, `SystemSpecificationPackage`) executes the full pipeline:
+The 13-package vertical slice spanning all 5 CoSMA layers plus Capabilities, Calculations, and Analysis (`CoSMAPackage`, `OperationsPackage`, `CapabilitiesPackage`, `MissionPhasesPackage`, `FunctionsPackage`, `LogicalComponentsPackage`, `TechnicalPortsPackage`, `TechnicalComponentsPackage`, `MissionRequirementsPackage`, `TechnicalRequirementsPackage`, `SystemSpecificationPackage`, `CalculationsPackage`, `AnalysisPackage`) executes the full pipeline with **0 unsupported constructs**:
 
 ```text
-Apollo 11 .sysml (10 files)
+Apollo 11 .sysml (13 files, 0 unsupported)
   -> sysml-lift
-  -> Generated Rust DSL (#[sysml::*])
+  -> Generated Rust DSL (#[sysml::*], incl. #[sysml::calc] & #[sysml::analysis])
   -> cargo run (rustc compile-time type checks + execution)
   -> sysml-emit
   -> Re-emitted .sysml
   -> Open-MBEE sysml-toolkit validation (0 errors)
-  -> Semantic AST/graph diff: 1,242 / 1,242 facts matched (0 missing, 0 extra)
+  -> Semantic AST/graph diff: 100% match (0 missing, 0 extra)
 ```
 
 ## Per-File Apollo 11 Coverage Breakdown
@@ -49,14 +53,20 @@ Apollo 11 .sysml (10 files)
 | Apollo 11 File | Lifted Elements | Logged Unsupported | Unsupported Construct Kinds |
 | --- | ---: | ---: | --- |
 | `Apollo11Model.sysml` | 0 | 0 | — (root aggregator package with imports only) |
+| `Analysis/AnalysisPackage.sysml` | 8 | 0 | — |
+| `Analysis/CalculationsPackage.sysml` | 14 | 0 | — |
 | `CoSMA/CoSMAPackage.sysml` | 51 | 0 | — |
-| `Operation/OperationsPackage.sysml` | 39 | 0 | — |
-| `Purpose/ContextPackage.sysml` | 35 | 0 | — |
-| `Purpose/MissionPhasesPackage.sysml` | 28 | 0 | — |
-| `Purpose/MissionSpecificationPackage.sysml` | 92 | 0 | — |
 | `Function/FunctionsPackage.sysml` | 75 | 0 | — |
 | `Function/FunctionSpecificationPackage.sysml` | 225 | 0 | — |
-| `Logical/LogicalComponentsPackage.sysml` | 58 | 1 | `comment(1)` |
+| `Logical/LogicalComponentsPackage.sysml` | 59 | 0 | — |
+| `Operation/OperationsPackage.sysml` | 39 | 0 | — |
+| `Program/ProgramPackage.sysml` | 52 | 0 | — |
+| `Purpose/CapabilitiesPackage.sysml` | 67 | 0 | — |
+| `Purpose/ContextPackage.sysml` | 35 | 0 | — |
+| `Purpose/MissionPackage.sysml` | 85 | 0 | — |
+| `Purpose/MissionPhasesPackage.sysml` | 28 | 0 | — |
+| `Purpose/MissionSpecificationPackage.sysml` | 92 | 0 | — |
+| `Purpose/StakeholderPackage.sysml` | 65 | 0 | — |
 | `Requirements/FunctionalRequirementsPackage.sysml` | 112 | 0 | — |
 | `Requirements/MissionRequirementsPackage.sysml` | 134 | 0 | — |
 | `Requirements/StakeholderNeedsPackage.sysml` | 22 | 0 | — |
@@ -67,28 +77,17 @@ Apollo 11 .sysml (10 files)
 | `Technical/TechnicalComponentsPackage.sysml` | 143 | 0 | — |
 | `Technical/TechnicalIndividualsPackage.sysml` | 66 | 0 | — |
 | `Technical/TechnicalPortsPackage.sysml` | 21 | 0 | — |
-| `Program/ProgramPackage.sysml` | 52 | 17 | `part_member:Default(17)` (keyword-less feature redefinitions) |
-| `Purpose/CapabilitiesPackage.sysml` | 25 | 42 | `dependency(42)` (package-level `#derivation` dependencies) |
-| `Purpose/MissionPackage.sysml` | 82 | 33 | `part_member:Default(31)`, `comment(2)` |
-| `Purpose/StakeholderPackage.sysml` | 19 | 126 | `part_usage_member:Default(64)`, `part_usage_member:Item(40)`, `part_usage_member:Requirement(22)` |
 | `Execution/Apollo11MissionExecutionPackage.sysml` | 6 | 14 | `portion:Timeslice(14)` (temporal `timeslice` / `snapshot` blocks) |
 | `CoSMA/CoSMAQuantitiesAndUnitsPackage.sysml` | 0 | 17 | `top_usage:Attribute(16)`, `top_usage:Calc(1)` |
 | `CoSMA/CoSMAViewsPackage.sysml` | 0 | 1 | `top_usage:View(1)` |
-| `Analysis/AnalysisPackage.sysml` | 0 | 8 | `top_usage:Analysis(5)`, `def:Analysis(3)` |
-| `Analysis/CalculationsPackage.sysml` | 0 | 14 | `def:Calc(14)` |
 
-## Explicitly Unsupported Constructs in MVP (Logged, Never Silently Dropped)
+## Explicitly Unsupported Constructs Remaining (32 Total — Logged, Never Silently Dropped)
 
-| Construct Kind | Count in Apollo 11 | Rationale for MVP Deferral |
+| Construct Kind | Count in Apollo 11 | Target Sprint |
 | --- | ---: | --- |
-| `part_usage_member:Default` / `part_member:Default` | 112 | Keyword-less feature redefinition usages inside nested individual usages (`ProgramPackage`, `StakeholderPackage`, `MissionPackage`). |
-| `part_usage_member:Item` / `part_usage_member:Requirement` | 62 | Nested items/requirements inside individual part usages (`StakeholderPackage`). |
-| `dependency` (package-level) | 42 | Standalone package-level `#derivation` dependency statements (`CapabilitiesPackage`). |
-| `top_usage:Attribute` / `top_usage:Calc` | 17 | Custom ISQ quantity & unit algebra definitions (`CoSMAQuantitiesAndUnitsPackage`). |
-| `def:Calc` / `def:Analysis` / `top_usage:Analysis` | 22 | Parametric `calc def` and trade-study `analysis` cases (`AnalysisPackage`, `CalculationsPackage`). |
-| `portion:Timeslice` | 14 | 4D temporal execution timelines (`timeslice` / `snapshot` in `Apollo11MissionExecutionPackage`). |
-| `comment` | 3 | Standalone `comment /* ... */` elements (Rust `///` maps to normative `doc /* ... */`). |
-| `top_usage:View` | 1 | Diagram rendering `view` definitions (`CoSMAViewsPackage`). |
+| `top_usage:Attribute` / `top_usage:Calc` | 17 | Sprint 5 — Custom ISQ quantity & unit algebra definitions (`CoSMAQuantitiesAndUnitsPackage`). |
+| `portion:Timeslice` | 14 | Sprint 5 — 4D temporal execution timelines (`timeslice` / `snapshot` in `Apollo11MissionExecutionPackage`). |
+| `top_usage:View` | 1 | Sprint 5 — Diagram rendering `view` definitions (`CoSMAViewsPackage`). |
 
 ## Next Milestones
 

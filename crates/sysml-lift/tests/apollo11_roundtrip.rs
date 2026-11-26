@@ -108,6 +108,7 @@ fn gate3_apollo11_vertical_slice_full_compiled_roundtrip() {
     let slice_files = [
         "CoSMA/CoSMAPackage.sysml",
         "Operation/OperationsPackage.sysml",
+        "Purpose/CapabilitiesPackage.sysml",
         "Purpose/MissionPhasesPackage.sysml",
         "Function/FunctionsPackage.sysml",
         "Logical/LogicalComponentsPackage.sysml",
@@ -116,6 +117,8 @@ fn gate3_apollo11_vertical_slice_full_compiled_roundtrip() {
         "Requirements/MissionRequirementsPackage.sysml",
         "Requirements/TechnicalRequirementsPackage.sysml",
         "Technical/SystemSpecificationPackage.sysml",
+        "Analysis/CalculationsPackage.sysml",
+        "Analysis/AnalysisPackage.sysml",
     ];
     let original_units: Vec<(String, String)> =
         slice_files.iter().map(|f| apollo11_fixture(f)).collect();
@@ -128,10 +131,20 @@ fn gate3_apollo11_vertical_slice_full_compiled_roundtrip() {
         lifted.parse_errors
     );
     assert_eq!(lifted.stats.packages, slice_files.len());
-    assert!(lifted.stats.part_defs >= 30);
+    assert_eq!(
+        lifted.unsupported.len(),
+        0,
+        "Expected 0 unsupported constructs in 13-package vertical slice, got: {:?}",
+        lifted.unsupported
+    );
+    assert!(lifted.stats.part_defs >= 50);
     assert!(lifted.stats.perform_actions >= 30);
     assert!(lifted.stats.requirement_defs >= 100);
     assert!(lifted.stats.satisfy_links >= 50);
+    assert_eq!(lifted.stats.calc_defs, 14);
+    assert_eq!(lifted.stats.analysis_defs, 3);
+    assert_eq!(lifted.stats.analysis_usages, 5);
+    assert!(lifted.stats.refinements >= 42);
 
     let generated_rs = generate_rust_dsl(
         &lifted.model,
@@ -206,7 +219,7 @@ sysml-emit = {{ path = "{}/crates/sysml-emit", default-features = false }}
     );
     assert_eq!(diff.missing_count, 0);
     assert_eq!(diff.extra_count, 0);
-    assert!(diff.total_original_facts > 500);
+    assert!(diff.total_original_facts > 1400);
 }
 
 /// Full 28-file Airbus Apollo 11 corpus lift + re-emit validation check.
@@ -232,6 +245,16 @@ fn gate2_and_gate3_full_apollo11_corpus_audit() {
         "Parse errors on Apollo 11 corpus: {:?}",
         lifted.parse_errors
     );
+    assert!(
+        lifted.unsupported.len() <= 32,
+        "Expected <= 32 unsupported constructs across full 28-file Apollo 11 corpus, got {}",
+        lifted.unsupported.len()
+    );
+    assert_eq!(lifted.stats.calc_defs, 14);
+    assert_eq!(lifted.stats.analysis_defs, 3);
+    assert_eq!(lifted.stats.analysis_usages, 5);
+    assert_eq!(lifted.stats.comments, 3);
+    assert!(lifted.stats.refinements >= 42);
 
     let reemitted = emit_model(&lifted.model);
     let val = validate_sysml_source("apollo11_full_reemitted.sysml", &reemitted);
@@ -247,6 +270,7 @@ fn gate2_and_gate3_full_apollo11_corpus_audit() {
         "Full Apollo 11 corpus IR round-trip mismatch:\n{}",
         serde_json::to_string_pretty(&diff).unwrap()
     );
+    assert!(diff.total_original_facts >= 2600);
 }
 
 fn collect_sysml_files(base: &Path, dir: &Path, out: &mut Vec<String>) {

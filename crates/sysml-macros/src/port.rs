@@ -187,6 +187,8 @@ pub fn expand_port(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
                         name: ::std::string::String::from(#fname_sysml),
                         type_name: ::std::string::String::from(#ty_name),
                         multiplicity: #mult_tok,
+                        subsets: ::std::vec![],
+                        doc: ::std::option::Option::None,
                     }
                 });
             }

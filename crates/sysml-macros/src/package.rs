@@ -14,8 +14,8 @@ use quote::{format_ident, quote};
 use syn::{Item, ItemMod, LitStr};
 
 use crate::util::{
-    extract_doc, extract_sysml_name_override, is_sysml_attr, quote_opt_str, snake_to_pascal,
-    strip_sysml_attrs, KvArgs,
+    extract_comments, extract_doc, extract_sysml_name_override, is_sysml_attr, quote_opt_str,
+    snake_to_pascal, strip_sysml_attrs, KvArgs,
 };
 
 fn parse_import_spec(spec: &str) -> (String, TokenStream) {
@@ -38,6 +38,19 @@ pub fn expand_package(args: TokenStream, mut item: ItemMod) -> syn::Result<Token
         syn::parse2(args)?
     };
     let doc = extract_doc(&item.attrs);
+    let comments = extract_comments(&item.attrs)?;
+    let comment_tokens: Vec<TokenStream> = comments
+        .iter()
+        .map(|(cname, body)| {
+            let cname_tok = quote_opt_str(cname);
+            quote! {
+                ::sysml_ir::Comment {
+                    name: #cname_tok,
+                    body: ::std::string::String::from(#body),
+                }
+            }
+        })
+        .collect();
     let is_library = kv.has_flag("library");
     let sysml_name = extract_sysml_name_override(&item.attrs)?
         .or_else(|| kv.get_str("name"))
@@ -129,6 +142,14 @@ pub fn expand_package(args: TokenStream, mut item: ItemMod) -> syn::Result<Token
                         member_tokens.push(quote! {
                             ::sysml_ir::PackageMember::VerificationDef(#id::verification_def())
                         });
+                    } else if s.attrs.iter().any(|a| is_sysml_attr(a, "calc")) {
+                        member_tokens.push(quote! {
+                            ::sysml_ir::PackageMember::CalcDef(<#id as ::sysml_ir::SysmlCalc>::calc_def())
+                        });
+                    } else if s.attrs.iter().any(|a| is_sysml_attr(a, "analysis")) {
+                        member_tokens.push(quote! {
+                            #id::analysis_member()
+                        });
                     } else {
                         return Err(syn::Error::new_spanned(
                             &s.ident,
@@ -202,6 +223,7 @@ pub fn expand_package(args: TokenStream, mut item: ItemMod) -> syn::Result<Token
                     name: ::std::string::String::from(#sysml_name),
                     is_library: #is_library,
                     doc: #doc_tok,
+                    comments: ::std::vec![#(#comment_tokens),*],
                     imports: ::std::vec![#(#import_tokens),*],
                     members: ::std::vec![#(#member_tokens),*],
                 }

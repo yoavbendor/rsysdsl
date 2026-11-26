@@ -71,10 +71,18 @@ impl Import {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Comment {
+    pub name: Option<String>,
+    pub body: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Package {
     pub name: String,
     pub is_library: bool,
     pub doc: Option<String>,
+    #[serde(default)]
+    pub comments: Vec<Comment>,
     pub imports: Vec<Import>,
     pub members: Vec<PackageMember>,
 }
@@ -97,6 +105,8 @@ pub enum PackageMember {
     RequirementUsage(RequirementUsage),
     VerificationDef(VerificationDef),
     CalcDef(CalcDef),
+    AnalysisDef(AnalysisDef),
+    AnalysisUsage(AnalysisUsage),
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -161,6 +171,9 @@ pub struct AttributeUsage {
     /// Optional physical unit symbol (e.g. `"kg"`, `"m/s"`, `"kN"`, `"%"`).
     pub unit: Option<String>,
     pub doc: Option<String>,
+    /// True for keyword-less SysML v2 feature bindings (e.g. `:> influenceLevel = ...;`).
+    #[serde(default)]
+    pub is_keywordless: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -169,6 +182,8 @@ pub struct PartDef {
     pub is_abstract: bool,
     pub is_individual: bool,
     pub doc: Option<String>,
+    #[serde(default)]
+    pub comments: Vec<Comment>,
     pub specializes: Vec<String>,
     pub attributes: Vec<AttributeUsage>,
     pub parts: Vec<PartUsage>,
@@ -180,6 +195,8 @@ pub struct PartDef {
     pub requirements: Vec<RequirementUsage>,
     pub satisfies: Vec<SatisfyStmt>,
     pub verifies: Vec<VerifyStmt>,
+    #[serde(default)]
+    pub refinements: Vec<RefinementDependency>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -197,8 +214,12 @@ pub struct PartUsage {
     pub attributes: Vec<AttributeUsage>,
     pub nested_parts: Vec<PartUsage>,
     pub ports: Vec<PortUsage>,
+    #[serde(default)]
+    pub items: Vec<DirectedItem>,
     pub performs: Vec<PerformAction>,
     pub connections: Vec<ConnectionUsage>,
+    #[serde(default)]
+    pub requirements: Vec<RequirementUsage>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -220,12 +241,16 @@ pub struct PortUsage {
     pub doc: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct DirectedItem {
     pub direction: Option<Direction>,
     pub name: String,
     pub type_name: String,
     pub multiplicity: Option<Multiplicity>,
+    #[serde(default)]
+    pub subsets: Vec<String>,
+    #[serde(default)]
+    pub doc: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -294,6 +319,8 @@ pub struct ConnectionUsage {
     pub name: Option<String>,
     pub type_name: Option<String>,
     pub multiplicity: Option<Multiplicity>,
+    #[serde(default)]
+    pub subsets: Vec<String>,
     pub from: Option<String>,
     pub to: Option<String>,
     pub doc: Option<String>,
@@ -456,6 +483,10 @@ pub struct VerificationDef {
 pub struct CalcParam {
     pub name: String,
     pub type_name: String,
+    #[serde(default)]
+    pub subsets: Option<String>,
+    #[serde(default)]
+    pub multiplicity: Option<Multiplicity>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -472,5 +503,40 @@ pub struct CalcDef {
     pub locals: Vec<CalcLocal>,
     pub return_name: String,
     pub return_type: String,
+    #[serde(default)]
+    pub return_subsets: Option<String>,
     pub result_expr: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct AnalysisParam {
+    pub direction: Option<Direction>,
+    pub name: String,
+    pub type_name: Option<String>,
+    #[serde(default)]
+    pub subsets: Vec<String>,
+    #[serde(default)]
+    pub multiplicity: Option<Multiplicity>,
+    pub value: Option<String>,
+    pub unit: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct AnalysisDef {
+    pub name: String,
+    pub doc: Option<String>,
+    pub specializes: Vec<String>,
+    pub subject: Option<SubjectDecl>,
+    pub params: Vec<AnalysisParam>,
+    pub assert_constraints: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct AnalysisUsage {
+    pub name: String,
+    pub type_name: Option<String>,
+    pub doc: Option<String>,
+    pub subject: Option<SubjectDecl>,
+    pub params: Vec<AnalysisParam>,
+    pub assert_constraints: Vec<String>,
 }

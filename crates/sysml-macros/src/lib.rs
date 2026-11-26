@@ -23,8 +23,9 @@
 
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{parse_macro_input, Attribute, Item, ItemEnum, ItemFn, ItemMod, ItemStruct};
+use syn::{parse_macro_input, Attribute, Item, ItemEnum, ItemMod, ItemStruct};
 
+mod analysis;
 mod behavior;
 mod calc;
 mod expr_transpile;
@@ -38,8 +39,16 @@ use util::{is_sysml_attr, PathList};
 
 #[proc_macro_attribute]
 pub fn calc(args: TokenStream, input: TokenStream) -> TokenStream {
-    let item = parse_macro_input!(input as ItemFn);
+    let item = parse_macro_input!(input as Item);
     calc::expand_calc(args.into(), item)
+        .unwrap_or_else(|e| e.to_compile_error())
+        .into()
+}
+
+#[proc_macro_attribute]
+pub fn analysis(args: TokenStream, input: TokenStream) -> TokenStream {
+    let item = parse_macro_input!(input as ItemStruct);
+    analysis::expand_analysis(args.into(), item)
         .unwrap_or_else(|e| e.to_compile_error())
         .into()
 }
@@ -159,6 +168,8 @@ fn reorder_below_primary(
         "requirement",
         "specification",
         "verification",
+        "calc",
+        "analysis",
     ];
     let attrs = match item {
         Item::Struct(s) => &mut s.attrs,

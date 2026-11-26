@@ -338,11 +338,38 @@ pub fn strip_sysml_attrs(attrs: Vec<Attribute>) -> Vec<Attribute> {
         "step",
         "subaction",
         "requirement_ref",
+        "comment",
+        "assert_constraint",
+        "local",
+        "return_expr",
     ];
     attrs
         .into_iter()
         .filter(|a| !HELPER_NAMES.iter().any(|h| is_sysml_attr(a, h)))
         .collect()
+}
+
+/// Parse `#[sysml::comment("...")]` or `#[sysml::comment(name = "...", body = "...")]`.
+pub fn extract_comments(attrs: &[Attribute]) -> syn::Result<Vec<(Option<String>, String)>> {
+    let mut out = Vec::new();
+    for attr in attrs {
+        if is_sysml_attr(attr, "comment") {
+            if let Ok(lit) = attr.parse_args::<syn::LitStr>() {
+                out.push((None, lit.value()));
+            } else {
+                let kv: KvArgs = attr.parse_args()?;
+                let name = kv.get_str("name");
+                let body = kv.get_str("body").ok_or_else(|| {
+                    syn::Error::new_spanned(
+                        attr,
+                        "expected `body = \"...\"` in #[sysml::comment(...)]",
+                    )
+                })?;
+                out.push((name, body));
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// Parse `#refinement dependency` helper attributes:
@@ -383,7 +410,10 @@ pub fn build_attr_usage_tokens(
     let name_override = extract_sysml_name_override(attrs)?.or_else(|| kv.get_str("name"));
     let redefines = kv.get_all_str("redefines");
     let subsets = kv.get_all_str("subsets");
-    let is_anonymous_redef = kv.has_flag("anonymous") || (!redefines.is_empty() && name_override.is_none() && kv.get_str("keep_name").is_none());
+    let is_keywordless = kv.has_flag("keywordless");
+    let is_anonymous_redef = kv.has_flag("anonymous")
+        || (!redefines.is_empty() && name_override.is_none() && kv.get_str("keep_name").is_none())
+        || (is_keywordless && !subsets.is_empty() && name_override.is_none() && kv.get_str("keep_name").is_none());
 
     let attr_name: Option<String> = if is_anonymous_redef {
         None
@@ -395,9 +425,9 @@ pub fn build_attr_usage_tokens(
     let explicit_ty = kv.get_str("ty").or_else(|| kv.get_str("type"));
     let type_name: Option<String> = if let Some(t) = explicit_ty {
         if t.is_empty() { None } else { Some(t) }
-    } else if !subsets.is_empty() || !redefines.is_empty() {
-        // In SysML v2, `attribute mass :> ISQ::mass` or `attribute :>> dryMass = 2100 [kg]`
-        // does not also emit `: Real`.
+    } else if !subsets.is_empty() || !redefines.is_empty() || is_keywordless {
+        // In SysML v2, `attribute mass :> ISQ::mass`, `attribute :>> dryMass = 2100 [kg]`,
+        // or `:> influenceLevel = ...` does not also emit `: Real`.
         None
     } else {
         Some(rust_ty_name)
@@ -446,6 +476,7 @@ pub fn build_attr_usage_tokens(
             value: #val_tok,
             unit: #unit_tok,
             doc: #doc_tok,
+            is_keywordless: #is_keywordless,
         }
     })
 }
