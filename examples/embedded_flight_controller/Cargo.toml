@@ -1,0 +1,17 @@
+[package]
+name = "embedded-flight-controller"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Ferrocene-ready #![no_std] ISO 26262 ASIL-D flight controller modeled in rsysdsl"
+
+[features]
+default = ["reflect"]
+reflect = ["sysml-dsl/reflect"]
+
+[dependencies]
+sysml-dsl = { path = "../../crates/sysml-dsl", default-features = false }
+
+[dev-dependencies]
+sysml-emit = { workspace = true }

@@ -15,19 +15,19 @@ use syn::{Item, ItemMod, LitStr};
 
 use crate::util::{
     extract_comments, extract_doc, extract_sysml_name_override, is_sysml_attr, quote_opt_str,
-    snake_to_pascal, strip_sysml_attrs, KvArgs,
+    reflect_cfg, snake_to_pascal, strip_sysml_attrs, KvArgs,
 };
 
 fn parse_import_spec(spec: &str) -> (String, TokenStream) {
     if let Some(base) = spec.strip_suffix("::**") {
         (
             base.to_string(),
-            quote!(::sysml_ir::ImportWildcard::RecursiveStar),
+            quote!(::sysml_dsl::ir::ImportWildcard::RecursiveStar),
         )
     } else if let Some(base) = spec.strip_suffix("::*") {
-        (base.to_string(), quote!(::sysml_ir::ImportWildcard::Star))
+        (base.to_string(), quote!(::sysml_dsl::ir::ImportWildcard::Star))
     } else {
-        (spec.to_string(), quote!(::sysml_ir::ImportWildcard::None))
+        (spec.to_string(), quote!(::sysml_dsl::ir::ImportWildcard::None))
     }
 }
 
@@ -37,6 +37,8 @@ pub fn expand_package(args: TokenStream, mut item: ItemMod) -> syn::Result<Token
     } else {
         syn::parse2(args)?
     };
+    let is_no_std = kv.has_flag("no_std");
+    let rcfg = reflect_cfg(is_no_std);
     let doc = extract_doc(&item.attrs);
     let comments = extract_comments(&item.attrs)?;
     let comment_tokens: Vec<TokenStream> = comments
@@ -44,7 +46,7 @@ pub fn expand_package(args: TokenStream, mut item: ItemMod) -> syn::Result<Token
         .map(|(cname, body)| {
             let cname_tok = quote_opt_str(cname);
             quote! {
-                ::sysml_ir::Comment {
+                ::sysml_dsl::ir::Comment {
                     name: #cname_tok,
                     body: ::std::string::String::from(#body),
                 }
@@ -62,8 +64,8 @@ pub fn expand_package(args: TokenStream, mut item: ItemMod) -> syn::Result<Token
             let s: LitStr = attr.parse_args()?;
             let (target, wildcard) = parse_import_spec(&s.value());
             import_tokens.push(quote! {
-                ::sysml_ir::Import {
-                    visibility: ::sysml_ir::Visibility::Private,
+                ::sysml_dsl::ir::Import {
+                    visibility: ::sysml_dsl::ir::Visibility::Private,
                     target: ::std::string::String::from(#target),
                     wildcard: #wildcard,
                 }
@@ -83,8 +85,8 @@ pub fn expand_package(args: TokenStream, mut item: ItemMod) -> syn::Result<Token
                             let s: LitStr = attr.parse_args()?;
                             let (target, wildcard) = parse_import_spec(&s.value());
                             import_tokens.push(quote! {
-                                ::sysml_ir::Import {
-                                    visibility: ::sysml_ir::Visibility::Private,
+                                ::sysml_dsl::ir::Import {
+                                    visibility: ::sysml_dsl::ir::Visibility::Private,
                                     target: ::std::string::String::from(#target),
                                     wildcard: #wildcard,
                                 }
@@ -102,49 +104,52 @@ pub fn expand_package(args: TokenStream, mut item: ItemMod) -> syn::Result<Token
                 }
                 Item::Struct(s) => {
                     let id = &s.ident;
+                    if is_no_std {
+                        s.attrs.push(syn::parse_quote!(#[sysml::no_std_reflect]));
+                    }
                     if s.attrs.iter().any(|a| is_sysml_attr(a, "part")) {
                         member_tokens.push(quote! {
-                            ::sysml_ir::PackageMember::PartDef(<#id as ::sysml_ir::SysmlPart>::part_def())
+                            ::sysml_dsl::ir::PackageMember::PartDef(<#id as ::sysml_dsl::ir::SysmlPart>::part_def())
                         });
                     } else if s.attrs.iter().any(|a| is_sysml_attr(a, "port")) {
                         member_tokens.push(quote! {
-                            ::sysml_ir::PackageMember::PortDef(<#id as ::sysml_ir::SysmlPort>::port_def())
+                            ::sysml_dsl::ir::PackageMember::PortDef(<#id as ::sysml_dsl::ir::SysmlPort>::port_def())
                         });
                     } else if s.attrs.iter().any(|a| is_sysml_attr(a, "interface")) {
                         member_tokens.push(quote! {
-                            ::sysml_ir::PackageMember::InterfaceDef(<#id as ::sysml_ir::SysmlInterface>::interface_def())
+                            ::sysml_dsl::ir::PackageMember::InterfaceDef(<#id as ::sysml_dsl::ir::SysmlInterface>::interface_def())
                         });
                     } else if s.attrs.iter().any(|a| is_sysml_attr(a, "connection")) {
                         member_tokens.push(quote! {
-                            ::sysml_ir::PackageMember::ConnectionDef(#id::connection_def())
+                            ::sysml_dsl::ir::PackageMember::ConnectionDef(#id::connection_def())
                         });
                     } else if s.attrs.iter().any(|a| is_sysml_attr(a, "item")) {
                         member_tokens.push(quote! {
-                            ::sysml_ir::PackageMember::ItemDef(<#id as ::sysml_ir::SysmlItem>::item_def())
+                            ::sysml_dsl::ir::PackageMember::ItemDef(<#id as ::sysml_dsl::ir::SysmlItem>::item_def())
                         });
                     } else if s.attrs.iter().any(|a| is_sysml_attr(a, "action")) {
                         member_tokens.push(quote! {
-                            ::sysml_ir::PackageMember::ActionDef(<#id as ::sysml_ir::SysmlAction>::action_def())
+                            ::sysml_dsl::ir::PackageMember::ActionDef(<#id as ::sysml_dsl::ir::SysmlAction>::action_def())
                         });
                     } else if s.attrs.iter().any(|a| is_sysml_attr(a, "state")) {
                         member_tokens.push(quote! {
-                            ::sysml_ir::PackageMember::StateDef(<#id as ::sysml_ir::SysmlState>::state_def())
+                            ::sysml_dsl::ir::PackageMember::StateDef(<#id as ::sysml_dsl::ir::SysmlState>::state_def())
                         });
                     } else if s.attrs.iter().any(|a| is_sysml_attr(a, "requirement")) {
                         member_tokens.push(quote! {
-                            ::sysml_ir::PackageMember::RequirementDef(<#id as ::sysml_ir::SysmlRequirement>::requirement_def())
+                            ::sysml_dsl::ir::PackageMember::RequirementDef(<#id as ::sysml_dsl::ir::SysmlRequirement>::requirement_def())
                         });
                     } else if s.attrs.iter().any(|a| is_sysml_attr(a, "specification")) {
                         member_tokens.push(quote! {
-                            ::sysml_ir::PackageMember::RequirementUsage(#id::requirement_usage())
+                            ::sysml_dsl::ir::PackageMember::RequirementUsage(#id::requirement_usage())
                         });
                     } else if s.attrs.iter().any(|a| is_sysml_attr(a, "verification")) {
                         member_tokens.push(quote! {
-                            ::sysml_ir::PackageMember::VerificationDef(#id::verification_def())
+                            ::sysml_dsl::ir::PackageMember::VerificationDef(#id::verification_def())
                         });
                     } else if s.attrs.iter().any(|a| is_sysml_attr(a, "calc")) {
                         member_tokens.push(quote! {
-                            ::sysml_ir::PackageMember::CalcDef(<#id as ::sysml_ir::SysmlCalc>::calc_def())
+                            ::sysml_dsl::ir::PackageMember::CalcDef(<#id as ::sysml_dsl::ir::SysmlCalc>::calc_def())
                         });
                     } else if s.attrs.iter().any(|a| is_sysml_attr(a, "analysis")) {
                         member_tokens.push(quote! {
@@ -159,13 +164,16 @@ pub fn expand_package(args: TokenStream, mut item: ItemMod) -> syn::Result<Token
                 }
                 Item::Enum(e) => {
                     let id = &e.ident;
+                    if is_no_std {
+                        e.attrs.push(syn::parse_quote!(#[sysml::no_std_reflect]));
+                    }
                     if e.attrs.iter().any(|a| is_sysml_attr(a, "state")) {
                         member_tokens.push(quote! {
-                            ::sysml_ir::PackageMember::StateDef(<#id as ::sysml_ir::SysmlState>::state_def())
+                            ::sysml_dsl::ir::PackageMember::StateDef(<#id as ::sysml_dsl::ir::SysmlState>::state_def())
                         });
                     } else if e.attrs.iter().any(|a| is_sysml_attr(a, "enum_def")) {
                         member_tokens.push(quote! {
-                            ::sysml_ir::PackageMember::EnumDef(<#id as ::sysml_ir::SysmlEnum>::enum_def())
+                            ::sysml_dsl::ir::PackageMember::EnumDef(<#id as ::sysml_dsl::ir::SysmlEnum>::enum_def())
                         });
                     } else {
                         return Err(syn::Error::new_spanned(
@@ -178,7 +186,7 @@ pub fn expand_package(args: TokenStream, mut item: ItemMod) -> syn::Result<Token
                     let id = &m.ident;
                     if m.attrs.iter().any(|a| is_sysml_attr(a, "package")) {
                         member_tokens.push(quote! {
-                            ::sysml_ir::PackageMember::Package(#id::sysml_package())
+                            ::sysml_dsl::ir::PackageMember::Package(#id::sysml_package())
                         });
                     } else {
                         return Err(syn::Error::new_spanned(
@@ -189,9 +197,12 @@ pub fn expand_package(args: TokenStream, mut item: ItemMod) -> syn::Result<Token
                 }
                 Item::Fn(f) => {
                     if f.attrs.iter().any(|a| is_sysml_attr(a, "calc")) {
+                        if is_no_std {
+                            f.attrs.push(syn::parse_quote!(#[sysml::no_std_reflect]));
+                        }
                         let marker = format_ident!("__sysml_calc_marker_{}", f.sig.ident);
                         member_tokens.push(quote! {
-                            ::sysml_ir::PackageMember::CalcDef(<#marker as ::sysml_ir::SysmlCalc>::calc_def())
+                            ::sysml_dsl::ir::PackageMember::CalcDef(<#marker as ::sysml_dsl::ir::SysmlCalc>::calc_def())
                         });
                     } else {
                         return Err(syn::Error::new_spanned(
@@ -218,8 +229,9 @@ pub fn expand_package(args: TokenStream, mut item: ItemMod) -> syn::Result<Token
         let doc_tok = quote_opt_str(&doc);
         let builder_fn: Item = syn::parse2(quote! {
             /// Deterministically builds the `sysml_ir::Package` IR for this module.
-            pub fn sysml_package() -> ::sysml_ir::Package {
-                ::sysml_ir::Package {
+            #rcfg
+            pub fn sysml_package() -> ::sysml_dsl::ir::Package {
+                ::sysml_dsl::ir::Package {
                     name: ::std::string::String::from(#sysml_name),
                     is_library: #is_library,
                     doc: #doc_tok,

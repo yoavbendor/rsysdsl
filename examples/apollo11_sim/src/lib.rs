@@ -11,7 +11,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sysml_ir::{
-    EvaluableRequirement, Quantity, SysmlRequirement, VerificationReport, VerificationStatus,
+    EvaluableRequirement, Quantity, SysmlRequirementCore, VerificationReport, VerificationStatus,
     VerificationVerdict,
 };
 

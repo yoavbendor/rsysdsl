@@ -369,7 +369,7 @@ fn wrap_scalar(tokens: TokenStream, ctx: &ExprContext<'_>) -> TokenStream {
         // Inside `#[sysml::calc]`, parameters are already typed Rust scalars (e.g. `f64`).
         ExprContext::Calc { .. } => tokens,
         // In requirements and transition guards, fields may be `Quantity<f64>` or primitives.
-        _ => quote!(::sysml_ir::ToScalar::to_scalar(#tokens)),
+        _ => quote!(::sysml_dsl::core_contracts::ToScalar::to_scalar(#tokens)),
     }
 }
 

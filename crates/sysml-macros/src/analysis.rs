@@ -5,9 +5,9 @@ use quote::quote;
 use syn::{Fields, ItemStruct, LitStr, Meta};
 
 use crate::util::{
-    analyze_rust_type, extract_doc, extract_sysml_name_override, is_sysml_attr,
+    analyze_rust_type, extract_doc, extract_sysml_name_override, has_no_std_mode, is_sysml_attr,
     parse_multiplicity_str, path_to_sysml_string, quote_opt_mult, quote_opt_str, quote_vec_str,
-    snake_to_camel, strip_sysml_attrs, KvArgs, PathList,
+    reflect_cfg, snake_to_camel, strip_sysml_attrs, KvArgs, PathList,
 };
 
 pub fn expand_analysis(args: TokenStream, mut item: ItemStruct) -> syn::Result<TokenStream> {
@@ -16,6 +16,8 @@ pub fn expand_analysis(args: TokenStream, mut item: ItemStruct) -> syn::Result<T
     } else {
         syn::parse2(args)?
     };
+    let is_no_std = has_no_std_mode(&kv, &item.attrs);
+    let rcfg = reflect_cfg(is_no_std);
     let doc = extract_doc(&item.attrs);
     let is_usage = kv.has_flag("usage");
     let usage_ty = kv.get_str("ty").or_else(|| kv.get_str("type"));
@@ -40,7 +42,7 @@ pub fn expand_analysis(args: TokenStream, mut item: ItemStruct) -> syn::Result<T
                 .get_str("ty")
                 .or_else(|| skv.get_path("ty").map(|p| path_to_sysml_string(&p)))
                 .unwrap_or_default();
-            subject_tok = quote!(::std::option::Option::Some(::sysml_ir::SubjectDecl {
+            subject_tok = quote!(::std::option::Option::Some(::sysml_dsl::ir::SubjectDecl {
                 name: ::std::string::String::from(#sname),
                 type_name: ::std::string::String::from(#sty),
             }));
@@ -58,17 +60,17 @@ pub fn expand_analysis(args: TokenStream, mut item: ItemStruct) -> syn::Result<T
             let mut fkv = KvArgs::default();
             for attr in &field.attrs {
                 if is_sysml_attr(attr, "in_param") {
-                    dir_tok = quote!(::std::option::Option::Some(::sysml_ir::Direction::In));
+                    dir_tok = quote!(::std::option::Option::Some(::sysml_dsl::ir::Direction::In));
                     if let Meta::List(_) = &attr.meta {
                         fkv = attr.parse_args()?;
                     }
                 } else if is_sysml_attr(attr, "out_param") {
-                    dir_tok = quote!(::std::option::Option::Some(::sysml_ir::Direction::Out));
+                    dir_tok = quote!(::std::option::Option::Some(::sysml_dsl::ir::Direction::Out));
                     if let Meta::List(_) = &attr.meta {
                         fkv = attr.parse_args()?;
                     }
                 } else if is_sysml_attr(attr, "inout_param") {
-                    dir_tok = quote!(::std::option::Option::Some(::sysml_ir::Direction::InOut));
+                    dir_tok = quote!(::std::option::Option::Some(::sysml_dsl::ir::Direction::InOut));
                     if let Meta::List(_) = &attr.meta {
                         fkv = attr.parse_args()?;
                     }
@@ -100,7 +102,7 @@ pub fn expand_analysis(args: TokenStream, mut item: ItemStruct) -> syn::Result<T
             let unit_tok = quote_opt_str(&unit);
 
             param_tokens.push(quote! {
-                ::sysml_ir::AnalysisParam {
+                ::sysml_dsl::ir::AnalysisParam {
                     direction: #dir_tok,
                     name: ::std::string::String::from(#pname),
                     type_name: #ty_tok,
@@ -123,7 +125,7 @@ pub fn expand_analysis(args: TokenStream, mut item: ItemStruct) -> syn::Result<T
     let member_body = if is_usage {
         let usage_ty_tok = quote_opt_str(&usage_ty);
         quote! {
-            ::sysml_ir::PackageMember::AnalysisUsage(::sysml_ir::AnalysisUsage {
+            ::sysml_dsl::ir::PackageMember::AnalysisUsage(::sysml_dsl::ir::AnalysisUsage {
                 name: ::std::string::String::from(#sysml_name),
                 type_name: #usage_ty_tok,
                 doc: #doc_tok,
@@ -134,7 +136,7 @@ pub fn expand_analysis(args: TokenStream, mut item: ItemStruct) -> syn::Result<T
         }
     } else {
         quote! {
-            ::sysml_ir::PackageMember::AnalysisDef(::sysml_ir::AnalysisDef {
+            ::sysml_dsl::ir::PackageMember::AnalysisDef(::sysml_dsl::ir::AnalysisDef {
                 name: ::std::string::String::from(#sysml_name),
                 doc: #doc_tok,
                 specializes: #spec_tok,
@@ -148,8 +150,9 @@ pub fn expand_analysis(args: TokenStream, mut item: ItemStruct) -> syn::Result<T
     Ok(quote! {
         #item
 
+        #rcfg
         impl #ident {
-            pub fn analysis_member() -> ::sysml_ir::PackageMember {
+            pub fn analysis_member() -> ::sysml_dsl::ir::PackageMember {
                 #member_body
             }
         }

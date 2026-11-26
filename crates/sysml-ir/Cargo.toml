@@ -7,5 +7,6 @@ repository.workspace = true
 description = "Strongly typed SysML v2 Intermediate Representation, compile-time MBSE traits, and verification types"
 
 [dependencies]
+sysml-core = { workspace = true, features = ["serde"] }
 serde = { workspace = true }
 serde_json = { workspace = true }

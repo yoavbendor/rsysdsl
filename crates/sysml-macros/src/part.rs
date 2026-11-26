@@ -18,9 +18,9 @@ use syn::{Expr, Fields, Ident, ItemStruct, LitStr, Meta, Path, Token};
 
 use crate::util::{
     analyze_rust_type, build_attr_usage_tokens, build_auto_default_impl, extract_comments,
-    extract_doc, extract_refinements, extract_sysml_name_override, is_sysml_attr,
+    extract_doc, extract_refinements, extract_sysml_name_override, has_no_std_mode, is_sysml_attr,
     parse_multiplicity_str, path_to_sysml_string, quote_opt_mult, quote_opt_str, quote_vec_str,
-    snake_to_camel, strip_sysml_attrs, KvArgs, PathList,
+    reflect_cfg, snake_to_camel, strip_sysml_attrs, KvArgs, PathList,
 };
 
 /// Parses `#[sysml::perform(execute_descent_burn: ExecuteDescentBurn)]`
@@ -217,6 +217,8 @@ pub fn expand_part(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
     } else {
         syn::parse2(args)?
     };
+    let is_no_std = has_no_std_mode(&kv, &item.attrs);
+    let rcfg = reflect_cfg(is_no_std);
     let doc = extract_doc(&item.attrs);
     let is_abstract = kv.has_flag("abstract");
     let is_individual = kv.has_flag("individual");
@@ -236,6 +238,11 @@ pub fn expand_part(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
     let mut connects = Vec::new();
     // Collect `#[sysml::exhibit(name = "phases", state = StateType)]`
     let mut exhibits = Vec::new();
+    // Collect ISO 26262 `#[sysml::fmea(...)]`, `#[sysml::independent(...)]`, `#[sysml::asil_decompose(...)]`
+    let mut fmea_tokens = Vec::new();
+    let mut independent_paths = Vec::new();
+    let mut asil_decomp_tokens = Vec::new();
+    let mut asil_decomp_checks = Vec::new();
 
     for attr in &item.attrs {
         if is_sysml_attr(attr, "specializes") {
@@ -261,6 +268,87 @@ pub fn expand_part(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
             })?;
             let inline = ekv.has_flag("inline");
             exhibits.push((ename, estate, inline));
+        } else if is_sysml_attr(attr, "fmea") {
+            let fkv: KvArgs = attr.parse_args()?;
+            let failure_mode = fkv.get_str("failure_mode").ok_or_else(|| {
+                syn::Error::new_spanned(attr, "missing `failure_mode = \"...\"` in #[sysml::fmea(...)]")
+            })?;
+            let effect = fkv.get_str("effect").ok_or_else(|| {
+                syn::Error::new_spanned(attr, "missing `effect = \"...\"` in #[sysml::fmea(...)]")
+            })?;
+            let parse_1_10 = |key: &str| -> syn::Result<u8> {
+                let raw = fkv.get_str(key).ok_or_else(|| {
+                    syn::Error::new_spanned(attr, format!("missing `{key} = 1..=10` in #[sysml::fmea(...)]"))
+                })?;
+                let val: u8 = raw.parse().map_err(|_| {
+                    syn::Error::new_spanned(attr, format!("`{key}` must be an integer 1..=10 in #[sysml::fmea(...)]"))
+                })?;
+                if !(1..=10).contains(&val) {
+                    return Err(syn::Error::new_spanned(
+                        attr,
+                        format!("`{key}` must be in 1..=10 (got {val}) in #[sysml::fmea(...)]"),
+                    ));
+                }
+                Ok(val)
+            };
+            let severity = parse_1_10("severity")?;
+            let occurrence = parse_1_10("occurrence")?;
+            let detection = parse_1_10("detection")?;
+            let asil_tok = if let Some(asil_str) = fkv.get_str("asil") {
+                quote!(::std::option::Option::Some(::std::string::String::from(#asil_str)))
+            } else if let Some(asil_path) = fkv.get_path("asil") {
+                quote!(::std::option::Option::Some(::std::string::String::from(
+                    <#asil_path as ::sysml_dsl::core_contracts::AsilLevel>::LABEL
+                )))
+            } else {
+                quote!(::std::option::Option::None)
+            };
+            fmea_tokens.push(quote! {
+                ::sysml_dsl::ir::FmeaEntry {
+                    failure_mode: ::std::string::String::from(#failure_mode),
+                    effect: ::std::string::String::from(#effect),
+                    severity: #severity,
+                    occurrence: #occurrence,
+                    detection: #detection,
+                    asil: #asil_tok,
+                }
+            });
+        } else if is_sysml_attr(attr, "independent") {
+            let list: PathList = attr.parse_args()?;
+            independent_paths.extend(list.paths.into_iter());
+        } else if is_sysml_attr(attr, "asil_decompose") {
+            let dkv: KvArgs = attr.parse_args()?;
+            let goal = dkv.get_path("goal").ok_or_else(|| {
+                syn::Error::new_spanned(attr, "expected `goal = SafetyGoalReq` in #[sysml::asil_decompose(...)]")
+            })?;
+            let left = dkv.get_path("left").ok_or_else(|| {
+                syn::Error::new_spanned(attr, "expected `left = LeftPart` in #[sysml::asil_decompose(...)]")
+            })?;
+            let left_asil = dkv.get_path("left_asil").ok_or_else(|| {
+                syn::Error::new_spanned(attr, "expected `left_asil = AsilB` in #[sysml::asil_decompose(...)]")
+            })?;
+            let right = dkv.get_path("right").ok_or_else(|| {
+                syn::Error::new_spanned(attr, "expected `right = RightPart` in #[sysml::asil_decompose(...)]")
+            })?;
+            let right_asil = dkv.get_path("right_asil").ok_or_else(|| {
+                syn::Error::new_spanned(attr, "expected `right_asil = AsilB` in #[sysml::asil_decompose(...)]")
+            })?;
+            asil_decomp_checks.push(quote! {
+                const _: fn() = || {
+                    ::sysml_dsl::core_contracts::assert_asil_decomposition::<
+                        #goal, #left, #left_asil, #right, #right_asil
+                    >();
+                };
+            });
+            asil_decomp_tokens.push(quote! {
+                ::sysml_dsl::ir::AsilDecompositionMeta {
+                    goal: ::std::string::String::from(<#goal as ::sysml_dsl::core_contracts::SysmlRequirementCore>::REQ_ID),
+                    left_part: ::std::string::String::from(<#left as ::sysml_dsl::core_contracts::SysmlPartCore>::SYSML_NAME),
+                    left_asil: ::std::string::String::from(<#left_asil as ::sysml_dsl::core_contracts::AsilLevel>::LABEL),
+                    right_part: ::std::string::String::from(<#right as ::sysml_dsl::core_contracts::SysmlPartCore>::SYSML_NAME),
+                    right_asil: ::std::string::String::from(<#right_asil as ::sysml_dsl::core_contracts::AsilLevel>::LABEL),
+                }
+            });
         }
     }
 
@@ -329,10 +417,10 @@ pub fn expand_part(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
                 let redefines = fkv.get_all_str("redefines");
                 let default_val = fkv.get_str("default");
 
-                // Compile-time check: inner type of a #[sysml::part] field must implement SysmlPart
+                // Compile-time check: inner type of a #[sysml::part] field must implement SysmlPartCore
                 if let Some(inner_ty) = unwrap_container_type(&field.ty) {
                     if !fkv.has_flag("untyped") {
-                        field_type_checks.push(quote! { ::sysml_ir::assert_part::<#inner_ty>(); });
+                        field_type_checks.push(quote! { ::sysml_dsl::core_contracts::assert_part_core::<#inner_ty>(); });
                     }
                 }
 
@@ -343,7 +431,7 @@ pub fn expand_part(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
                 let def_tok = quote_opt_str(&default_val);
 
                 part_tokens.push(quote! {
-                    ::sysml_ir::PartUsage {
+                    ::sysml_dsl::ir::PartUsage {
                         name: #fname_tok,
                         is_individual: #is_ind,
                         is_ref: #is_ref,
@@ -382,9 +470,9 @@ pub fn expand_part(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
                     .or(rust_mult);
                 let mult_tok = quote_opt_mult(&mult);
                 let fty = &field.ty;
-                field_type_checks.push(quote! { ::sysml_ir::assert_port::<#fty>(); });
+                field_type_checks.push(quote! { ::sysml_dsl::core_contracts::assert_port_core::<#fty>(); });
                 port_tokens.push(quote! {
-                    ::sysml_ir::PortUsage {
+                    ::sysml_dsl::ir::PortUsage {
                         name: ::std::string::String::from(#fname_sysml),
                         type_name: ::std::string::String::from(#ty_name),
                         conjugated: #conjugated,
@@ -409,10 +497,10 @@ pub fn expand_part(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
                 let subsets = fkv.get_all_str("subsets");
                 let subsets_tok = quote_vec_str(&subsets);
                 if let Some(inner_ty) = unwrap_container_type(&field.ty) {
-                    field_type_checks.push(quote! { ::sysml_ir::assert_item::<#inner_ty>(); });
+                    field_type_checks.push(quote! { ::sysml_dsl::core_contracts::assert_item_core::<#inner_ty>(); });
                 }
                 item_tokens.push(quote! {
-                    ::sysml_ir::DirectedItem {
+                    ::sysml_dsl::ir::DirectedItem {
                         direction: ::std::option::Option::None,
                         name: ::std::string::String::from(#fname_sysml),
                         type_name: ::std::string::String::from(#ty_name),
@@ -442,10 +530,10 @@ pub fn expand_part(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
                 let subsets = fkv.get_all_str("subsets");
                 let subsets_tok = quote_vec_str(&subsets);
                 if let Some(inner_ty) = unwrap_container_type(&field.ty) {
-                    field_type_checks.push(quote! { ::sysml_ir::assert_requirement::<#inner_ty>(); });
+                    field_type_checks.push(quote! { ::sysml_dsl::core_contracts::assert_requirement_core::<#inner_ty>(); });
                 }
                 req_tokens.push(quote! {
-                    ::sysml_ir::RequirementUsage {
+                    ::sysml_dsl::ir::RequirementUsage {
                         short_name: ::std::option::Option::None,
                         name: ::std::string::String::from(#fname_sysml),
                         type_name: ::std::option::Option::Some(::std::string::String::from(#ty_name)),
@@ -479,7 +567,7 @@ pub fn expand_part(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
         let apath = &p.action_path;
         let aname = path_to_sysml_string(apath);
         perform_tokens.push(quote! {
-            ::sysml_ir::PerformAction {
+            ::sysml_dsl::ir::PerformAction {
                 name: ::std::option::Option::Some(::std::string::String::from(#pname)),
                 action_type: ::std::option::Option::Some(::std::string::String::from(#aname)),
                 references: ::std::option::Option::None,
@@ -487,8 +575,8 @@ pub fn expand_part(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
             }
         });
         perform_impls.push(quote! {
-            impl ::sysml_ir::Performs<#apath> for #ident {}
-            const _: fn() = || { ::sysml_ir::assert_action::<#apath>(); };
+            impl ::sysml_dsl::core_contracts::Performs<#apath> for #ident {}
+            const _: fn() = || { ::sysml_dsl::core_contracts::assert_action_core::<#apath>(); };
         });
     }
 
@@ -502,11 +590,11 @@ pub fn expand_part(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
         let req_expr = if let Some(raw) = &s.raw_req_name {
             quote!(::std::string::String::from(#raw))
         } else {
-            quote!(::std::string::String::from(<#rpath as ::sysml_ir::SysmlRequirement>::SYSML_NAME))
+            quote!(::std::string::String::from(<#rpath as ::sysml_dsl::core_contracts::SysmlRequirementCore>::SYSML_NAME))
         };
         let is_typed = s.raw_req_name.is_none();
         satisfy_tokens.push(quote! {
-            ::sysml_ir::SatisfyStmt {
+            ::sysml_dsl::ir::SatisfyStmt {
                 asserted: #asserted,
                 is_typed: #is_typed,
                 requirement: #req_expr,
@@ -516,7 +604,7 @@ pub fn expand_part(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
         let id_check = if let Some(exp_id) = &s.expected_id {
             quote! {
                 const _: () = {
-                    if !::sysml_ir::const_str_eq(<#rpath as ::sysml_ir::SysmlRequirement>::REQ_ID, #exp_id) {
+                    if !::sysml_dsl::core_contracts::const_str_eq(<#rpath as ::sysml_dsl::core_contracts::SysmlRequirementCore>::REQ_ID, #exp_id) {
                         panic!("SysML requirement ID mismatch in #[sysml::satisfy]");
                     }
                 };
@@ -525,8 +613,8 @@ pub fn expand_part(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
             quote!()
         };
         satisfy_impls.push(quote! {
-            impl ::sysml_ir::Satisfies<#rpath> for #ident {}
-            const _: fn() = || { ::sysml_ir::assert_requirement::<#rpath>(); };
+            impl ::sysml_dsl::core_contracts::Satisfies<#rpath> for #ident {}
+            const _: fn() = || { ::sysml_dsl::core_contracts::assert_requirement_core::<#rpath>(); };
             #id_check
         });
     }
@@ -538,15 +626,15 @@ pub fn expand_part(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
         let rpath = &v.req_path;
         let by_tok = quote_opt_str(&v.by);
         verify_tokens.push(quote! {
-            ::sysml_ir::VerifyStmt {
-                requirement: ::std::string::String::from(<#rpath as ::sysml_ir::SysmlRequirement>::SYSML_NAME),
+            ::sysml_dsl::ir::VerifyStmt {
+                requirement: ::std::string::String::from(<#rpath as ::sysml_dsl::core_contracts::SysmlRequirementCore>::SYSML_NAME),
                 by: #by_tok,
             }
         });
         let id_check = if let Some(exp_id) = &v.expected_id {
             quote! {
                 const _: () = {
-                    if !::sysml_ir::const_str_eq(<#rpath as ::sysml_ir::SysmlRequirement>::REQ_ID, #exp_id) {
+                    if !::sysml_dsl::core_contracts::const_str_eq(<#rpath as ::sysml_dsl::core_contracts::SysmlRequirementCore>::REQ_ID, #exp_id) {
                         panic!("SysML requirement ID mismatch in #[sysml::verify]");
                     }
                 };
@@ -555,8 +643,8 @@ pub fn expand_part(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
             quote!()
         };
         verify_impls.push(quote! {
-            impl ::sysml_ir::Verifies<#rpath> for #ident {}
-            const _: fn() = || { ::sysml_ir::assert_requirement::<#rpath>(); };
+            impl ::sysml_dsl::core_contracts::Verifies<#rpath> for #ident {}
+            const _: fn() = || { ::sysml_dsl::core_contracts::assert_requirement_core::<#rpath>(); };
             #id_check
         });
     }
@@ -580,8 +668,8 @@ pub fn expand_part(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
         if let Some(iface) = &c.interface_path {
             let iface_name = path_to_sysml_string(iface);
             conn_tokens.push(quote! {
-                ::sysml_ir::ConnectionUsage {
-                    kind: ::sysml_ir::ConnectionKind::Interface,
+                ::sysml_dsl::ir::ConnectionUsage {
+                    kind: ::sysml_dsl::ir::ConnectionKind::Interface,
                     is_abstract: false,
                     name: #cname_tok,
                     type_name: ::std::option::Option::Some(::std::string::String::from(#iface_name)),
@@ -594,14 +682,14 @@ pub fn expand_part(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
             });
             conn_checks.push(quote! {
                 const _: fn(&#ident) = |s: &#ident| {
-                    ::sysml_ir::assert_interface_connect::<#iface>(&#from_access, &#to_access);
+                    ::sysml_dsl::core_contracts::assert_interface_connect_core::<#iface>(&#from_access, &#to_access);
                 };
             });
         } else {
             let ctype_tok = quote_opt_str(&c.connection_type);
             conn_tokens.push(quote! {
-                ::sysml_ir::ConnectionUsage {
-                    kind: ::sysml_ir::ConnectionKind::Connection,
+                ::sysml_dsl::ir::ConnectionUsage {
+                    kind: ::sysml_dsl::ir::ConnectionKind::Connection,
                     is_abstract: false,
                     name: #cname_tok,
                     type_name: #ctype_tok,
@@ -614,7 +702,7 @@ pub fn expand_part(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
             });
             conn_checks.push(quote! {
                 const _: fn(&#ident) = |s: &#ident| {
-                    ::sysml_ir::assert_ports_connect(&#from_access, &#to_access);
+                    ::sysml_dsl::core_contracts::assert_ports_connect_core(&#from_access, &#to_access);
                 };
             });
         }
@@ -626,13 +714,13 @@ pub fn expand_part(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
     for (ename, estate, inline) in &exhibits {
         let state_ty_name = path_to_sysml_string(estate);
         exhibit_checks.push(quote! {
-            const _: fn() = || { ::sysml_ir::assert_state::<#estate>(); };
+            const _: fn() = || { ::sysml_dsl::core_contracts::assert_state_core::<#estate>(); };
         });
         if *inline {
             exhibit_tokens.push(quote! {
                 {
-                    let sd = <#estate as ::sysml_ir::SysmlState>::state_def();
-                    ::sysml_ir::StateUsage {
+                    let sd = <#estate as ::sysml_dsl::ir::SysmlState>::state_def();
+                    ::sysml_dsl::ir::StateUsage {
                         name: ::std::string::String::from(#ename),
                         type_name: ::std::option::Option::None,
                         is_exhibit: true,
@@ -647,7 +735,7 @@ pub fn expand_part(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
             });
         } else {
             exhibit_tokens.push(quote! {
-                ::sysml_ir::StateUsage {
+                ::sysml_dsl::ir::StateUsage {
                     name: ::std::string::String::from(#ename),
                     type_name: ::std::option::Option::Some(::std::string::String::from(#state_ty_name)),
                     is_exhibit: true,
@@ -668,7 +756,7 @@ pub fn expand_part(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
         .map(|(cname, body)| {
             let cname_tok = quote_opt_str(cname);
             quote! {
-                ::sysml_ir::Comment {
+                ::sysml_dsl::ir::Comment {
                     name: #cname_tok,
                     body: ::std::string::String::from(#body),
                 }
@@ -681,7 +769,7 @@ pub fn expand_part(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
         .iter()
         .map(|(c, s)| {
             quote! {
-                ::sysml_ir::RefinementDependency {
+                ::sysml_dsl::ir::RefinementDependency {
                     client: ::std::string::String::from(#c),
                     supplier: ::std::string::String::from(#s),
                 }
@@ -691,8 +779,15 @@ pub fn expand_part(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
 
     let spec_impls = specializes_paths.iter().map(|base| {
         quote! {
-            impl ::sysml_ir::Specializes<#base> for #ident {}
-            const _: fn() = || { ::sysml_ir::assert_part::<#base>(); };
+            impl ::sysml_dsl::core_contracts::Specializes<#base> for #ident {}
+            const _: fn() = || { ::sysml_dsl::core_contracts::assert_part_core::<#base>(); };
+        }
+    });
+
+    let independent_impls = independent_paths.iter().map(|other| {
+        quote! {
+            impl ::sysml_dsl::core_contracts::IndependentFrom<#other> for #ident {}
+            const _: fn() = || { ::sysml_dsl::core_contracts::assert_part_core::<#other>(); };
         }
     });
 
@@ -705,11 +800,14 @@ pub fn expand_part(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
 
         #auto_default_impl
 
-        impl ::sysml_ir::SysmlPart for #ident {
+        impl ::sysml_dsl::core_contracts::SysmlPartCore for #ident {
             const SYSML_NAME: &'static str = #sysml_name;
+        }
 
-            fn part_def() -> ::sysml_ir::PartDef {
-                ::sysml_ir::PartDef {
+        #rcfg
+        impl ::sysml_dsl::ir::SysmlPart for #ident {
+            fn part_def() -> ::sysml_dsl::ir::PartDef {
+                ::sysml_dsl::ir::PartDef {
                     name: ::std::string::String::from(#sysml_name),
                     is_abstract: #is_abstract,
                     is_individual: #is_individual,
@@ -727,6 +825,8 @@ pub fn expand_part(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
                     satisfies: ::std::vec![#(#satisfy_tokens),*],
                     verifies: ::std::vec![#(#verify_tokens),*],
                     refinements: ::std::vec![#(#ref_tokens),*],
+                    fmea: ::std::vec![#(#fmea_tokens),*],
+                    asil_decompositions: ::std::vec![#(#asil_decomp_tokens),*],
                 }
             }
         }
@@ -736,6 +836,8 @@ pub fn expand_part(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
         };
 
         #(#spec_impls)*
+        #(#independent_impls)*
+        #(#asil_decomp_checks)*
         #(#perform_impls)*
         #(#satisfy_impls)*
         #(#verify_impls)*

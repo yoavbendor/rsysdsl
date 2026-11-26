@@ -28,4 +28,7 @@ fn gate1_compile_time_safety() {
     t.compile_fail("tests/ui/bad_constraint_field.rs");
     t.compile_fail("tests/ui/opaque_call_in_calc.rs");
     t.compile_fail("tests/ui/bad_guard_field.rs");
+    // ISO 26262 safety contracts (Track C)
+    t.compile_fail("tests/ui/bad_asil_decomposition.rs");
+    t.compile_fail("tests/ui/missing_asil_independence.rs");
 }

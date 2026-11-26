@@ -107,6 +107,46 @@ pub enum PackageMember {
     CalcDef(CalcDef),
     AnalysisDef(AnalysisDef),
     AnalysisUsage(AnalysisUsage),
+    MetadataDef(MetadataDef),
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct MetadataDef {
+    pub name: String,
+    pub doc: Option<String>,
+    pub attributes: Vec<AttributeUsage>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SafetyGoalMeta {
+    pub asil: String,
+    pub safe_state: String,
+    pub ftti_ms: u32,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FmeaEntry {
+    pub failure_mode: String,
+    pub effect: String,
+    pub severity: u8,
+    pub occurrence: u8,
+    pub detection: u8,
+    pub asil: Option<String>,
+}
+
+impl FmeaEntry {
+    pub const fn rpn(&self) -> u16 {
+        (self.severity as u16) * (self.occurrence as u16) * (self.detection as u16)
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AsilDecompositionMeta {
+    pub goal: String,
+    pub left_part: String,
+    pub left_asil: String,
+    pub right_part: String,
+    pub right_asil: String,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -197,6 +237,10 @@ pub struct PartDef {
     pub verifies: Vec<VerifyStmt>,
     #[serde(default)]
     pub refinements: Vec<RefinementDependency>,
+    #[serde(default)]
+    pub fmea: Vec<FmeaEntry>,
+    #[serde(default)]
+    pub asil_decompositions: Vec<AsilDecompositionMeta>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -434,6 +478,8 @@ pub struct RequirementDef {
     pub is_abstract: bool,
     pub doc: Option<String>,
     pub rationale: Option<String>,
+    #[serde(default)]
+    pub safety_goal: Option<SafetyGoalMeta>,
     pub specializes: Vec<String>,
     pub subject: Option<SubjectDecl>,
     pub attributes: Vec<AttributeUsage>,

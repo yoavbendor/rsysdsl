@@ -1,0 +1,18 @@
+error[E0277]: the trait bound `ChannelA: IndependentFrom<ChannelB>` is not satisfied
+  --> tests/ui/missing_asil_independence.rs:21:12
+   |
+21 |     left = ChannelA,
+   |            ^^^^^^^^ unsatisfied trait bound
+   |
+help: the trait `IndependentFrom<ChannelB>` is not implemented for `ChannelA`
+  --> tests/ui/missing_asil_independence.rs:10:1
+   |
+10 | pub struct ChannelA;
+   | ^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `assert_asil_decomposition`
+  --> $WORKSPACE/crates/sysml-core/src/safety.rs
+   |
+   | pub const fn assert_asil_decomposition<G, LeftPart, LeftAsil, RightPart, RightAsil>()
+...
+   |     LeftPart: SysmlPartCore + IndependentFrom<RightPart>,
+   |                               ^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `assert_asil_decomposition`

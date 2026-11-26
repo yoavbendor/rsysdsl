@@ -227,6 +227,7 @@ fn emit_member(member: &PackageMember, level: usize, out: &mut String) {
         PackageMember::CalcDef(c) => emit_calc_def(c, level, out),
         PackageMember::AnalysisDef(a) => emit_analysis_def(a, level, out),
         PackageMember::AnalysisUsage(a) => emit_analysis_usage(a, level, out),
+        PackageMember::MetadataDef(m) => emit_metadata_def(m, level, out),
     }
 }
 
@@ -664,7 +665,9 @@ fn emit_part_def(p: &PartDef, level: usize, out: &mut String) {
         || !p.requirements.is_empty()
         || !p.satisfies.is_empty()
         || !p.verifies.is_empty()
-        || !p.refinements.is_empty();
+        || !p.refinements.is_empty()
+        || !p.fmea.is_empty()
+        || !p.asil_decompositions.is_empty();
 
     if !has_body {
         let _ = writeln!(out, ";");
@@ -675,6 +678,30 @@ fn emit_part_def(p: &PartDef, level: usize, out: &mut String) {
     emit_doc(&p.doc, level + 1, out);
     for c in &p.comments {
         emit_comment(c, level + 1, out);
+    }
+    for f in &p.fmea {
+        let fm = f.failure_mode.replace('\\', "\\\\").replace('"', "\\\"");
+        let eff = f.effect.replace('\\', "\\\\").replace('"', "\\\"");
+        let _ = writeln!(out, "{}@FMEA {{", indent(level + 1));
+        let _ = writeln!(out, "{}failureMode = \"{fm}\";", indent(level + 2));
+        let _ = writeln!(out, "{}effect = \"{eff}\";", indent(level + 2));
+        let _ = writeln!(out, "{}severity = {};", indent(level + 2), f.severity);
+        let _ = writeln!(out, "{}'occurrence' = {};", indent(level + 2), f.occurrence);
+        let _ = writeln!(out, "{}detection = {};", indent(level + 2), f.detection);
+        let _ = writeln!(out, "{}rpn = {};", indent(level + 2), f.rpn());
+        if let Some(asil) = &f.asil {
+            let _ = writeln!(out, "{}asil = \"{asil}\";", indent(level + 2));
+        }
+        let _ = writeln!(out, "{}}}", indent(level + 1));
+    }
+    for d in &p.asil_decompositions {
+        let _ = writeln!(out, "{}@AsilDecomposition {{", indent(level + 1));
+        let _ = writeln!(out, "{}goal = \"{}\";", indent(level + 2), d.goal);
+        let _ = writeln!(out, "{}leftPart = \"{}\";", indent(level + 2), d.left_part);
+        let _ = writeln!(out, "{}leftAsil = \"{}\";", indent(level + 2), d.left_asil);
+        let _ = writeln!(out, "{}rightPart = \"{}\";", indent(level + 2), d.right_part);
+        let _ = writeln!(out, "{}rightAsil = \"{}\";", indent(level + 2), d.right_asil);
+        let _ = writeln!(out, "{}}}", indent(level + 1));
     }
     for a in &p.attributes {
         emit_attribute_usage(a, level + 1, out);
@@ -958,6 +985,7 @@ fn emit_requirement_def(r: &RequirementDef, level: usize, out: &mut String) {
     emit_specializes(&r.specializes, out);
     let has_body = r.doc.is_some()
         || r.rationale.is_some()
+        || r.safety_goal.is_some()
         || r.subject.is_some()
         || !r.attributes.is_empty()
         || !r.require_constraints.is_empty()
@@ -973,6 +1001,14 @@ fn emit_requirement_def(r: &RequirementDef, level: usize, out: &mut String) {
         let escaped = rat.replace('\\', "\\\\").replace('"', "\\\"");
         let _ = writeln!(out, "{}@Rationale {{", indent(level + 1));
         let _ = writeln!(out, "{}text = \"{escaped}\";", indent(level + 2));
+        let _ = writeln!(out, "{}}}", indent(level + 1));
+    }
+    if let Some(sg) = &r.safety_goal {
+        let ss = sg.safe_state.replace('\\', "\\\\").replace('"', "\\\"");
+        let _ = writeln!(out, "{}@SafetyGoal {{", indent(level + 1));
+        let _ = writeln!(out, "{}asil = \"{}\";", indent(level + 2), sg.asil);
+        let _ = writeln!(out, "{}safeState = \"{ss}\";", indent(level + 2));
+        let _ = writeln!(out, "{}fttiMs = {};", indent(level + 2), sg.ftti_ms);
         let _ = writeln!(out, "{}}}", indent(level + 1));
     }
     if let Some(subj) = &r.subject {
@@ -1250,4 +1286,72 @@ fn emit_analysis_usage(a: &AnalysisUsage, level: usize, out: &mut String) {
         let _ = writeln!(out, "{}assert constraint {{ {c} }}", indent(level + 1));
     }
     let _ = writeln!(out, "{ind}}}");
+}
+
+fn emit_metadata_def(m: &MetadataDef, level: usize, out: &mut String) {
+    let ind = indent(level);
+    let _ = write!(out, "{ind}metadata def {}", escape_sysml_name(&m.name));
+    if m.doc.is_none() && m.attributes.is_empty() {
+        let _ = writeln!(out, ";");
+    } else {
+        let _ = writeln!(out, " {{");
+        emit_doc(&m.doc, level + 1, out);
+        for a in &m.attributes {
+            emit_attribute_usage(a, level + 1, out);
+        }
+        let _ = writeln!(out, "{ind}}}");
+    }
+}
+
+/// Normative SysML v2 `library package ISO26262Metadata` defining `@SafetyGoal`,
+/// `@FMEA`, and `@AsilDecomposition` metadata definitions so models using ISO 26262
+/// annotations validate with 0 errors and 0 warnings against Open-MBEE + OMG stdlib.
+pub fn iso26262_metadata_package() -> Package {
+    let attr = |name: &str, ty: &str| AttributeUsage {
+        name: Some(name.to_string()),
+        type_name: Some(ty.to_string()),
+        ..Default::default()
+    };
+    Package {
+        name: "ISO26262Metadata".to_string(),
+        is_library: true,
+        doc: Some("ISO 26262 functional safety metadata definitions (@SafetyGoal, @FMEA, @AsilDecomposition).".to_string()),
+        comments: Vec::new(),
+        imports: vec![Import::private_star("ScalarValues")],
+        members: vec![
+            PackageMember::MetadataDef(MetadataDef {
+                name: "SafetyGoal".to_string(),
+                doc: Some("ISO 26262-3 top-level safety goal metadata.".to_string()),
+                attributes: vec![
+                    attr("asil", "String"),
+                    attr("safeState", "String"),
+                    attr("fttiMs", "Integer"),
+                ],
+            }),
+            PackageMember::MetadataDef(MetadataDef {
+                name: "FMEA".to_string(),
+                doc: Some("ISO 26262 / ARP4761 Failure Modes and Effects Analysis entry.".to_string()),
+                attributes: vec![
+                    attr("failureMode", "String"),
+                    attr("effect", "String"),
+                    attr("severity", "Integer"),
+                    attr("occurrence", "Integer"),
+                    attr("detection", "Integer"),
+                    attr("rpn", "Integer"),
+                    attr("asil", "String"),
+                ],
+            }),
+            PackageMember::MetadataDef(MetadataDef {
+                name: "AsilDecomposition".to_string(),
+                doc: Some("ISO 26262-9 Clause 5 verified ASIL decomposition witness.".to_string()),
+                attributes: vec![
+                    attr("goal", "String"),
+                    attr("leftPart", "String"),
+                    attr("leftAsil", "String"),
+                    attr("rightPart", "String"),
+                    attr("rightAsil", "String"),
+                ],
+            }),
+        ],
+    }
 }

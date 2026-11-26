@@ -17,8 +17,8 @@ use syn::{bracketed, Expr, ExprLit, Fields, Ident, Item, ItemEnum, ItemStruct, L
 use crate::expr_transpile::{transpile_expr, ExprContext};
 use crate::util::{
     analyze_rust_type, extract_doc, extract_refinements, extract_sysml_name_override,
-    is_sysml_attr, path_to_sysml_string, quote_opt_str, quote_vec_str, snake_to_camel,
-    strip_sysml_attrs, KvArgs, PathList,
+    has_no_std_mode, is_sysml_attr, path_to_sysml_string, quote_opt_str, quote_vec_str,
+    reflect_cfg, snake_to_camel, strip_sysml_attrs, KvArgs, PathList,
 };
 
 /// Step declaration `step_name: ActionType` inside `#[sysml::do_action(...)]` or `#[sysml::step(...)]`.
@@ -165,6 +165,8 @@ pub fn expand_action(args: TokenStream, mut item: ItemStruct) -> syn::Result<Tok
     } else {
         syn::parse2(args)?
     };
+    let is_no_std = has_no_std_mode(&kv, &item.attrs);
+    let rcfg = reflect_cfg(is_no_std);
     let doc = extract_doc(&item.attrs);
     let is_abstract = kv.has_flag("abstract");
     let sysml_name = extract_sysml_name_override(&item.attrs)?
@@ -200,15 +202,15 @@ pub fn expand_action(args: TokenStream, mut item: ItemStruct) -> syn::Result<Tok
                 .iter()
                 .any(|a| is_sysml_attr(a, "inout") || is_sysml_attr(a, "inout_param"));
             let dir_tok = if is_out {
-                quote!(::sysml_ir::Direction::Out)
+                quote!(::sysml_dsl::ir::Direction::Out)
             } else if is_inout {
-                quote!(::sysml_ir::Direction::InOut)
+                quote!(::sysml_dsl::ir::Direction::InOut)
             } else {
-                quote!(::sysml_ir::Direction::In)
+                quote!(::sysml_dsl::ir::Direction::In)
             };
             let (ty_name, _, _) = analyze_rust_type(&field.ty);
             param_tokens.push(quote! {
-                ::sysml_ir::ActionParam {
+                ::sysml_dsl::ir::ActionParam {
                     direction: #dir_tok,
                     name: ::std::string::String::from(#fname_sysml),
                     type_name: ::std::string::String::from(#ty_name),
@@ -225,10 +227,10 @@ pub fn expand_action(args: TokenStream, mut item: ItemStruct) -> syn::Result<Tok
         let stype = s.action_type.as_ref().map(path_to_sysml_string);
         let stype_tok = quote_opt_str(&stype);
         if let Some(p) = &s.action_type {
-            step_checks.push(quote! { ::sysml_ir::assert_action::<#p>(); });
+            step_checks.push(quote! { ::sysml_dsl::core_contracts::assert_action_core::<#p>(); });
         }
         step_tokens.push(quote! {
-            ::sysml_ir::ActionStep {
+            ::sysml_dsl::ir::ActionStep {
                 name: ::std::string::String::from(#sname),
                 type_name: #stype_tok,
                 is_then: true,
@@ -239,7 +241,7 @@ pub fn expand_action(args: TokenStream, mut item: ItemStruct) -> syn::Result<Tok
     let has_steps = !step_decls.is_empty();
     let ref_tokens = refinements.iter().map(|(c, s)| {
         quote! {
-            ::sysml_ir::RefinementDependency {
+            ::sysml_dsl::ir::RefinementDependency {
                 client: ::std::string::String::from(#c),
                 supplier: ::std::string::String::from(#s),
             }
@@ -249,8 +251,8 @@ pub fn expand_action(args: TokenStream, mut item: ItemStruct) -> syn::Result<Tok
     let ident = &item.ident;
     let spec_impls = specializes_paths.iter().map(|base| {
         quote! {
-            impl ::sysml_ir::Specializes<#base> for #ident {}
-            const _: fn() = || { ::sysml_ir::assert_action::<#base>(); };
+            impl ::sysml_dsl::core_contracts::Specializes<#base> for #ident {}
+            const _: fn() = || { ::sysml_dsl::core_contracts::assert_action_core::<#base>(); };
         }
     });
 
@@ -261,11 +263,14 @@ pub fn expand_action(args: TokenStream, mut item: ItemStruct) -> syn::Result<Tok
     Ok(quote! {
         #item
 
-        impl ::sysml_ir::SysmlAction for #ident {
+        impl ::sysml_dsl::core_contracts::SysmlActionCore for #ident {
             const SYSML_NAME: &'static str = #sysml_name;
+        }
 
-            fn action_def() -> ::sysml_ir::ActionDef {
-                ::sysml_ir::ActionDef {
+        #rcfg
+        impl ::sysml_dsl::ir::SysmlAction for #ident {
+            fn action_def() -> ::sysml_dsl::ir::ActionDef {
+                ::sysml_dsl::ir::ActionDef {
                     name: ::std::string::String::from(#sysml_name),
                     is_abstract: #is_abstract,
                     doc: #doc_tok,
@@ -305,6 +310,8 @@ fn expand_state_struct(args: TokenStream, mut item: ItemStruct) -> syn::Result<T
     } else {
         syn::parse2(args)?
     };
+    let is_no_std = has_no_std_mode(&kv, &item.attrs);
+    let rcfg = reflect_cfg(is_no_std);
     let doc = extract_doc(&item.attrs);
     let is_abstract = kv.has_flag("abstract");
     let sysml_name = extract_sysml_name_override(&item.attrs)?
@@ -334,10 +341,10 @@ fn expand_state_struct(args: TokenStream, mut item: ItemStruct) -> syn::Result<T
                 let stype = s.action_type.as_ref().map(path_to_sysml_string);
                 let stype_tok = quote_opt_str(&stype);
                 if let Some(p) = &s.action_type {
-                    action_checks.push(quote! { ::sysml_ir::assert_action::<#p>(); });
+                    action_checks.push(quote! { ::sysml_dsl::core_contracts::assert_action_core::<#p>(); });
                 }
                 quote! {
-                    ::sysml_ir::ActionStep {
+                    ::sysml_dsl::ir::ActionStep {
                         name: ::std::string::String::from(#sname),
                         type_name: #stype_tok,
                         is_then: true,
@@ -347,7 +354,7 @@ fn expand_state_struct(args: TokenStream, mut item: ItemStruct) -> syn::Result<T
             .collect();
         let has_steps = !da.steps.is_empty();
         quote! {
-            ::std::option::Option::Some(::sysml_ir::ActionUsage {
+            ::std::option::Option::Some(::sysml_dsl::ir::ActionUsage {
                 name: ::std::string::String::from(#daname),
                 type_name: ::std::option::Option::None,
                 multiplicity: ::std::option::Option::None,
@@ -366,8 +373,8 @@ fn expand_state_struct(args: TokenStream, mut item: ItemStruct) -> syn::Result<T
     let ident = &item.ident;
     let spec_impls = specializes_paths.iter().map(|base| {
         quote! {
-            impl ::sysml_ir::Specializes<#base> for #ident {}
-            const _: fn() = || { ::sysml_ir::assert_state::<#base>(); };
+            impl ::sysml_dsl::core_contracts::Specializes<#base> for #ident {}
+            const _: fn() = || { ::sysml_dsl::core_contracts::assert_state_core::<#base>(); };
         }
     });
 
@@ -378,11 +385,14 @@ fn expand_state_struct(args: TokenStream, mut item: ItemStruct) -> syn::Result<T
     Ok(quote! {
         #item
 
-        impl ::sysml_ir::SysmlState for #ident {
+        impl ::sysml_dsl::core_contracts::SysmlStateCore for #ident {
             const SYSML_NAME: &'static str = #sysml_name;
+        }
 
-            fn state_def() -> ::sysml_ir::StateDef {
-                ::sysml_ir::StateDef {
+        #rcfg
+        impl ::sysml_dsl::ir::SysmlState for #ident {
+            fn state_def() -> ::sysml_dsl::ir::StateDef {
+                ::sysml_dsl::ir::StateDef {
                     name: ::std::string::String::from(#sysml_name),
                     is_abstract: #is_abstract,
                     doc: #doc_tok,
@@ -411,6 +421,8 @@ fn expand_state_enum(args: TokenStream, mut item: ItemEnum) -> syn::Result<Token
     } else {
         syn::parse2(args)?
     };
+    let is_no_std = has_no_std_mode(&kv, &item.attrs);
+    let rcfg = reflect_cfg(is_no_std);
     let doc = extract_doc(&item.attrs);
     let sysml_name = extract_sysml_name_override(&item.attrs)?
         .or_else(|| kv.get_str("name"))
@@ -438,7 +450,7 @@ fn expand_state_enum(args: TokenStream, mut item: ItemEnum) -> syn::Result<Token
     let mut initial_variant: Option<Ident> = None;
 
     if let Some(subj) = &subject_ty {
-        compile_checks.push(quote! { ::sysml_ir::assert_part::<#subj>(); });
+        compile_checks.push(quote! { ::sysml_dsl::core_contracts::assert_part_core::<#subj>(); });
     }
 
     for variant in &mut item.variants {
@@ -465,11 +477,11 @@ fn expand_state_enum(args: TokenStream, mut item: ItemEnum) -> syn::Result<Token
 
         let state_ty_str = state_ty.as_ref().map(path_to_sysml_string);
         if let Some(st) = &state_ty {
-            compile_checks.push(quote! { ::sysml_ir::assert_state::<#st>(); });
+            compile_checks.push(quote! { ::sysml_dsl::core_contracts::assert_state_core::<#st>(); });
         }
         let state_ty_tok = quote_opt_str(&state_ty_str);
         state_usage_tokens.push(quote! {
-            ::sysml_ir::StateUsage {
+            ::sysml_dsl::ir::StateUsage {
                 name: ::std::string::String::from(#v_sysml_name),
                 type_name: #state_ty_tok,
                 is_exhibit: false,
@@ -499,10 +511,10 @@ fn expand_state_enum(args: TokenStream, mut item: ItemEnum) -> syn::Result<Token
             compile_checks.push(quote! {
                 let _target_check: #ident = #ident::#target_ident;
             });
-            // Compile-time check 2: Trigger type MUST implement `SysmlItem`!
+            // Compile-time check 2: Trigger type MUST implement `SysmlItemCore`!
             if let Some(trig_path) = &t.trigger {
                 compile_checks.push(quote! {
-                    ::sysml_ir::assert_item::<#trig_path>();
+                    ::sysml_dsl::core_contracts::assert_item_core::<#trig_path>();
                 });
             }
 
@@ -524,7 +536,7 @@ fn expand_state_enum(args: TokenStream, mut item: ItemEnum) -> syn::Result<Token
             };
 
             transition_tokens.push(quote! {
-                ::sysml_ir::Transition {
+                ::sysml_dsl::ir::Transition {
                     name: ::std::option::Option::None,
                     source: ::std::string::String::from(#v_sysml_name),
                     trigger: #trigger_tok,
@@ -545,7 +557,7 @@ fn expand_state_enum(args: TokenStream, mut item: ItemEnum) -> syn::Result<Token
                 step_match_arms.push(quote! {
                     (#ident::#v_ident, #trig_key) => {
                         *self = #ident::#target_ident;
-                        ::std::result::Result::Ok(*self)
+                        ::core::result::Result::Ok(*self)
                     }
                 });
             }
@@ -555,12 +567,12 @@ fn expand_state_enum(args: TokenStream, mut item: ItemEnum) -> syn::Result<Token
                 if let Some(guard_expr) = &guard_rust_opt {
                     guarded_event_checks.push(quote! {
                         if *self == #ident::#v_ident {
-                            if let ::std::option::Option::Some(__sysml_event) =
-                                (__any_event as &dyn ::std::any::Any).downcast_ref::<#trig_path>()
+                            if let ::core::option::Option::Some(__sysml_event) =
+                                (__any_event as &dyn ::core::any::Any).downcast_ref::<#trig_path>()
                             {
                                 if #guard_expr {
                                     *self = #ident::#target_ident;
-                                    return ::std::result::Result::Ok(*self);
+                                    return ::core::result::Result::Ok(*self);
                                 }
                             }
                         }
@@ -568,9 +580,9 @@ fn expand_state_enum(args: TokenStream, mut item: ItemEnum) -> syn::Result<Token
                 } else {
                     guarded_event_checks.push(quote! {
                         if *self == #ident::#v_ident {
-                            if (__any_event as &dyn ::std::any::Any).is::<#trig_path>() {
+                            if (__any_event as &dyn ::core::any::Any).is::<#trig_path>() {
                                 *self = #ident::#target_ident;
-                                return ::std::result::Result::Ok(*self);
+                                return ::core::result::Result::Ok(*self);
                             }
                         }
                     });
@@ -596,48 +608,140 @@ fn expand_state_enum(args: TokenStream, mut item: ItemEnum) -> syn::Result<Token
         quote!()
     };
 
-    let typed_step_fn = if let Some(subj) = &subject_ty {
-        quote! {
-            /// Evaluates typed trigger payload and compiled SysML v2 transition guards
-            /// against both `event` and `subject`, advancing the state machine atomically.
-            pub fn step_with<E: ::sysml_ir::SysmlItem + 'static>(
-                &mut self,
-                __any_event: &E,
-                __sysml_subject: &#subj,
-            ) -> ::std::result::Result<Self, ::sysml_ir::TransitionError> {
-                let _ = __sysml_subject;
-                #(#guarded_event_checks)*
-                ::std::result::Result::Err(::sysml_ir::TransitionError {
-                    state_machine: ::std::string::String::from(#sysml_name),
-                    from: ::std::string::String::from(self.sysml_state_name()),
-                    trigger: ::std::string::String::from(<E as ::sysml_ir::SysmlItem>::SYSML_NAME),
-                    allowed_triggers: self.allowed_triggers(),
-                })
+    let (step_methods, typed_step_fn) = if is_no_std {
+        let step_methods = quote! {
+            /// Returns the list of legal trigger names from the current state (host reflection only).
+            #rcfg
+            pub fn allowed_triggers(&self) -> ::std::vec::Vec<::std::string::String> {
+                match self {
+                    #(#allowed_match_arms)*
+                }
             }
-        }
+
+            /// Executes an unguarded transition by static trigger name (`#![no_std]` zero-alloc).
+            pub fn step(&mut self, trigger: &'static str) -> ::core::result::Result<Self, ::sysml_dsl::core_contracts::NoStdTransitionError> {
+                match (*self, trigger) {
+                    #(#step_match_arms)*
+                    _ => ::core::result::Result::Err(::sysml_dsl::core_contracts::NoStdTransitionError {
+                        state_machine: #sysml_name,
+                        from: self.sysml_state_name(),
+                        event: trigger,
+                    }),
+                }
+            }
+
+            /// Executes an unguarded strongly typed transition using a `SysmlItemCore` trigger type.
+            pub fn step_on<T: ::sysml_dsl::core_contracts::SysmlItemCore>(&mut self) -> ::core::result::Result<Self, ::sysml_dsl::core_contracts::NoStdTransitionError> {
+                self.step(<T as ::sysml_dsl::core_contracts::SysmlItemCore>::SYSML_NAME)
+            }
+        };
+        let typed_step_fn = if let Some(subj) = &subject_ty {
+            quote! {
+                /// Evaluates typed trigger payload and compiled SysML v2 transition guards
+                /// against both `event` and `subject` (`#![no_std]` zero-alloc).
+                pub fn step_with<E: ::sysml_dsl::core_contracts::SysmlItemCore + 'static>(
+                    &mut self,
+                    __any_event: &E,
+                    __sysml_subject: &#subj,
+                ) -> ::core::result::Result<Self, ::sysml_dsl::core_contracts::NoStdTransitionError> {
+                    let _ = __sysml_subject;
+                    #(#guarded_event_checks)*
+                    ::core::result::Result::Err(::sysml_dsl::core_contracts::NoStdTransitionError {
+                        state_machine: #sysml_name,
+                        from: self.sysml_state_name(),
+                        event: <E as ::sysml_dsl::core_contracts::SysmlItemCore>::SYSML_NAME,
+                    })
+                }
+            }
+        } else {
+            quote! {
+                /// Evaluates typed trigger payload and compiled SysML v2 transition guards (`#![no_std]` zero-alloc).
+                pub fn step_event<E: ::sysml_dsl::core_contracts::SysmlItemCore + 'static>(
+                    &mut self,
+                    __any_event: &E,
+                ) -> ::core::result::Result<Self, ::sysml_dsl::core_contracts::NoStdTransitionError> {
+                    #(#guarded_event_checks)*
+                    ::core::result::Result::Err(::sysml_dsl::core_contracts::NoStdTransitionError {
+                        state_machine: #sysml_name,
+                        from: self.sysml_state_name(),
+                        event: <E as ::sysml_dsl::core_contracts::SysmlItemCore>::SYSML_NAME,
+                    })
+                }
+            }
+        };
+        (step_methods, typed_step_fn)
     } else {
-        quote! {
-            /// Evaluates typed trigger payload and compiled SysML v2 transition guards,
-            /// advancing the state machine atomically.
-            pub fn step_event<E: ::sysml_ir::SysmlItem + 'static>(
-                &mut self,
-                __any_event: &E,
-            ) -> ::std::result::Result<Self, ::sysml_ir::TransitionError> {
-                #(#guarded_event_checks)*
-                ::std::result::Result::Err(::sysml_ir::TransitionError {
-                    state_machine: ::std::string::String::from(#sysml_name),
-                    from: ::std::string::String::from(self.sysml_state_name()),
-                    trigger: ::std::string::String::from(<E as ::sysml_ir::SysmlItem>::SYSML_NAME),
-                    allowed_triggers: self.allowed_triggers(),
-                })
+        let step_methods = quote! {
+            /// Returns the list of legal trigger names from the current state.
+            pub fn allowed_triggers(&self) -> ::std::vec::Vec<::std::string::String> {
+                match self {
+                    #(#allowed_match_arms)*
+                }
             }
-        }
+
+            /// Executes an unguarded transition by trigger name (or `"auto"` for unconditional
+            /// transitions), returning `Err(TransitionError)` if the transition is illegal.
+            pub fn step(&mut self, trigger: &str) -> ::std::result::Result<Self, ::sysml_dsl::ir::TransitionError> {
+                match (*self, trigger) {
+                    #(#step_match_arms)*
+                    _ => ::std::result::Result::Err(::sysml_dsl::ir::TransitionError {
+                        state_machine: ::std::string::String::from(#sysml_name),
+                        from: ::std::string::String::from(self.sysml_state_name()),
+                        trigger: ::std::string::String::from(trigger),
+                        allowed_triggers: self.allowed_triggers(),
+                    }),
+                }
+            }
+
+            /// Executes an unguarded strongly typed transition using a `SysmlItemCore` trigger type.
+            pub fn step_on<T: ::sysml_dsl::core_contracts::SysmlItemCore>(&mut self) -> ::std::result::Result<Self, ::sysml_dsl::ir::TransitionError> {
+                self.step(<T as ::sysml_dsl::core_contracts::SysmlItemCore>::SYSML_NAME)
+            }
+        };
+        let typed_step_fn = if let Some(subj) = &subject_ty {
+            quote! {
+                /// Evaluates typed trigger payload and compiled SysML v2 transition guards
+                /// against both `event` and `subject`, advancing the state machine atomically.
+                pub fn step_with<E: ::sysml_dsl::core_contracts::SysmlItemCore + 'static>(
+                    &mut self,
+                    __any_event: &E,
+                    __sysml_subject: &#subj,
+                ) -> ::std::result::Result<Self, ::sysml_dsl::ir::TransitionError> {
+                    let _ = __sysml_subject;
+                    #(#guarded_event_checks)*
+                    ::std::result::Result::Err(::sysml_dsl::ir::TransitionError {
+                        state_machine: ::std::string::String::from(#sysml_name),
+                        from: ::std::string::String::from(self.sysml_state_name()),
+                        trigger: ::std::string::String::from(<E as ::sysml_dsl::core_contracts::SysmlItemCore>::SYSML_NAME),
+                        allowed_triggers: self.allowed_triggers(),
+                    })
+                }
+            }
+        } else {
+            quote! {
+                /// Evaluates typed trigger payload and compiled SysML v2 transition guards,
+                /// advancing the state machine atomically.
+                pub fn step_event<E: ::sysml_dsl::core_contracts::SysmlItemCore + 'static>(
+                    &mut self,
+                    __any_event: &E,
+                ) -> ::std::result::Result<Self, ::sysml_dsl::ir::TransitionError> {
+                    #(#guarded_event_checks)*
+                    ::std::result::Result::Err(::sysml_dsl::ir::TransitionError {
+                        state_machine: ::std::string::String::from(#sysml_name),
+                        from: ::std::string::String::from(self.sysml_state_name()),
+                        trigger: ::std::string::String::from(<E as ::sysml_dsl::core_contracts::SysmlItemCore>::SYSML_NAME),
+                        allowed_triggers: self.allowed_triggers(),
+                    })
+                }
+            }
+        };
+        (step_methods, typed_step_fn)
     };
 
     let spec_impls = specializes_paths.iter().map(|base| {
         quote! {
-            impl ::sysml_ir::Specializes<#base> for #ident {}
-            const _: fn() = || { ::sysml_ir::assert_state::<#base>(); };
+            impl ::sysml_dsl::core_contracts::Specializes<#base> for #ident {}
+            const _: fn() = || { ::sysml_dsl::core_contracts::assert_state_core::<#base>(); };
         }
     });
 
@@ -660,40 +764,19 @@ fn expand_state_enum(args: TokenStream, mut item: ItemEnum) -> syn::Result<Token
                 }
             }
 
-            /// Returns the list of legal trigger names from the current state.
-            pub fn allowed_triggers(&self) -> ::std::vec::Vec<::std::string::String> {
-                match self {
-                    #(#allowed_match_arms)*
-                }
-            }
-
-            /// Executes an unguarded transition by trigger name (or `"auto"` for unconditional
-            /// transitions), returning `Err(TransitionError)` if the transition is illegal.
-            pub fn step(&mut self, trigger: &str) -> ::std::result::Result<Self, ::sysml_ir::TransitionError> {
-                match (*self, trigger) {
-                    #(#step_match_arms)*
-                    _ => ::std::result::Result::Err(::sysml_ir::TransitionError {
-                        state_machine: ::std::string::String::from(#sysml_name),
-                        from: ::std::string::String::from(self.sysml_state_name()),
-                        trigger: ::std::string::String::from(trigger),
-                        allowed_triggers: self.allowed_triggers(),
-                    }),
-                }
-            }
-
-            /// Executes an unguarded strongly typed transition using a `SysmlItem` trigger type.
-            pub fn step_on<T: ::sysml_ir::SysmlItem>(&mut self) -> ::std::result::Result<Self, ::sysml_ir::TransitionError> {
-                self.step(<T as ::sysml_ir::SysmlItem>::SYSML_NAME)
-            }
+            #step_methods
 
             #typed_step_fn
         }
 
-        impl ::sysml_ir::SysmlState for #ident {
+        impl ::sysml_dsl::core_contracts::SysmlStateCore for #ident {
             const SYSML_NAME: &'static str = #sysml_name;
+        }
 
-            fn state_def() -> ::sysml_ir::StateDef {
-                ::sysml_ir::StateDef {
+        #rcfg
+        impl ::sysml_dsl::ir::SysmlState for #ident {
+            fn state_def() -> ::sysml_dsl::ir::StateDef {
+                ::sysml_dsl::ir::StateDef {
                     name: ::std::string::String::from(#sysml_name),
                     is_abstract: false,
                     doc: #doc_tok,

@@ -1,0 +1,14 @@
+[package]
+name = "sysml-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Zero-allocation #![no_std] compile-time SysML v2 MBSE contracts, ISO 26262 ASIL decomposition witnesses, and typed quantities for Ferrocene/embedded Rust"
+
+[features]
+default = []
+serde = ["dep:serde"]
+
+[dependencies]
+serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }

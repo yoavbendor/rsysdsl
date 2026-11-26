@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/sysml-core",
     "crates/sysml-ir",
     "crates/sysml-macros",
     "crates/sysml-dsl",
@@ -9,6 +10,7 @@ members = [
     "crates/sysml-cli",
     "examples/apollo11_model",
     "examples/apollo11_sim",
+    "examples/embedded_flight_controller",
 ]
 
 [workspace.package]
@@ -18,6 +20,7 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/yoavbendor/rsysdsl"
 
 [workspace.dependencies]
+sysml-core = { path = "crates/sysml-core" }
 sysml-ir = { path = "crates/sysml-ir" }
 sysml-macros = { path = "crates/sysml-macros" }
 sysml-dsl = { path = "crates/sysml-dsl" }

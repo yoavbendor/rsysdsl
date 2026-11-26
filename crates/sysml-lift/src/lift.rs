@@ -618,6 +618,7 @@ impl LifterCtx {
                     is_abstract: def.prefix.is_abstract,
                     doc: None,
                     rationale: None,
+                    safety_goal: None,
                     specializes: specs,
                     subject: None,
                     attributes: Vec::new(),

@@ -10,8 +10,8 @@ error[E0308]: mismatched types
    = note: expected reference `&Conjugated<StagingPort>`
               found reference `&StagingPort`
 note: function defined here
-  --> $WORKSPACE/crates/sysml-ir/src/traits.rs
+  --> $WORKSPACE/crates/sysml-core/src/traits.rs
    |
-   | pub fn assert_ports_connect<A, B>(_a: &A, _b: &B)
-   |        ^^^^^^^^^^^^^^^^^^^^
+   | pub const fn assert_ports_connect_core<A, B>(_a: &A, _b: &B)
+   |              ^^^^^^^^^^^^^^^^^^^^^^^^^
    = note: this error originates in the attribute macro `sysml::part` (in Nightly builds, run with -Z macro-backtrace for more info)

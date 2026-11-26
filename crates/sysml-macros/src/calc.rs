@@ -14,9 +14,9 @@ use syn::{Fields, FnArg, Item, ItemFn, ItemStruct, LocalInit, Meta, Pat, ReturnT
 
 use crate::expr_transpile::{calc_marker_path, transpile_expr, ExprContext};
 use crate::util::{
-    analyze_rust_type, extract_doc, extract_sysml_name_override, is_sysml_attr,
-    parse_multiplicity_str, quote_opt_mult, quote_opt_str, snake_to_camel, strip_sysml_attrs,
-    KvArgs,
+    analyze_rust_type, extract_doc, extract_sysml_name_override, has_no_std_mode, is_sysml_attr,
+    parse_multiplicity_str, quote_opt_mult, quote_opt_str, reflect_cfg, snake_to_camel,
+    strip_sysml_attrs, KvArgs,
 };
 
 pub fn expand_calc(args: TokenStream, item: Item) -> syn::Result<TokenStream> {
@@ -36,6 +36,8 @@ fn expand_calc_struct(args: TokenStream, mut st: ItemStruct) -> syn::Result<Toke
     } else {
         syn::parse2(args)?
     };
+    let is_no_std = has_no_std_mode(&kv, &st.attrs);
+    let rcfg = reflect_cfg(is_no_std);
     let doc = extract_doc(&st.attrs);
     let sysml_name = extract_sysml_name_override(&st.attrs)?
         .or_else(|| kv.get_str("name"))
@@ -53,7 +55,7 @@ fn expand_calc_struct(args: TokenStream, mut st: ItemStruct) -> syn::Result<Toke
             let lname = lkv.get_str("name").unwrap_or_default();
             let lexpr = lkv.get_str("expr").unwrap_or_default();
             local_tokens.push(quote! {
-                ::sysml_ir::CalcLocal {
+                ::sysml_dsl::ir::CalcLocal {
                     name: ::std::string::String::from(#lname),
                     expr: ::std::string::String::from(#lexpr),
                 }
@@ -98,7 +100,7 @@ fn expand_calc_struct(args: TokenStream, mut st: ItemStruct) -> syn::Result<Toke
             let subsets_tok = quote_opt_str(&subsets);
             let mult_tok = quote_opt_mult(&mult);
             param_tokens.push(quote! {
-                ::sysml_ir::CalcParam {
+                ::sysml_dsl::ir::CalcParam {
                     name: ::std::string::String::from(#pname),
                     type_name: ::std::string::String::from(#type_name),
                     subsets: #subsets_tok,
@@ -117,11 +119,14 @@ fn expand_calc_struct(args: TokenStream, mut st: ItemStruct) -> syn::Result<Toke
     Ok(quote! {
         #st
 
-        impl ::sysml_ir::SysmlCalc for #ident {
+        impl ::sysml_dsl::core_contracts::SysmlCalcCore for #ident {
             const SYSML_NAME: &'static str = #sysml_name;
+        }
 
-            fn calc_def() -> ::sysml_ir::CalcDef {
-                ::sysml_ir::CalcDef {
+        #rcfg
+        impl ::sysml_dsl::ir::SysmlCalc for #ident {
+            fn calc_def() -> ::sysml_dsl::ir::CalcDef {
+                ::sysml_dsl::ir::CalcDef {
                     name: ::std::string::String::from(#sysml_name),
                     doc: #doc_tok,
                     params: ::std::vec![#(#param_tokens),*],
@@ -142,6 +147,8 @@ fn expand_calc_fn(args: TokenStream, mut func: ItemFn) -> syn::Result<TokenStrea
     } else {
         syn::parse2(args)?
     };
+    let is_no_std = has_no_std_mode(&kv, &func.attrs);
+    let rcfg = reflect_cfg(is_no_std);
     if func.sig.asyncness.is_some() {
         return Err(syn::Error::new_spanned(
             func.sig.asyncness,
@@ -181,7 +188,7 @@ fn expand_calc_fn(args: TokenStream, mut func: ItemFn) -> syn::Result<TokenStrea
                 let (p_ty, _, _) = analyze_rust_type(&pt.ty);
                 bindings.insert(p_rust, p_sysml.clone());
                 param_tokens.push(quote! {
-                    ::sysml_ir::CalcParam {
+                    ::sysml_dsl::ir::CalcParam {
                         name: ::std::string::String::from(#p_sysml),
                         type_name: ::std::string::String::from(#p_ty),
                         subsets: ::std::option::Option::None,
@@ -208,8 +215,6 @@ fn expand_calc_fn(args: TokenStream, mut func: ItemFn) -> syn::Result<TokenStrea
         }
     };
 
-    // Walk every statement in the function body: only `let x = <expr>;` locals
-    // followed by a single trailing return expression `<expr>` are allowed!
     let mut local_tokens = Vec::new();
     let mut all_callees = Vec::new();
     let mut result_expr_sysml: Option<String> = None;
@@ -262,7 +267,7 @@ fn expand_calc_fn(args: TokenStream, mut func: ItemFn) -> syn::Result<TokenStrea
                 let expr_str = transpiled.sysml;
                 bindings.insert(l_rust, l_sysml.clone());
                 local_tokens.push(quote! {
-                    ::sysml_ir::CalcLocal {
+                    ::sysml_dsl::ir::CalcLocal {
                         name: ::std::string::String::from(#l_sysml),
                         expr: ::std::string::String::from(#expr_str),
                     }
@@ -292,12 +297,10 @@ fn expand_calc_fn(args: TokenStream, mut func: ItemFn) -> syn::Result<TokenStrea
         )
     })?;
 
-    // Compile-time check: every function called inside this #[sysml::calc] MUST itself
-    // be a modeled #[sysml::calc] function!
     let callee_checks = all_callees.iter().map(|callee| {
         let marker = calc_marker_path(callee);
         quote! {
-            ::sysml_ir::assert_calc::<#marker>();
+            ::sysml_dsl::core_contracts::assert_calc_core::<#marker>();
         }
     });
 
@@ -312,11 +315,14 @@ fn expand_calc_fn(args: TokenStream, mut func: ItemFn) -> syn::Result<TokenStrea
         #[allow(non_camel_case_types)]
         pub struct #marker_ident;
 
-        impl ::sysml_ir::SysmlCalc for #marker_ident {
+        impl ::sysml_dsl::core_contracts::SysmlCalcCore for #marker_ident {
             const SYSML_NAME: &'static str = #sysml_name;
+        }
 
-            fn calc_def() -> ::sysml_ir::CalcDef {
-                ::sysml_ir::CalcDef {
+        #rcfg
+        impl ::sysml_dsl::ir::SysmlCalc for #marker_ident {
+            fn calc_def() -> ::sysml_dsl::ir::CalcDef {
+                ::sysml_dsl::ir::CalcDef {
                     name: ::std::string::String::from(#sysml_name),
                     doc: #doc_tok,
                     params: ::std::vec![#(#param_tokens),*],

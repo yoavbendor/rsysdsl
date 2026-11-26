@@ -10,8 +10,9 @@ use crate::expr_transpile::{transpile_expr, ExprContext};
 use crate::part::ReqLinkArgs;
 use crate::util::{
     analyze_rust_type, build_attr_usage_tokens, build_auto_default_impl, extract_doc,
-    extract_refinements, extract_sysml_name_override, is_sysml_attr, path_to_sysml_string,
-    quote_opt_str, quote_vec_str, snake_to_camel, strip_sysml_attrs, KvArgs, PathList,
+    extract_refinements, extract_sysml_name_override, has_no_std_mode, is_sysml_attr,
+    path_to_sysml_string, quote_opt_str, quote_vec_str, reflect_cfg, snake_to_camel,
+    strip_sysml_attrs, KvArgs, PathList,
 };
 
 pub fn expand_requirement(args: TokenStream, mut item: ItemStruct) -> syn::Result<TokenStream> {
@@ -20,6 +21,8 @@ pub fn expand_requirement(args: TokenStream, mut item: ItemStruct) -> syn::Resul
     } else {
         syn::parse2(args)?
     };
+    let is_no_std = has_no_std_mode(&kv, &item.attrs);
+    let rcfg = reflect_cfg(is_no_std);
     let doc = extract_doc(&item.attrs);
     let is_abstract = kv.has_flag("abstract");
     let short_name = kv.get_str("id").or_else(|| kv.get_str("short_name"));
@@ -57,6 +60,10 @@ pub fn expand_requirement(args: TokenStream, mut item: ItemStruct) -> syn::Resul
     let mut assume_constraints = Vec::new();
     let mut subject: Option<(String, String)> = None;
     let mut subject_check = quote!();
+    let mut safety_goal_impl = quote!();
+    let mut safety_goal_meta_tok = quote!(::std::option::Option::None);
+
+    let ident = item.ident.clone();
 
     for attr in &item.attrs {
         if is_sysml_attr(attr, "specializes") {
@@ -65,16 +72,50 @@ pub fn expand_requirement(args: TokenStream, mut item: ItemStruct) -> syn::Resul
         } else if is_sysml_attr(attr, "rationale") {
             let s: LitStr = attr.parse_args()?;
             rationale = Some(s.value());
+        } else if is_sysml_attr(attr, "safety_goal") {
+            let sg_kv: KvArgs = attr.parse_args()?;
+            let asil_path = sg_kv.get_path("asil").ok_or_else(|| {
+                syn::Error::new_spanned(
+                    attr,
+                    "expected `asil = AsilD` (or AsilC/AsilB/AsilA/Qm) in #[sysml::safety_goal(...)]",
+                )
+            })?;
+            let safe_state = sg_kv.get_str("safe_state").ok_or_else(|| {
+                syn::Error::new_spanned(
+                    attr,
+                    "expected `safe_state = \"...\"` in #[sysml::safety_goal(...)]",
+                )
+            })?;
+            let ftti_ms: u32 = sg_kv
+                .get_str("ftti_ms")
+                .map(|s| s.parse::<u32>())
+                .transpose()
+                .map_err(|_| {
+                    syn::Error::new_spanned(attr, "`ftti_ms` must be a non-negative integer in #[sysml::safety_goal(...)]")
+                })?
+                .unwrap_or(0);
+            safety_goal_impl = quote! {
+                impl ::sysml_dsl::core_contracts::SafetyGoal for #ident {
+                    type Asil = #asil_path;
+                    const SAFE_STATE: &'static str = #safe_state;
+                    const FTTI_MS: u32 = #ftti_ms;
+                }
+            };
+            safety_goal_meta_tok = quote! {
+                ::std::option::Option::Some(::sysml_dsl::ir::SafetyGoalMeta {
+                    asil: ::std::string::String::from(<#asil_path as ::sysml_dsl::core_contracts::AsilLevel>::LABEL),
+                    safe_state: ::std::string::String::from(#safe_state),
+                    ftti_ms: #ftti_ms,
+                })
+            };
         } else if is_sysml_attr(attr, "require_constraint") {
             let expr: Expr = attr.parse_args()?;
             if let Expr::Lit(ExprLit {
                 lit: Lit::Str(s), ..
             }) = expr
             {
-                // Raw KerML string literal (used by `sysml-lift` for lifted constraints)
                 require_constraints.push(s.value());
             } else {
-                // Native Rust expression: 1:1 transpiled to OMG SysML v2 + compiled into `evaluate(&self)`!
                 let ctx = ExprContext::Requirement { fields: &field_map };
                 let transpiled = transpile_expr(&expr, &ctx)?;
                 require_constraints.push(transpiled.sysml);
@@ -97,7 +138,7 @@ pub fn expand_requirement(args: TokenStream, mut item: ItemStruct) -> syn::Resul
             let sname = skv.get_str("name").unwrap_or_else(|| "subject".to_string());
             if let Some(sp) = skv.get_path("ty") {
                 let stype = path_to_sysml_string(&sp);
-                subject_check = quote! { const _: fn() = || { ::sysml_ir::assert_part::<#sp>(); }; };
+                subject_check = quote! { const _: fn() = || { ::sysml_dsl::core_contracts::assert_part_core::<#sp>(); }; };
                 subject = Some((sname, stype));
             } else if let Some(st) = skv.get_str("ty") {
                 subject = Some((sname, st));
@@ -120,24 +161,23 @@ pub fn expand_requirement(args: TokenStream, mut item: ItemStruct) -> syn::Resul
 
     let ref_tokens = refinements.iter().map(|(c, s)| {
         quote! {
-            ::sysml_ir::RefinementDependency {
+            ::sysml_dsl::ir::RefinementDependency {
                 client: ::std::string::String::from(#c),
                 supplier: ::std::string::String::from(#s),
             }
         }
     });
 
-    let ident = &item.ident;
     let spec_impls = specializes_paths.iter().map(|base| {
         quote! {
-            impl ::sysml_ir::Specializes<#base> for #ident {}
-            const _: fn() = || { ::sysml_ir::assert_requirement::<#base>(); };
+            impl ::sysml_dsl::core_contracts::Specializes<#base> for #ident {}
+            const _: fn() = || { ::sysml_dsl::core_contracts::assert_requirement_core::<#base>(); };
         }
     });
 
     let eval_impl = if !require_eval_exprs.is_empty() {
         quote! {
-            impl ::sysml_ir::EvaluableRequirement for #ident {
+            impl ::sysml_dsl::core_contracts::EvaluableRequirement for #ident {
                 fn evaluate(&self) -> bool {
                     true #(&& (#require_eval_exprs))*
                 }
@@ -156,7 +196,7 @@ pub fn expand_requirement(args: TokenStream, mut item: ItemStruct) -> syn::Resul
     let ass_c_tok = quote_vec_str(&assume_constraints);
     let subj_tok = match subject {
         Some((sn, st)) => quote! {
-            ::std::option::Option::Some(::sysml_ir::SubjectDecl {
+            ::std::option::Option::Some(::sysml_dsl::ir::SubjectDecl {
                 name: ::std::string::String::from(#sn),
                 type_name: ::std::string::String::from(#st),
             })
@@ -169,17 +209,21 @@ pub fn expand_requirement(args: TokenStream, mut item: ItemStruct) -> syn::Resul
 
         #auto_default_impl
 
-        impl ::sysml_ir::SysmlRequirement for #ident {
+        impl ::sysml_dsl::core_contracts::SysmlRequirementCore for #ident {
             const REQ_ID: &'static str = #req_id_const;
             const SYSML_NAME: &'static str = #sysml_name;
+        }
 
-            fn requirement_def() -> ::sysml_ir::RequirementDef {
-                ::sysml_ir::RequirementDef {
+        #rcfg
+        impl ::sysml_dsl::ir::SysmlRequirement for #ident {
+            fn requirement_def() -> ::sysml_dsl::ir::RequirementDef {
+                ::sysml_dsl::ir::RequirementDef {
                     short_name: #short_tok,
                     name: ::std::string::String::from(#sysml_name),
                     is_abstract: #is_abstract,
                     doc: #doc_tok,
                     rationale: #rat_tok,
+                    safety_goal: #safety_goal_meta_tok,
                     specializes: #spec_tok,
                     subject: #subj_tok,
                     attributes: ::std::vec![#(#attr_tokens),*],
@@ -190,6 +234,7 @@ pub fn expand_requirement(args: TokenStream, mut item: ItemStruct) -> syn::Resul
             }
         }
 
+        #safety_goal_impl
         #eval_impl
         #subject_check
         #(#spec_impls)*
@@ -203,6 +248,8 @@ pub fn expand_specification(args: TokenStream, mut item: ItemStruct) -> syn::Res
     } else {
         syn::parse2(args)?
     };
+    let is_no_std = has_no_std_mode(&kv, &item.attrs);
+    let rcfg = reflect_cfg(is_no_std);
     let doc = extract_doc(&item.attrs);
     let sysml_name = extract_sysml_name_override(&item.attrs)?
         .or_else(|| kv.get_str("name"))
@@ -219,7 +266,7 @@ pub fn expand_specification(args: TokenStream, mut item: ItemStruct) -> syn::Res
             let sname = skv.get_str("name").unwrap_or_else(|| "subject".to_string());
             if let Some(sp) = skv.get_path("ty") {
                 let stype = path_to_sysml_string(&sp);
-                subject_check = quote! { const _: fn() = || { ::sysml_ir::assert_part::<#sp>(); }; };
+                subject_check = quote! { const _: fn() = || { ::sysml_dsl::core_contracts::assert_part_core::<#sp>(); }; };
                 subject = Some((sname, stype));
             } else if let Some(st) = skv.get_str("ty") {
                 subject = Some((sname, st));
@@ -253,9 +300,9 @@ pub fn expand_specification(args: TokenStream, mut item: ItemStruct) -> syn::Res
                 .unwrap_or_else(|| snake_to_camel(&fname_rust));
             let (ty_name, _, _) = analyze_rust_type(&field.ty);
             let fty = &field.ty;
-            field_checks.push(quote! { ::sysml_ir::assert_requirement::<#fty>(); });
+            field_checks.push(quote! { ::sysml_dsl::core_contracts::assert_requirement_core::<#fty>(); });
             nested_tokens.push(quote! {
-                ::sysml_ir::RequirementUsage {
+                ::sysml_dsl::ir::RequirementUsage {
                     short_name: ::std::option::Option::None,
                     name: ::std::string::String::from(#fname_sysml),
                     type_name: ::std::option::Option::Some(::std::string::String::from(#ty_name)),
@@ -281,11 +328,11 @@ pub fn expand_specification(args: TokenStream, mut item: ItemStruct) -> syn::Res
         let req_expr = if let Some(raw) = &s.raw_req_name {
             quote!(::std::string::String::from(#raw))
         } else {
-            quote!(::std::string::String::from(<#rpath as ::sysml_ir::SysmlRequirement>::SYSML_NAME))
+            quote!(::std::string::String::from(<#rpath as ::sysml_dsl::core_contracts::SysmlRequirementCore>::SYSML_NAME))
         };
         let is_typed = s.raw_req_name.is_none();
         sat_tokens.push(quote! {
-            ::sysml_ir::SatisfyStmt {
+            ::sysml_dsl::ir::SatisfyStmt {
                 asserted: #asserted,
                 is_typed: #is_typed,
                 requirement: #req_expr,
@@ -295,7 +342,7 @@ pub fn expand_specification(args: TokenStream, mut item: ItemStruct) -> syn::Res
         let id_check = if let Some(exp_id) = &s.expected_id {
             quote! {
                 const _: () = {
-                    if !::sysml_ir::const_str_eq(<#rpath as ::sysml_ir::SysmlRequirement>::REQ_ID, #exp_id) {
+                    if !::sysml_dsl::core_contracts::const_str_eq(<#rpath as ::sysml_dsl::core_contracts::SysmlRequirementCore>::REQ_ID, #exp_id) {
                         panic!("SysML requirement ID mismatch in #[sysml::satisfy]");
                     }
                 };
@@ -304,7 +351,7 @@ pub fn expand_specification(args: TokenStream, mut item: ItemStruct) -> syn::Res
             quote!()
         };
         sat_checks.push(quote! {
-            const _: fn() = || { ::sysml_ir::assert_requirement::<#rpath>(); };
+            const _: fn() = || { ::sysml_dsl::core_contracts::assert_requirement_core::<#rpath>(); };
             #id_check
         });
     }
@@ -315,13 +362,13 @@ pub fn expand_specification(args: TokenStream, mut item: ItemStruct) -> syn::Res
         let rpath = &v.req_path;
         let by_tok = quote_opt_str(&v.by);
         ver_tokens.push(quote! {
-            ::sysml_ir::VerifyStmt {
-                requirement: ::std::string::String::from(<#rpath as ::sysml_ir::SysmlRequirement>::SYSML_NAME),
+            ::sysml_dsl::ir::VerifyStmt {
+                requirement: ::std::string::String::from(<#rpath as ::sysml_dsl::core_contracts::SysmlRequirementCore>::SYSML_NAME),
                 by: #by_tok,
             }
         });
         ver_checks.push(quote! {
-            const _: fn() = || { ::sysml_ir::assert_requirement::<#rpath>(); };
+            const _: fn() = || { ::sysml_dsl::core_contracts::assert_requirement_core::<#rpath>(); };
         });
     }
 
@@ -330,7 +377,7 @@ pub fn expand_specification(args: TokenStream, mut item: ItemStruct) -> syn::Res
     let doc_tok = quote_opt_str(&doc);
     let subj_tok = match subject {
         Some((sn, st)) => quote! {
-            ::std::option::Option::Some(::sysml_ir::SubjectDecl {
+            ::std::option::Option::Some(::sysml_dsl::ir::SubjectDecl {
                 name: ::std::string::String::from(#sn),
                 type_name: ::std::string::String::from(#st),
             })
@@ -341,9 +388,10 @@ pub fn expand_specification(args: TokenStream, mut item: ItemStruct) -> syn::Res
     Ok(quote! {
         #item
 
+        #rcfg
         impl #ident {
-            pub fn requirement_usage() -> ::sysml_ir::RequirementUsage {
-                ::sysml_ir::RequirementUsage {
+            pub fn requirement_usage() -> ::sysml_dsl::ir::RequirementUsage {
+                ::sysml_dsl::ir::RequirementUsage {
                     short_name: ::std::option::Option::None,
                     name: ::std::string::String::from(#sysml_name),
                     type_name: ::std::option::Option::None,
@@ -373,6 +421,8 @@ pub fn expand_verification(args: TokenStream, mut item: ItemStruct) -> syn::Resu
     } else {
         syn::parse2(args)?
     };
+    let is_no_std = has_no_std_mode(&kv, &item.attrs);
+    let rcfg = reflect_cfg(is_no_std);
     let doc = extract_doc(&item.attrs);
     let sysml_name = extract_sysml_name_override(&item.attrs)?
         .or_else(|| kv.get_str("name"))
@@ -403,15 +453,15 @@ pub fn expand_verification(args: TokenStream, mut item: ItemStruct) -> syn::Resu
         let rpath = &v.req_path;
         let by_tok = quote_opt_str(&v.by);
         ver_tokens.push(quote! {
-            ::sysml_ir::VerifyStmt {
-                requirement: ::std::string::String::from(<#rpath as ::sysml_ir::SysmlRequirement>::SYSML_NAME),
+            ::sysml_dsl::ir::VerifyStmt {
+                requirement: ::std::string::String::from(<#rpath as ::sysml_dsl::core_contracts::SysmlRequirementCore>::SYSML_NAME),
                 by: #by_tok,
             }
         });
         let id_check = if let Some(exp_id) = &v.expected_id {
             quote! {
                 const _: () = {
-                    if !::sysml_ir::const_str_eq(<#rpath as ::sysml_ir::SysmlRequirement>::REQ_ID, #exp_id) {
+                    if !::sysml_dsl::core_contracts::const_str_eq(<#rpath as ::sysml_dsl::core_contracts::SysmlRequirementCore>::REQ_ID, #exp_id) {
                         panic!("SysML requirement ID mismatch in #[sysml::verify]");
                     }
                 };
@@ -420,8 +470,8 @@ pub fn expand_verification(args: TokenStream, mut item: ItemStruct) -> syn::Resu
             quote!()
         };
         ver_impls.push(quote! {
-            impl ::sysml_ir::Verifies<#rpath> for #ident {}
-            const _: fn() = || { ::sysml_ir::assert_requirement::<#rpath>(); };
+            impl ::sysml_dsl::core_contracts::Verifies<#rpath> for #ident {}
+            const _: fn() = || { ::sysml_dsl::core_contracts::assert_requirement_core::<#rpath>(); };
             #id_check
         });
     }
@@ -430,7 +480,7 @@ pub fn expand_verification(args: TokenStream, mut item: ItemStruct) -> syn::Resu
     let doc_tok = quote_opt_str(&doc);
     let subj_tok = match subject {
         Some((sn, st)) => quote! {
-            ::std::option::Option::Some(::sysml_ir::SubjectDecl {
+            ::std::option::Option::Some(::sysml_dsl::ir::SubjectDecl {
                 name: ::std::string::String::from(#sn),
                 type_name: ::std::string::String::from(#st),
             })
@@ -441,9 +491,10 @@ pub fn expand_verification(args: TokenStream, mut item: ItemStruct) -> syn::Resu
     Ok(quote! {
         #item
 
+        #rcfg
         impl #ident {
-            pub fn verification_def() -> ::sysml_ir::VerificationDef {
-                ::sysml_ir::VerificationDef {
+            pub fn verification_def() -> ::sysml_dsl::ir::VerificationDef {
+                ::sysml_dsl::ir::VerificationDef {
                     name: ::std::string::String::from(#sysml_name),
                     doc: #doc_tok,
                     subject: #subj_tok,

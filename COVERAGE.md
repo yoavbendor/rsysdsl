@@ -89,19 +89,27 @@ Apollo 11 .sysml (13 files, 0 unsupported)
 | `portion:Timeslice` | 14 | Sprint 5 — 4D temporal execution timelines (`timeslice` / `snapshot` in `Apollo11MissionExecutionPackage`). |
 | `top_usage:View` | 1 | Sprint 5 — Diagram rendering `view` definitions (`CoSMAViewsPackage`). |
 
-## Next Milestones
+## Completed Milestones (Sprints 1–4)
 
-1. **ISO 26262 / ARP4761 Safety-Critical Extensions:**
-   - Typed safety-goal metadata macros (`#[sysml::safety_goal(asil = ASIL_D)]`, `#[sysml::fmea(failure_mode = ..., severity = 10, detection = ...)]`) emitting standard SysML v2 `#SafetyGoal` / `@FMEA` metadata usages.
-   - Compile-time ASIL decomposition checking (`ASIL_D -> ASIL_B(D) + ASIL_B(D)` with independence witnesses via Rust traits).
-   - Fault-tree / cut-set extraction directly from `#[sysml::state]` fault-mode transitions and `failureRate` attributes.
-2. **Ferrocene & `no_std` Embedded Compatibility:**
-   - Split `sysml-ir` into `sysml-core-traits` (`#![no_std]`, zero-alloc marker traits: `SysmlPart`, `SysmlPort`, `Conjugated`, `PortConnectable`, `Specializes`, `Performs`, `Satisfies`) vs. `sysml-ir` (`alloc`/`std` IR reflection behind `#[cfg(feature = "reflect")]`).
-   - Allows flight/automotive Rust firmware compiled with **Ferrocene** on bare-metal targets to carry the exact same compile-time SysML v2 port/requirement/state contracts with zero runtime overhead, while host builds (`--features reflect`) emit `.sysml` and run verification reports.
-3. **Full Apollo 11 Corpus Expansion (Remaining 273 Constructs):**
-   - Lift `calc def` -> typed Rust functions (`#[sysml::calc] fn rocket_equation(...) -> Quantity<f64>`) so parametric calculations both emit SysML v2 `calc def` and execute natively in Rust.
-   - Lift `timeslice` / `snapshot` timelines -> executable scenario test harnesses (`Apollo11MissionExecutionPackage`).
-   - Lift package-level `#derivation` dependencies and nested `part` usage members (`StakeholderPackage`, `ProgramPackage`, `CapabilitiesPackage`).
-4. **Dual-Oracle CI & SMT Integration:**
+1. **Anti-Semantic-Leakage 3-Tier Architecture (Sprint 1 — Completed):**
+   - `#[sysml::package]` rejects raw `fn`/`impl`/unannotated structs at `rustc` compile time; auto-generated `Default` from `#[sysml::attr(default = ...)]`; single-source compiled `#[sysml::require_constraint(...)]`, guarded `#[sysml::transition(..., guard = ...)]`, and pure `#[sysml::calc] fn`; one-way `apollo11-sim -> apollo11-model` crate split.
+2. **ASPICE Traceability Matrix & 0-Warning OMG Stdlib Validation (Sprint 2 — Completed):**
+   - `rsysdsl trace-matrix` (JSON/Markdown/CSV over Rust models or raw `.sysml` files) and `rsysdsl audit --stdlib --strict` validating with 0 errors and 0 warnings against `sysml.library`.
+3. **Apollo 11 Corpus Expansion to 98.5% (Sprint 3 — Completed):**
+   - Reduced unsupported constructs from 273 -> 32 (**25 / 28 files at 0 unsupported**, **2,693 / 2,693 semantic facts matched**), adding `#[sysml::calc]`, `#[sysml::analysis]`, `#refinement` dependencies, keyword-less feature bindings, and expanding the compiled Gate 3 slice to 13 packages.
+4. **ISO 26262 Safety Contracts & Ferrocene `#![no_std]` Compatibility (Sprint 4 — Completed):**
+   - Zero-dependency `#![no_std]` [`crates/sysml-core`](crates/sysml-core) with compile-time ISO 26262-9 Table 1 ASIL decomposition (`AsilDecomposable<L, R>`) and freedom-from-interference independence witnesses (`IndependentFrom<Other>`).
+   - `#[sysml::safety_goal]`, `#[sysml::fmea]`, `#[sysml::independent]`, `#[sysml::asil_decompose]`, and `iso26262_metadata_package()` emitting `@SafetyGoal`, `@FMEA`, and `@AsilDecomposition` with 0-error / 0-warning OMG stdlib validation.
+   - Ferrocene-ready `#![no_std]` [`examples/embedded_flight_controller`](examples/embedded_flight_controller) (`cargo check -p embedded-flight-controller --no-default-features` pulls zero `std`/`alloc`/`serde` target dependencies).
+
+## Next Milestones (Sprint 5+)
+
+1. **Remaining 32 Apollo 11 Constructs (98.5% -> 100%):**
+   - Lift `timeslice` / `snapshot` 4D timelines -> executable scenario test harnesses (`Apollo11MissionExecutionPackage`, 14 constructs).
+   - Lift top-level custom ISQ quantity & unit algebra definitions (`CoSMAQuantitiesAndUnitsPackage`, 17 constructs) and diagram `view` definitions (`CoSMAViewsPackage`, 1 construct).
+2. **Fault-Tree / Cut-Set Extraction & Dual-Oracle SMT Integration:**
+   - Extract minimal cut sets directly from `#[sysml::fmea]` + `#[sysml::state]` fault-mode transitions.
    - Integrate Open-MBEE's `sysmlv2-solve` (Z3) alongside Rust property-based testing (`proptest`) to both prove and fuzz `require constraint { ... }` predicates.
    - Optional `nomograph-ai/sysml` knowledge-graph export for multi-hop agent queries over Rust-authored systems.
+3. **LLM-Guided Authoring & Corporate Workflow (`AGENTS.md` + `starter_model`):**
+   - Dedicated `AGENTS.md` guide and starter scaffold enabling cost-aware coding agents (Cursor-CLI) to draft systems from diagrams/specs and view `.sysml` in VS Code SysML v2 extensions.

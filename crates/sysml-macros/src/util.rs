@@ -290,7 +290,7 @@ pub fn quote_opt_mult(opt: &Option<(Option<String>, String)>) -> TokenStream {
     match opt {
         Some((lower, upper)) => {
             let l = quote_opt_str(lower);
-            quote!(::std::option::Option::Some(::sysml_ir::Multiplicity {
+            quote!(::std::option::Option::Some(::sysml_dsl::ir::Multiplicity {
                 lower: #l,
                 upper: ::std::string::String::from(#upper),
             }))
@@ -342,11 +342,31 @@ pub fn strip_sysml_attrs(attrs: Vec<Attribute>) -> Vec<Attribute> {
         "assert_constraint",
         "local",
         "return_expr",
+        "safety_goal",
+        "fmea",
+        "independent",
+        "asil_decompose",
+        "no_std_reflect",
     ];
     attrs
         .into_iter()
         .filter(|a| !HELPER_NAMES.iter().any(|h| is_sysml_attr(a, h)))
         .collect()
+}
+
+/// Returns `true` when an item or its enclosing `#[sysml::package(no_std)]` opted into
+/// `#![no_std]` Ferrocene-compatible compilation with `#[cfg(feature = "reflect")]` IR gating.
+pub fn has_no_std_mode(kv: &KvArgs, attrs: &[Attribute]) -> bool {
+    kv.has_flag("no_std") || attrs.iter().any(|a| is_sysml_attr(a, "no_std_reflect"))
+}
+
+/// Returns `#[cfg(feature = "reflect")]` in `no_std` mode, or empty tokens on standard host builds.
+pub fn reflect_cfg(is_no_std: bool) -> TokenStream {
+    if is_no_std {
+        quote!(#[cfg(feature = "reflect")])
+    } else {
+        quote!()
+    }
 }
 
 /// Parse `#[sysml::comment("...")]` or `#[sysml::comment(name = "...", body = "...")]`.
@@ -439,14 +459,14 @@ pub fn build_attr_usage_tokens(
         .or(rust_mult);
 
     let value_kind = match kv.get_str("value_kind").as_deref() {
-        Some("initial") => quote!(::sysml_ir::ValueKind::Initial),
-        Some("default") => quote!(::sysml_ir::ValueKind::Default),
-        Some("default_initial") => quote!(::sysml_ir::ValueKind::DefaultInitial),
+        Some("initial") => quote!(::sysml_dsl::ir::ValueKind::Initial),
+        Some("default") => quote!(::sysml_dsl::ir::ValueKind::Default),
+        Some("default_initial") => quote!(::sysml_dsl::ir::ValueKind::DefaultInitial),
         _ => {
             if kv.get_str("default").is_some() {
-                quote!(::sysml_ir::ValueKind::Default)
+                quote!(::sysml_dsl::ir::ValueKind::Default)
             } else {
-                quote!(::sysml_ir::ValueKind::Bound)
+                quote!(::sysml_dsl::ir::ValueKind::Bound)
             }
         }
     };
@@ -466,7 +486,7 @@ pub fn build_attr_usage_tokens(
     let unit_tok = quote_opt_str(&unit);
 
     Ok(quote! {
-        ::sysml_ir::AttributeUsage {
+        ::sysml_dsl::ir::AttributeUsage {
             name: #name_tok,
             type_name: #ty_tok,
             subsets: #subsets_tok,
@@ -503,8 +523,7 @@ pub fn has_derive_default(attrs: &[Attribute]) -> bool {
 /// Auto-generates `impl Default for #ident` from `#[sysml::attr(value = "...", default = "...", unit = "...")]`
 /// metadata whenever `#[derive(Default)]` is NOT explicitly present on a named-field struct.
 ///
-/// This eliminates hand-written `impl Default` blocks inside `#[sysml::package]` modules
-/// and guarantees numeric thresholds / physical parameters cannot drift from emitted `.sysml`.
+/// Works in both `std` and `#![no_std]` crates.
 pub fn build_auto_default_impl(item: &syn::ItemStruct) -> syn::Result<TokenStream> {
     if has_derive_default(&item.attrs) {
         return Ok(quote!());
@@ -533,33 +552,35 @@ pub fn build_auto_default_impl(item: &syn::ItemStruct) -> syn::Result<TokenStrea
             if is_quantity_type(&field.ty) {
                 if let Ok(num) = trimmed.parse::<f64>() {
                     has_any_literal_default = true;
-                    quote!(::sysml_ir::Quantity::new(#num, #unit))
+                    quote!(::sysml_dsl::core_contracts::Quantity::new(#num, #unit))
                 } else {
-                    quote!(::std::default::Default::default())
+                    quote!(::core::default::Default::default())
                 }
             } else if is_prim_ident(&field.ty, "f64") || is_prim_ident(&field.ty, "f32") {
                 if let Ok(num) = trimmed.parse::<f64>() {
                     has_any_literal_default = true;
                     quote!(#num as _)
                 } else {
-                    quote!(::std::default::Default::default())
+                    quote!(::core::default::Default::default())
                 }
             } else if is_prim_ident(&field.ty, "i64")
                 || is_prim_ident(&field.ty, "i32")
+                || is_prim_ident(&field.ty, "u32")
+                || is_prim_ident(&field.ty, "u64")
                 || is_prim_ident(&field.ty, "usize")
             {
                 if let Ok(num) = trimmed.parse::<i64>() {
                     has_any_literal_default = true;
                     quote!(#num as _)
                 } else {
-                    quote!(::std::default::Default::default())
+                    quote!(::core::default::Default::default())
                 }
             } else if is_prim_ident(&field.ty, "bool") {
                 if let Ok(b) = trimmed.parse::<bool>() {
                     has_any_literal_default = true;
                     quote!(#b)
                 } else {
-                    quote!(::std::default::Default::default())
+                    quote!(::core::default::Default::default())
                 }
             } else if is_prim_ident(&field.ty, "String") {
                 has_any_literal_default = true;
@@ -569,27 +590,22 @@ pub fn build_auto_default_impl(item: &syn::ItemStruct) -> syn::Result<TokenStrea
                     .unwrap_or(trimmed);
                 quote!(::std::string::String::from(#unquoted))
             } else {
-                quote!(::std::default::Default::default())
+                quote!(::core::default::Default::default())
             }
         } else if is_quantity_type(&field.ty) && !unit.is_empty() {
             has_any_literal_default = true;
-            quote!(::sysml_ir::Quantity::new(0.0, #unit))
+            quote!(::sysml_dsl::core_contracts::Quantity::new(0.0, #unit))
         } else {
-            quote!(::std::default::Default::default())
+            quote!(::core::default::Default::default())
         };
 
         field_inits.push(quote!(#fname: #init_expr));
     }
 
-    if !has_any_literal_default {
-        // Still generate `impl Default` if the user omitted `#[derive(Default)]` on a
-        // declarative struct whose fields are all Default-constructible (e.g. composed assemblies
-        // like `ApolloLunarModule` or `ApolloSpacecraft` whose subparts have auto-generated Default).
-    }
-
+    let _ = has_any_literal_default;
     let ident = &item.ident;
     Ok(quote! {
-        impl ::std::default::Default for #ident {
+        impl ::core::default::Default for #ident {
             fn default() -> Self {
                 Self {
                     #(#field_inits),*
