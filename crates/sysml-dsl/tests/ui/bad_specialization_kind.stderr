@@ -1,0 +1,22 @@
+error[E0277]: the trait bound `UmbilicalPort: SysmlPart` is not satisfied
+  --> tests/ui/bad_specialization_kind.rs:16:22
+   |
+16 | #[sysml::specializes(UmbilicalPort)]
+   |                      ^^^^^^^^^^^^^ unsatisfied trait bound
+   |
+help: the trait `SysmlPart` is not implemented for `UmbilicalPort`
+  --> tests/ui/bad_specialization_kind.rs:9:1
+   |
+ 9 | pub struct UmbilicalPort {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^
+help: the trait `SysmlPart` is implemented for `BrokenPart`
+  --> tests/ui/bad_specialization_kind.rs:15:1
+   |
+15 | #[sysml::part]
+   | ^^^^^^^^^^^^^^
+note: required by a bound in `assert_part`
+  --> $WORKSPACE/crates/sysml-ir/src/traits.rs
+   |
+   | pub fn assert_part<T: SysmlPart>() {}
+   |                       ^^^^^^^^^ required by this bound in `assert_part`
+   = note: this error originates in the attribute macro `sysml::part` (in Nightly builds, run with -Z macro-backtrace for more info)

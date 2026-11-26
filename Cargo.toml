@@ -1,0 +1,38 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/sysml-ir",
+    "crates/sysml-macros",
+    "crates/sysml-dsl",
+    "crates/sysml-emit",
+    "crates/sysml-lift",
+    "crates/sysml-cli",
+    "examples/apollo11_slice",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/yoavbendor/rsysdsl"
+
+[workspace.dependencies]
+sysml-ir = { path = "crates/sysml-ir" }
+sysml-macros = { path = "crates/sysml-macros" }
+sysml-dsl = { path = "crates/sysml-dsl" }
+sysml-emit = { path = "crates/sysml-emit" }
+sysml-lift = { path = "crates/sysml-lift" }
+apollo11-slice = { path = "examples/apollo11_slice" }
+
+# Primary SysML v2 parser & validation oracle (Open-MBEE/sysml-toolkit, pinned rev)
+sysmlv2-syntax = { git = "https://github.com/Open-MBEE/sysml-toolkit", rev = "c8d256bdf6638d3f867e61850df332da43a0f9e9", features = ["serde"] }
+sysmlv2-model = { git = "https://github.com/Open-MBEE/sysml-toolkit", rev = "c8d256bdf6638d3f867e61850df332da43a0f9e9" }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+syn = { version = "2", features = ["full", "extra-traits"] }
+quote = "1"
+proc-macro2 = "1"
+clap = { version = "4", features = ["derive"] }
+trybuild = "1"
+tempfile = "3"

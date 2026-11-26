@@ -1,0 +1,20 @@
+[package]
+name = "sysml-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Agent-first CLI for bidirectional Rust <-> SysML v2 emission, lifting, round-trip checks, and executable verification"
+
+[[bin]]
+name = "rsysdsl"
+path = "src/main.rs"
+
+[dependencies]
+sysml-ir = { workspace = true }
+sysml-emit = { workspace = true }
+sysml-lift = { workspace = true }
+apollo11-slice = { workspace = true }
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
