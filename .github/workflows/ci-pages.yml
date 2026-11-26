@@ -1,0 +1,80 @@
+name: CI & GitHub Pages Showcase
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  ci-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies and build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check workspace and test targets
+        run: cargo check --workspace --tests
+
+      - name: Check #![no_std] Ferrocene embedded flight controller
+        run: cargo check -p embedded-flight-controller --no-default-features
+
+      - name: Run full workspace test suite
+        run: cargo test --workspace
+
+      - name: Build static GitHub Pages showcase
+        run: ./scripts/build-pages-site.sh _site
+
+      - name: Install Playwright Chromium and smoke-test Pages site
+        run: |
+          python3 -m pip install --quiet playwright
+          python3 -m playwright install chromium
+          python3 scripts/smoke-test-pages.py _site
+
+      - name: Upload showcase artifact for review
+        uses: actions/upload-artifact@v4
+        with:
+          name: rsysdsl-pages-site
+          path: _site
+          retention-days: 14
+
+      - name: Configure GitHub Pages
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        uses: actions/configure-pages@v5
+
+      - name: Upload GitHub Pages artifact
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy-pages:
+    needs: ci-and-build
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
