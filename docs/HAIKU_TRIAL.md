@@ -1,5 +1,15 @@
 # Haiku-Class Authoring Trial (S5, baseline)
 
+## Running an authoring trial (canonical rules, from S6b)
+
+Every trial prompt must include these rules, and every trial report must use these metrics:
+
+1. **No contamination.** The agent must NOT read `docs/HAIKU_TRIAL.md`, `docs/DEVELOPMENT_PLAN.md`, or any other trial report or plan (trial 2, greenhouse r2, read this file and changed its design because of the baseline findings). It may read `AGENTS.md`, `.agents/skills/`, `crates/`, `examples/` and the spec it was given.
+2. **Same setup each time:** the same specs and prompt as the previous trial, a standalone crate outside the repo (`rsysdsl new <name> --no-workspace --dir <path>`), the installed `rsysdsl` CLI, a soft cap of 15 cargo/`rsysdsl` invocations, and a log of every invocation with its exit status.
+3. **Report three numbers per run, separately:** total invocations; **failing invocations** (non-zero exit, or a test/audit/lint failure); and **verify rounds** (full `cargo test` + emit + `audit --strict` + `lint --strict` passes). Total invocations alone mostly measures diligence (trial 2's highest counts were voluntary re-verification); failing invocations measure friction.
+4. Exclude `--help` and the `rsysdsl new` call from counts. Record runs cut off by usage limits as excluded, not as failures.
+5. Label which stage(s) the trial measures; if two changes land together, say the result is confounded.
+
 **Question:** can a Haiku-class model author a well-structured, passing `rsysdsl` model from a short written spec, using only `AGENTS.md` and the repo docs?
 
 **Setup (November 2026, commit after S0):** three independent Haiku agents, one spec each (a few subsystems, 3 requirements with source references, a mode list). Each worked in a standalone crate outside the repo, was told to follow `AGENTS.md` phases 1–3 until `audit --stdlib --strict` and `lint --strict` were clean, with a soft cap of 15 cargo/CLI invocations, and logged every invocation.
