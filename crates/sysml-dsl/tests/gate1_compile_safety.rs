@@ -9,6 +9,8 @@
 //! - Hidden imperative `fn`, raw `impl`, or unannotated `struct` inside `#[sysml::package]` fail `rustc`.
 //! - Unknown fields in `#[sysml::require_constraint(...)]` or `#[sysml::transition(..., guard = ...)]` fail `rustc`.
 //! - Calling an opaque unmodeled Rust function inside `#[sysml::calc]` fails `rustc`.
+//! - Unknown or OMG-unresolvable `#[sysml::attr(unit = ...)]` symbols fail `rustc`.
+//! - Dimensionally inconsistent constraints and transition guards (e.g. `K` vs `W`) fail `rustc`.
 
 #[test]
 fn gate1_compile_time_safety() {
@@ -35,4 +37,9 @@ fn gate1_compile_time_safety() {
     t.pass("tests/ui/valid_hierarchy.rs");
     t.compile_fail("tests/ui/bad_redefines_field.rs");
     t.compile_fail("tests/ui/bad_variation_member.rs");
+    // S1: compile-time unit & dimension safety
+    t.compile_fail("tests/ui/bad_unit_symbol.rs");
+    t.compile_fail("tests/ui/bad_unit_not_in_omg.rs");
+    t.compile_fail("tests/ui/bad_constraint_dimension.rs");
+    t.compile_fail("tests/ui/bad_guard_dimension.rs");
 }

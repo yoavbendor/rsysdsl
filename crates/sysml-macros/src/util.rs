@@ -218,6 +218,8 @@ pub struct KvArgs {
     pub flags: Vec<String>,
     pub strings: Vec<(String, String)>,
     pub paths: Vec<(String, Path)>,
+    /// Source spans of string-literal values (for precise diagnostics, e.g. `unit = "..."`).
+    pub str_spans: Vec<(String, proc_macro2::Span)>,
 }
 
 impl Parse for KvArgs {
@@ -241,6 +243,7 @@ impl Parse for KvArgs {
                 let _eq: Token![=] = input.parse()?;
                 if input.peek(syn::LitStr) {
                     let s: syn::LitStr = input.parse()?;
+                    out.str_spans.push((key_str.clone(), s.span()));
                     out.strings.push((key_str, s.value()));
                 } else if input.peek(syn::LitBool) {
                     let b: syn::LitBool = input.parse()?;
@@ -276,6 +279,14 @@ impl KvArgs {
             .iter()
             .find(|(k, _)| k == name)
             .map(|(_, v)| v.clone())
+    }
+
+    /// Span of the string literal bound to `name`, if any.
+    pub fn get_str_span(&self, name: &str) -> Option<proc_macro2::Span> {
+        self.str_spans
+            .iter()
+            .find(|(k, _)| k == name)
+            .map(|(_, sp)| *sp)
     }
 
     pub fn get_all_str(&self, name: &str) -> Vec<String> {
@@ -499,6 +510,7 @@ pub fn build_attr_usage_tokens(
         .or_else(|| kv.get_str("default"))
         .or_else(|| kv.get_str("expr"));
     let unit = kv.get_str("unit");
+    crate::units_check::validate_unit_kv(&kv)?;
 
     let name_tok = quote_opt_str(&attr_name);
     let ty_tok = quote_opt_str(&type_name);

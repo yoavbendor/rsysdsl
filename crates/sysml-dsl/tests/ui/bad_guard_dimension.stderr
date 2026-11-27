@@ -1,0 +1,15 @@
+error[E0080]: evaluation panicked: dimension mismatch in `>`: `event.cavity_temp` [K] has dimension K, but `subject.max_rf_power` [W] has dimension kg*m^2*s^-3 (both sides of comparisons, `+` and `-` must have the same dimension)
+  --> tests/ui/bad_guard_dimension.rs:24:17
+   |
+24 |         guard = event.cavity_temp > subject.max_rf_power,
+   |                 ^^^^^ evaluation of `_` failed inside this call
+   |
+note: inside `assert_same_dim`
+  --> $RUST/core/src/panic.rs
+   |
+   = note: the failure occurred here
+   |
+  ::: $WORKSPACE/crates/sysml-core/src/units.rs
+   |
+   |         panic!("{}", m.as_str());
+   |         ------------------------ in this macro invocation

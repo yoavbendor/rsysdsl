@@ -33,6 +33,7 @@ mod package;
 mod part;
 mod port;
 mod requirement;
+mod units_check;
 mod util;
 
 use util::{is_sysml_attr, PathList};

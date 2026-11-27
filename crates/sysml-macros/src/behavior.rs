@@ -445,6 +445,7 @@ fn expand_state_enum(args: TokenStream, mut item: ItemEnum) -> syn::Result<Token
     let mut compile_checks = Vec::new();
     let mut step_match_arms = Vec::new();
     let mut guarded_event_checks = Vec::new();
+    let mut dim_checks: Vec<TokenStream> = Vec::new();
     let mut allowed_match_arms = Vec::new();
     let mut name_match_arms = Vec::new();
     let mut initial_variant: Option<Ident> = None;
@@ -524,6 +525,11 @@ fn expand_state_enum(args: TokenStream, mut item: ItemEnum) -> syn::Result<Token
                 Some(GuardSpec::NativeExpr(expr)) => {
                     let ctx = ExprContext::TransitionGuard { has_subject };
                     let transpiled = transpile_expr(expr, &ctx)?;
+                    dim_checks.push(crate::units_check::guard_dim_asserts(
+                        expr,
+                        t.trigger.as_ref(),
+                        subject_ty.as_ref(),
+                    )?);
                     (Some(transpiled.sysml), Some(transpiled.rust))
                 }
             };
@@ -794,6 +800,8 @@ fn expand_state_enum(args: TokenStream, mut item: ItemEnum) -> syn::Result<Token
         const _: fn() = || {
             #(#compile_checks)*
         };
+
+        #(#dim_checks)*
 
         #(#spec_impls)*
     })

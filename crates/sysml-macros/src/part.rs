@@ -412,6 +412,7 @@ pub fn expand_part(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
     let spec_names: Vec<String> = specializes_paths.iter().map(path_to_sysml_string).collect();
 
     let auto_default_impl = build_auto_default_impl(&item)?;
+    let field_unit_fn = crate::units_check::field_unit_fn(&item.ident, &item.fields)?;
 
     // Parse fields into attributes, nested parts, ports, items, requirement usages
     let mut attr_tokens = Vec::new();
@@ -967,6 +968,8 @@ pub fn expand_part(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
         #item
 
         #auto_default_impl
+
+        #field_unit_fn
 
         impl #ident {
             #[doc(hidden)]

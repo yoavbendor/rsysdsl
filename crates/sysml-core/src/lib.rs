@@ -10,6 +10,7 @@
 pub mod quantity;
 pub mod safety;
 pub mod traits;
+pub mod units;
 
 pub use quantity::Quantity;
 pub use safety::{

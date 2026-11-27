@@ -8,6 +8,7 @@ use syn::{Expr, ExprLit, Fields, ItemStruct, Lit, LitStr, Meta};
 
 use crate::expr_transpile::{transpile_expr, ExprContext};
 use crate::part::ReqLinkArgs;
+use crate::units_check::check_requirement_dims;
 use crate::util::{
     analyze_rust_type, build_attr_usage_tokens, build_auto_default_impl, extract_doc,
     extract_refinements, extract_sysml_name_override, has_no_std_mode, is_sysml_attr,
@@ -35,6 +36,8 @@ pub fn expand_requirement(args: TokenStream, mut item: ItemStruct) -> syn::Resul
 
     // Build map of Rust field name -> SysML attribute name for native expression transpilation
     let mut field_map: BTreeMap<String, String> = BTreeMap::new();
+    // Rust field name -> declared `unit` (for compile-time dimensional analysis of constraints)
+    let mut unit_map: BTreeMap<String, String> = BTreeMap::new();
     if let Fields::Named(fields) = &item.fields {
         for field in &fields.named {
             let fname_rust = field.ident.as_ref().unwrap().to_string();
@@ -49,6 +52,7 @@ pub fn expand_requirement(args: TokenStream, mut item: ItemStruct) -> syn::Resul
             let fname_sysml = extract_sysml_name_override(&field.attrs)?
                 .or_else(|| fkv.get_str("name"))
                 .unwrap_or_else(|| snake_to_camel(&fname_rust));
+            unit_map.insert(fname_rust.clone(), crate::units_check::checked_unit(&fkv));
             field_map.insert(fname_rust, fname_sysml);
         }
     }
@@ -118,6 +122,7 @@ pub fn expand_requirement(args: TokenStream, mut item: ItemStruct) -> syn::Resul
             } else {
                 let ctx = ExprContext::Requirement { fields: &field_map };
                 let transpiled = transpile_expr(&expr, &ctx)?;
+                check_requirement_dims(&expr, &unit_map)?;
                 require_constraints.push(transpiled.sysml);
                 require_eval_exprs.push(transpiled.rust);
             }
@@ -131,6 +136,7 @@ pub fn expand_requirement(args: TokenStream, mut item: ItemStruct) -> syn::Resul
             } else {
                 let ctx = ExprContext::Requirement { fields: &field_map };
                 let transpiled = transpile_expr(&expr, &ctx)?;
+                check_requirement_dims(&expr, &unit_map)?;
                 assume_constraints.push(transpiled.sysml);
             }
         } else if is_sysml_attr(attr, "subject") {

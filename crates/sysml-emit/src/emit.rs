@@ -81,28 +81,51 @@ fn format_qualified(s: &str) -> String {
     }
 }
 
-/// Format a SysML v2 unit bracket expression, e.g. `kg` -> `[kg]`, `m/s` -> `[m/s]`, `%` -> `['%']`.
+/// Format a SysML v2 unit bracket expression, e.g. `kg` -> `[kg]`, `m/s` -> `[m/s]`,
+/// `m^3/s` -> `[m^3/s]`, `J/(kg*K)` -> `[J/(kg*K)]`, `°C` -> `['°C']`, `W/°C` -> `[W/'°C']`.
+///
+/// Composite units are emitted as unquoted KerML operator expressions over the OMG `SI::*`
+/// unit atoms (`*`, `/`, `^`, parentheses), so each atom resolves against the standard library;
+/// only atoms that are not plain identifiers (e.g. `°C`, `Ω`) are quoted individually.
 fn format_unit(unit: &str) -> String {
     let u = unit.trim();
     if u.starts_with('\'') && u.ends_with('\'') {
         return format!("[{u}]");
     }
-    // Simple SI expressions like `kg`, `m/s`, `1/h`, `W`, `s`, `m`
-    let simple_expr = !u.is_empty()
-        && u.chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '/' || c == '*');
-    let starts_valid = u
-        .chars()
-        .next()
-        .map(|c| c.is_ascii_alphanumeric() || c == '_')
-        .unwrap_or(false);
-    // Keep prefix units like kN or special symbols quoted if they contain non-ASCII or punctuation,
-    // while standard basic expressions like kg, m/s, 1/h, W, s, m, h, min stay unquoted.
-    if simple_expr && starts_valid && !SYSML_KEYWORDS.contains(&u) {
-        format!("[{u}]")
-    } else {
-        format!("[{}]", escape_sysml_name(u))
+    if sysml_core::units::parse_unit(u).is_none() {
+        // Model-defined / foreign unit name (e.g. `pound-force per square inch (psi)`):
+        // emit it as one (quoted if needed) name reference.
+        return format!("[{}]", escape_sysml_name(u));
     }
+    let is_delim = |c: char| matches!(c, '/' | '*' | '^' | '(' | ')');
+    let mut out = String::with_capacity(u.len() + 4);
+    out.push('[');
+    let mut atom = String::new();
+    let flush = |atom: &mut String, out: &mut String| {
+        if atom.is_empty() {
+            return;
+        }
+        if atom.chars().all(|c| c.is_ascii_digit() || c == '-') {
+            out.push_str(atom);
+        } else {
+            out.push_str(&escape_sysml_name(atom));
+        }
+        atom.clear();
+    };
+    for c in u.chars() {
+        if c == ' ' {
+            continue;
+        }
+        if is_delim(c) {
+            flush(&mut atom, &mut out);
+            out.push(c);
+        } else {
+            atom.push(c);
+        }
+    }
+    flush(&mut atom, &mut out);
+    out.push(']');
+    out
 }
 
 fn sanitize_doc(doc: &str) -> String {
@@ -1518,5 +1541,24 @@ pub fn iso26262_metadata_package() -> Package {
                 ],
             }),
         ],
+    }
+}
+
+#[cfg(test)]
+mod unit_format_tests {
+    use super::format_unit;
+
+    #[test]
+    fn formats_atoms_and_composites() {
+        assert_eq!(format_unit("kg"), "[kg]");
+        assert_eq!(format_unit("m/s"), "[m/s]");
+        assert_eq!(format_unit("1/h"), "[1/h]");
+        assert_eq!(format_unit("N*m"), "[N*m]");
+        assert_eq!(format_unit("m^3/s"), "[m^3/s]");
+        assert_eq!(format_unit("m/s^-2"), "[m/s^-2]");
+        assert_eq!(format_unit("J/(kg*K)"), "[J/(kg*K)]");
+        assert_eq!(format_unit("°C"), "['°C']");
+        assert_eq!(format_unit("W/°C"), "[W/'°C']");
+        assert_eq!(format_unit("'km/h'"), "['km/h']");
     }
 }

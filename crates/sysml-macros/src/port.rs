@@ -38,6 +38,7 @@ pub fn expand_item(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
     }
     let spec_names: Vec<String> = specializes_paths.iter().map(path_to_sysml_string).collect();
 
+    let field_unit_fn = crate::units_check::field_unit_fn(&item.ident, &item.fields)?;
     let mut attr_tokens = Vec::new();
     if let Fields::Named(fields) = &mut item.fields {
         for field in &mut fields.named {
@@ -64,6 +65,8 @@ pub fn expand_item(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
         impl ::sysml_dsl::core_contracts::SysmlItemCore for #ident {
             const SYSML_NAME: &'static str = #sysml_name;
         }
+
+        #field_unit_fn
 
         #rcfg
         impl ::sysml_dsl::ir::SysmlItem for #ident {

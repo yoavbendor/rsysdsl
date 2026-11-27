@@ -1267,6 +1267,9 @@ fn emit_rust_analysis_params(params: &[AnalysisParam], out: &mut String) {
         }
         if let Some(unit) = &p.unit {
             opts.push(format!("unit = \"{}\"", escape_rust_str(unit)));
+            if !is_checked_si_unit(unit) {
+                opts.push("custom_unit".to_string());
+            }
         }
         let _ = writeln!(out, "        #[sysml::{attr_name}({})]", opts.join(", "));
         let _ = writeln!(out, "        pub {fname}: f64,");
@@ -1396,6 +1399,9 @@ fn emit_rust_attr_field(a: &AttributeUsage, used: &mut BTreeSet<String>, out: &m
     }
     if let Some(unit) = &a.unit {
         opts.push(format!("unit = \"{}\"", escape_rust_str(unit)));
+        if !is_checked_si_unit(unit) {
+            opts.push("custom_unit".to_string());
+        }
     }
     emit_doc_comments(&a.doc, "        ", out);
     if opts.is_empty() {
@@ -1439,4 +1445,14 @@ fn unique_ident(base: &str, used: &mut BTreeSet<String>) -> String {
         }
         i += 1;
     }
+}
+
+/// `true` if `unit` is accepted by the DSL's closed, OMG-resolvable SI unit table. Otherwise the
+/// lifted attribute is marked `custom_unit` (a unit defined by the source model or another
+/// library, e.g. `'%'`, `kN`, `SI::kg`), which opts out of the compile-time unit/dimension checks.
+fn is_checked_si_unit(unit: &str) -> bool {
+    matches!(
+        sysml_core::units::check_unit(unit),
+        sysml_core::units::UnitCheck::Ok(_)
+    )
 }

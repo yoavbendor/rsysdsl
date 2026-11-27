@@ -1,0 +1,6 @@
+error: unknown unit symbol `kgs` in #[sysml::attr(unit = ...)]; did you mean `kg` or `kg/s`?
+       help: use an SI symbol from the closed table in `sysml_core::units::UNITS` (e.g. "m", "kg", "s", "A", "K", "N", "Pa", "J", "W", "V", "Hz"), optionally combined with `*`, `/`, `^` (e.g. "m/s^2", "N*m", "m^3/s"); for a unit defined in your own model or another library add the `custom_unit` flag
+ --> tests/ui/bad_unit_symbol.rs:7:43
+  |
+7 |     #[sysml::attr(default = 120.0, unit = "kgs")]
+  |                                           ^^^^^

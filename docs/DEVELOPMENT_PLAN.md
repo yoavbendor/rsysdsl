@@ -31,6 +31,12 @@ one or more self-contained commits on the work branch, gated by
 - New trybuild compile-fail cases: `bad_unit_symbol.rs`, `bad_constraint_dimension.rs`.
 - **Gate:** all examples still compile and audit at 0/0/0; new UI tests pass.
 - *Later (not in this stage):* type-level dimensions (`Quantity<f64, Dim>`) if the macro-level check proves insufficient.
+- **Status: done.** Built:
+  - `sysml_core::units` (`#![no_std]`, all `const fn`): closed atom table (symbol → `[L, M, T, I, Θ, N, J]` exponents) with a parser for `*`, `/`, `^<int>`, `( )` composites; `sysml-macros` now depends on `sysml-core` and uses the same table at expansion time.
+  - Each atom is flagged OMG-resolvable or not; non-OMG atoms (`kN`, `ms`, `kPa`, `rpm`, `%`, `degC`, ...) are rejected with the exact accepted spelling (``help: use `N` instead ...``). Unknown symbols get a "did you mean" (edit distance). `custom_unit` flag opts out for model-defined units (used by `sysml-lift` codegen for foreign corpora).
+  - `require_constraint` / `assume_constraint`: dimension check at expansion time (`syn::Error` on the expression). Transition guards: operand units live on other types, so `#[sysml::item]`/`#[sysml::part]` expose a hidden `const fn __sysml_field_unit` and the state macro emits `const` assertions (`E0080 evaluation panicked: dimension mismatch ...`). Literals are wildcards; unit-less fields skip the check.
+  - `sysml-emit` emits composite units as unquoted SysML expressions over `SI` atoms (`[m^3/s]`, `[J/(kg*K)]`, `[W/'°C']`); new test `crates/sysml-std/tests/derived_units_audit.rs` proves a strict 0-warning audit.
+  - UI tests: `bad_unit_symbol`, `bad_unit_not_in_omg`, `bad_constraint_dimension`, `bad_guard_dimension`. No dimension bugs found in existing examples; all 7 emit-bin examples still audit 0/0.
 
 ### S2 — Generic scenario runner, `sysml-sim` crate (F4, F5)
 - New crate `crates/sysml-sim` (runner tier; models never depend on it):
