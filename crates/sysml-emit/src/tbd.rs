@@ -260,3 +260,55 @@ pub fn render_tbd_markdown(l: &TbdLedger) -> String {
     }
     out
 }
+
+/// Result of `rsysdsl tbd --baseline <file> --check` (the TBD ratchet).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TbdRatchet {
+    /// `false` when the total or any per-kind count rose above the baseline.
+    pub ok: bool,
+    pub baseline_count: usize,
+    pub current_count: usize,
+    /// Kinds (and `total`) whose count rose: `kind: baseline -> current`.
+    pub rose: Vec<String>,
+    /// Current entries absent from the baseline (matched on element, kind and reason).
+    pub new_entries: Vec<TbdEntry>,
+    /// Baseline entries no longer present (resolved TBDs; lower the baseline to lock them in).
+    pub resolved_entries: Vec<TbdEntry>,
+}
+
+/// Compare a current ledger with a committed baseline. Counts may fall freely; any rise (in
+/// total or per kind) fails, so adding a TBD requires updating the baseline deliberately.
+pub fn check_tbd_ratchet(baseline: &TbdLedger, current: &TbdLedger) -> TbdRatchet {
+    let key = |e: &TbdEntry| (e.element.clone(), e.kind, e.reason.clone());
+    let base_keys: std::collections::BTreeSet<_> = baseline.entries.iter().map(key).collect();
+    let cur_keys: std::collections::BTreeSet<_> = current.entries.iter().map(key).collect();
+    let mut rose = Vec::new();
+    if current.tbd_count > baseline.tbd_count {
+        rose.push(format!("total: {} -> {}", baseline.tbd_count, current.tbd_count));
+    }
+    for k in TbdKind::ALL {
+        let b = baseline.by_kind.get(k.as_str()).copied().unwrap_or(0);
+        let c = current.by_kind.get(k.as_str()).copied().unwrap_or(0);
+        if c > b {
+            rose.push(format!("{}: {b} -> {c}", k.as_str()));
+        }
+    }
+    TbdRatchet {
+        ok: rose.is_empty(),
+        baseline_count: baseline.tbd_count,
+        current_count: current.tbd_count,
+        rose,
+        new_entries: current
+            .entries
+            .iter()
+            .filter(|e| !base_keys.contains(&key(e)))
+            .cloned()
+            .collect(),
+        resolved_entries: baseline
+            .entries
+            .iter()
+            .filter(|e| !cur_keys.contains(&key(e)))
+            .cloned()
+            .collect(),
+    }
+}

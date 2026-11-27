@@ -147,6 +147,19 @@ enum Commands {
         /// Optional file path to write the rendered ledger.
         #[arg(short, long)]
         output: Option<PathBuf>,
+
+        /// TBD baseline JSON (a ledger written by `--write-baseline`), used by `--check`.
+        #[arg(long)]
+        baseline: Option<PathBuf>,
+
+        /// Ratchet: exit 1 if the TBD count (total or any kind) rose above `--baseline`, printing
+        /// the new entries. Raising the baseline must be a deliberate change in the same commit.
+        #[arg(long, requires = "baseline")]
+        check: bool,
+
+        /// Write the current ledger to `--baseline` (creates or overwrites it).
+        #[arg(long, requires = "baseline", conflicts_with = "check")]
+        write_baseline: bool,
     },
 
     /// Generate an ASPICE bidirectional traceability matrix (JSON, Markdown, or CSV).
@@ -461,7 +474,16 @@ fn main() -> ExitCode {
             files,
             format,
             output,
-        } => cmd_tbd(&model, &files, format, output, cli.pretty),
+            baseline,
+            check,
+            write_baseline,
+        } => {
+            if let Some(path) = baseline.filter(|_| check || write_baseline) {
+                cmd_tbd_baseline(&model, &files, &path, write_baseline, cli.pretty)
+            } else {
+                cmd_tbd(&model, &files, format, output, cli.pretty)
+            }
+        }
         Commands::TraceMatrix {
             model,
             files,
@@ -844,6 +866,85 @@ fn cmd_tbd(
     }
     print!("{rendered}");
     ExitCode::SUCCESS
+}
+
+/// `rsysdsl tbd --baseline <file> --check | --write-baseline`.
+fn cmd_tbd_baseline(
+    model_name: &str,
+    files: &[PathBuf],
+    baseline_path: &std::path::Path,
+    write: bool,
+    pretty: bool,
+) -> ExitCode {
+    let (label, model) = match load_model(model_name, files) {
+        Ok(v) => v,
+        Err(code) => return code,
+    };
+    let current = sysml_emit::tbd_ledger_report(label, &model);
+    if write {
+        let text = match serde_json::to_string_pretty(&current) {
+            Ok(t) => format!("{t}\n"),
+            Err(e) => {
+                eprintln!("error: failed to serialize TBD baseline: {e}");
+                return ExitCode::from(2);
+            }
+        };
+        if let Err(e) = fs::write(baseline_path, text) {
+            eprintln!("error: failed to write '{}': {e}", baseline_path.display());
+            return ExitCode::from(2);
+        }
+        eprintln!(
+            "wrote TBD baseline {} ({} TBD(s))",
+            baseline_path.display(),
+            current.tbd_count
+        );
+        print_json(&current, pretty);
+        return ExitCode::SUCCESS;
+    }
+    let baseline: sysml_emit::TbdLedger = match fs::read_to_string(baseline_path)
+        .map_err(|e| e.to_string())
+        .and_then(|t| serde_json::from_str(&t).map_err(|e| e.to_string()))
+    {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!(
+                "error: cannot read TBD baseline '{}': {e} (create it with `rsysdsl tbd --files ... --baseline {} --write-baseline`)",
+                baseline_path.display(),
+                baseline_path.display()
+            );
+            return ExitCode::from(2);
+        }
+    };
+    let ratchet = sysml_emit::check_tbd_ratchet(&baseline, &current);
+    print_json(&ratchet, pretty);
+    if ratchet.ok {
+        if !ratchet.resolved_entries.is_empty() {
+            eprintln!(
+                "note: {} baseline TBD(s) resolved; lower the baseline with --write-baseline to lock that in",
+                ratchet.resolved_entries.len()
+            );
+        }
+        ExitCode::SUCCESS
+    } else {
+        eprintln!(
+            "error: TBD count rose above the baseline ({}); new TBDs:",
+            ratchet.rose.join(", ")
+        );
+        for e in &ratchet.new_entries {
+            eprintln!(
+                "  + {} [{}, resolve by {}]: {}",
+                e.element,
+                e.kind.as_str(),
+                e.resolve_by.as_str(),
+                e.reason
+            );
+        }
+        eprintln!(
+            "help: resolve them, or raise the baseline deliberately in the same commit: rsysdsl tbd --files ... --baseline {} --write-baseline",
+            baseline_path.display()
+        );
+        ExitCode::from(1)
+    }
 }
 
 fn cmd_lint(

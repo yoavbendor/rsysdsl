@@ -932,3 +932,53 @@ fn cli_tbd_ledger_and_audit_maturity_gate() {
     let val: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(val["summary"]["tbd_count"], 3);
 }
+
+#[test]
+fn cli_tbd_ratchet_catches_added_tbds() {
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join("tbd.sysml");
+    let baseline = tmp.path().join("tbd-baseline.json");
+    std::fs::write(&file, TBD_FIXTURE).unwrap();
+    let run = |args: &[&str]| {
+        Command::new(bin_path())
+            .args(["tbd", "--files"])
+            .arg(&file)
+            .arg("--baseline")
+            .arg(&baseline)
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    // Missing baseline: IO error.
+    assert_eq!(run(&["--check"]).status.code(), Some(2));
+    assert_eq!(run(&["--write-baseline"]).status.code(), Some(0));
+    assert_eq!(run(&["--check"]).status.code(), Some(0));
+
+    // One more TBD (a value TBD): the ratchet fails and names the new entry.
+    let more = TBD_FIXTURE.replace(
+        "    part def Pump {",
+        "    part def Valve {\n        attribute cv : Real {\n            @TbdMetadata::TBD {\n                category = \"value\";\n                reason = \"valve sizing open\";\n                resolveBy = \"detailed\";\n            }\n        }\n    }\n    part def Pump {",
+    );
+    std::fs::write(&file, &more).unwrap();
+    let out = run(&["--check"]);
+    assert_eq!(out.status.code(), Some(1));
+    let val: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(val["ok"], false);
+    assert_eq!(val["current_count"], 4);
+    assert_eq!(val["new_entries"][0]["element"], "TbdCli::Valve::cv");
+    let rose: Vec<String> = serde_json::from_value(val["rose"].clone()).unwrap();
+    assert_eq!(rose, vec!["total: 3 -> 4".to_string(), "value: 1 -> 2".to_string()]);
+    assert!(String::from_utf8_lossy(&out.stderr).contains("+ TbdCli::Valve::cv [value"));
+
+    // Fewer TBDs than the baseline: passes (resolved entries are reported).
+    let fewer = TBD_FIXTURE.replace(
+        "        @TbdMetadata::TBD {\n            category = \"element\";\n            reason = \"supplier not selected\";\n            owner = \"systems\";\n            resolveBy = \"preliminary\";\n        }\n",
+        "",
+    );
+    assert_ne!(fewer, TBD_FIXTURE);
+    std::fs::write(&file, &fewer).unwrap();
+    let out = run(&["--check"]);
+    assert_eq!(out.status.code(), Some(0));
+    let val: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(val["resolved_entries"].as_array().unwrap().len(), 1);
+}

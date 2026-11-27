@@ -26,7 +26,7 @@ pub use emit::{
 };
 pub use tbd::{
     collect_tbd_ledger, count_by_kind, model_has_tbd, overdue_at, render_tbd_markdown, tbd_ledger_report,
-    TbdEntry, TbdLedger,
+    check_tbd_ratchet, TbdEntry, TbdLedger, TbdRatchet,
 };
 pub use resolve::qualify_requirement_refs;
 pub use lint::{

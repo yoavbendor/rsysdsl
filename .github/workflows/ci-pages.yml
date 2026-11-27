@@ -38,6 +38,12 @@ jobs:
       - name: Run full workspace test suite
         run: cargo test --workspace
 
+      # S7.6 TBD ratchet: no example may gain TBDs (total or per kind) unless its
+      # examples/<name>/tbd-baseline.json is raised deliberately in the same commit
+      # (scripts/check-tbd-baselines.sh --write).
+      - name: TBD ratchet against committed baselines
+        run: ./scripts/check-tbd-baselines.sh
+
       - name: Build static GitHub Pages showcase
         run: ./scripts/build-pages-site.sh _site
 
