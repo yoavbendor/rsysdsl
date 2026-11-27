@@ -662,6 +662,19 @@ fn cli_new_scaffolds_layered_crate_and_refuses_overwrite() {
         !lib.contains("{{"),
         "unrendered template placeholder in lib.rs"
     );
+    // Layer order: Types -> Requirements -> Subsystems -> Context, so realizing subsystem
+    // parts can `#[sysml::satisfy]` requirements from a layer above them.
+    let pos = |pkg: &str| {
+        lib.find(&format!("#[sysml::package(name = \"PumpStation{pkg}\")]"))
+            .unwrap()
+    };
+    assert!(pos("Types") < pos("Requirements"));
+    assert!(pos("Requirements") < pos("Subsystems"));
+    assert!(pos("Subsystems") < pos("Context"));
+    assert!(
+        lib[pos("Subsystems")..pos("Context")].contains("#[sysml::satisfy("),
+        "a subsystem part must satisfy the placeholder requirement"
+    );
 
     let emit = std::fs::read_to_string(dir.join("src/bin/emit.rs")).unwrap();
     assert!(emit.contains("pump_station::build_model()"));

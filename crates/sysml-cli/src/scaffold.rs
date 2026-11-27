@@ -1,5 +1,5 @@
 //! `rsysdsl new`: scaffold a compiling, audit-clean, lint-clean model crate with the
-//! layered `Types -> Subsystems -> Requirements -> Context` package structure.
+//! layered `Types -> Requirements -> Subsystems -> Context` package structure.
 
 use serde::Serialize;
 use std::fs;
@@ -364,7 +364,7 @@ pub fn scaffold(
         package: names.kebab.clone(),
         crate_name: names.snake.clone(),
         dir: target.display().to_string(),
-        sysml_packages: ["Types", "Subsystems", "Requirements", "Context"]
+        sysml_packages: ["Types", "Requirements", "Subsystems", "Context"]
             .iter()
             .map(|l| format!("{}{l}", names.pascal))
             .collect(),

@@ -246,7 +246,7 @@ enum Commands {
         port: u16,
     },
 
-    /// Scaffold a new compiling model crate with layered Types -> Subsystems -> Requirements -> Context packages.
+    /// Scaffold a new compiling model crate with layered Types -> Requirements -> Subsystems -> Context packages.
     New {
         /// System name in any case (`my_system`, `my-system`, `MySystem`); package name becomes kebab-case.
         name: String,

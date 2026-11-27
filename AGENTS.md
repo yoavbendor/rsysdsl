@@ -22,7 +22,7 @@ You are authoring a **System as Code** model in **`rsysdsl`** — a strongly typ
 
 ## 2. Quickstart: Creating & Verifying a New System Model
 
-Scaffold every new system with `rsysdsl new`. It generates a compiling crate with the layered package structure (`<Name>Types` -> `<Name>Subsystems` -> `<Name>Requirements` -> `<Name>Context`), an emit binary and audit/lint tests, and registers it in the root `Cargo.toml`:
+Scaffold every new system with `rsysdsl new`. It generates a compiling crate with the layered package structure (`<Name>Types` -> `<Name>Requirements` -> `<Name>Subsystems` -> `<Name>Context`; `#[sysml::satisfy]` goes on the realizing subsystem part), an emit binary and audit/lint tests, and registers it in the root `Cargo.toml`:
 
 ```bash
 # 0. Install the CLI once as `rsysdsl` (from the repo root; re-run after pulling changes).
