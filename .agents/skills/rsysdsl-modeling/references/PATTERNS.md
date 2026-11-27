@@ -111,7 +111,7 @@ pub mod vehicle_arch {
 Record document provenance in `#[sysml::rationale("Source: ...")]` (requires `#[sysml::import("ModelingMetadata::*")]`) and express quantitative bounds in `#[sysml::require_constraint(...)]` (compiles into both SysML `require constraint` and Rust `EvaluableRequirement::evaluate(&self)`).
 
 ```rust
-#[sysml::package(name = "Requirements")]
+#[sysml::package(name = "PowerRequirements")]
 #[sysml::import("ScalarValues::*")]
 #[sysml::import("SI::*")]
 #[sysml::import("ModelingMetadata::*")]
@@ -124,17 +124,27 @@ pub mod requirements {
     #[sysml::require_constraint(delivered_power_w >= min_power_w)]
     #[derive(Debug, Clone, Copy)]
     pub struct MinimumPowerOutput {
+        /// Spec LIMIT (from the source document).
         #[sysml::attr(default = 120.0, unit = "W")]
         pub min_power_w: Quantity<f64>,
-        #[sysml::attr(default = 150.0, unit = "W")]
+        /// EVIDENCE (measured / achieved): not in the spec, so NO default. It is NaN until a
+        /// verification case (test or sysml-sim monitor) sets it, so `evaluate()` is false on
+        /// `Default`. Never copy the limit here: the audit reports that as `hollow-requirement`.
+        #[sysml::attr(unit = "W", evidence)]
         pub delivered_power_w: Quantity<f64>,
     }
 }
 
+// In tests / a `<system>_sim` crate, supply the evidence explicitly:
+// let r = MinimumPowerOutput { delivered_power_w: Quantity::new(measured_w, "W"), ..Default::default() };
+// assert!(r.evaluate());
+// Only a `VerificationReport` verdict (e.g. from sysml-sim monitors, see examples/microwave_sim)
+// counts as verified in `trace-matrix`; model values show as "evidence is a model placeholder".
+
 // Satisfy on the realizing part (compile-time checked ID!).
 // Cross-package works as-is: if the requirement lives in another package, the emitter writes
-// the qualified name (`satisfy requirement : Requirements::MinimumPowerOutput;`), so no extra
-// `#[sysml::import("Requirements::*")]` is needed on the satisfying package (it is harmless).
+// the qualified name (`satisfy requirement : PowerRequirements::MinimumPowerOutput;`), so no extra
+// `#[sysml::import("PowerRequirements::*")]` is needed on the satisfying package (it is harmless). Never name a package like an OMG library package (`Requirements`, `Parts`, `Ports`, `Items`, ...): it shadows the library.
 // #[sysml::part]
 // #[sysml::satisfy(req = requirements::MinimumPowerOutput, id = "PWR-001")]
 // pub struct PowerSupplyUnit { ... }

@@ -26,6 +26,18 @@ pub struct TraceRow {
     pub verification_status: String,
     pub verification_scenario: Option<String>,
     pub evidence: Option<serde_json::Value>,
+    /// Attributes marked `#[sysml::attr(..., evidence)]` (measured values, not limits).
+    #[serde(default)]
+    pub evidence_attributes: Vec<String>,
+    /// Where the requirement's evidence comes from: `verification` (a verdict exists),
+    /// `model default (placeholder)` (evidence attributes only hold model values),
+    /// `unmarked` (constrained, but no attribute is marked `evidence`), or `n/a`.
+    #[serde(default)]
+    pub evidence_source: String,
+    /// Constraint comparisons whose two operands hold the same model value (limit copied
+    /// into the "measured" value).
+    #[serde(default)]
+    pub hollow_comparisons: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -43,6 +55,12 @@ pub struct TraceMatrixSummary {
     pub total_perform_allocations: usize,
     pub total_calcs: usize,
     pub total_state_defs: usize,
+    /// Constrained requirements with no verdict whose evidence is only a model value.
+    #[serde(default)]
+    pub placeholder_evidence: usize,
+    /// Requirements with at least one hollow comparison (see [`TraceRow::hollow_comparisons`]).
+    #[serde(default)]
+    pub hollow_requirements: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -100,6 +118,8 @@ pub fn build_trace_matrix(
     let mut verified_pass = 0usize;
     let mut verified_fail = 0usize;
     let mut unverified = 0usize;
+    let mut placeholder_evidence = 0usize;
+    let mut hollow_requirements = 0usize;
 
     for (pkg_name, rdef) in &req_defs {
         let req_id = rdef
@@ -176,6 +196,22 @@ pub fn build_trace_matrix(
             }
         };
 
+        let ev = crate::evidence::analyze_requirement(rdef);
+        let evidence_source = if verdict.is_some() {
+            "verification"
+        } else if rdef.require_constraints.is_empty() {
+            "n/a"
+        } else if ev.evidence_attributes.is_empty() {
+            placeholder_evidence += 1;
+            "unmarked"
+        } else {
+            placeholder_evidence += 1;
+            "model default (placeholder)"
+        };
+        if !ev.hollow_comparisons.is_empty() {
+            hollow_requirements += 1;
+        }
+
         let refines: Vec<String> = rdef
             .refinements
             .iter()
@@ -194,6 +230,9 @@ pub fn build_trace_matrix(
             verification_status,
             verification_scenario,
             evidence,
+            evidence_attributes: ev.evidence_attributes,
+            evidence_source: evidence_source.to_string(),
+            hollow_comparisons: ev.hollow_comparisons,
         });
     }
 
@@ -227,6 +266,8 @@ pub fn build_trace_matrix(
             total_perform_allocations: total_performs,
             total_calcs: modeled_calcs.len(),
             total_state_defs: total_states,
+            placeholder_evidence,
+            hollow_requirements,
         },
         modeled_calcs,
         rows,
@@ -255,6 +296,13 @@ pub fn render_trace_matrix_markdown(matrix: &TraceMatrix) -> String {
         "- **Architecture:** {} part defs | {} action defs | {} perform allocations | {} modeled calcs | {} state defs\n",
         s.total_parts, s.total_actions, s.total_perform_allocations, s.total_calcs, s.total_state_defs
     );
+    if s.placeholder_evidence > 0 || s.hollow_requirements > 0 {
+        let _ = writeln!(
+            out,
+            "- **Evidence:** {} constrained requirement(s) rely only on model values (not verification evidence) | {} hollow (measured value equals the limit)\n",
+            s.placeholder_evidence, s.hollow_requirements
+        );
+    }
     let _ = writeln!(
         out,
         "| Req ID | Requirement | Package | Satisfied By | Allocated Functions | Constraints | Verification |"
@@ -288,10 +336,21 @@ pub fn render_trace_matrix_markdown(matrix: &TraceMatrix) -> String {
             "fail" => "FAIL",
             other => other,
         };
-        let scenario = match &row.verification_scenario {
+        let mut scenario = match &row.verification_scenario {
             Some(s) if !s.is_empty() => format!(" (scenario: {})", s.replace('|', "\\|")),
             _ => String::new(),
         };
+        match row.evidence_source.as_str() {
+            "model default (placeholder)" => scenario.push_str(" — evidence is a model placeholder"),
+            "unmarked" => scenario.push_str(" — no `evidence` attribute"),
+            _ => {}
+        }
+        if !row.hollow_comparisons.is_empty() {
+            scenario.push_str(&format!(
+                " — HOLLOW: {}",
+                row.hollow_comparisons.join("; ").replace('|', "\\|")
+            ));
+        }
         let _ = writeln!(
             out,
             "| `{}` | `{}` | `{}` | {} | {} | {} | **{}**{} |",
@@ -306,7 +365,7 @@ pub fn render_trace_matrix_csv(matrix: &TraceMatrix) -> String {
     let mut out = String::new();
     let _ = writeln!(
         out,
-        "req_id,req_name,package,satisfied_by,allocated_functions,constraints,refines,verification_status,verification_scenario"
+        "req_id,req_name,package,satisfied_by,allocated_functions,constraints,refines,verification_status,verification_scenario,evidence_source"
     );
     for row in &matrix.rows {
         let fields = [
@@ -319,6 +378,7 @@ pub fn render_trace_matrix_csv(matrix: &TraceMatrix) -> String {
             row.refines.join("; "),
             row.verification_status.clone(),
             row.verification_scenario.clone().unwrap_or_default(),
+            row.evidence_source.clone(),
         ];
         let line = fields
             .iter()

@@ -465,6 +465,7 @@ pub fn build_attr_usage_tokens(
     }
     let subsets = kv.get_all_str("subsets");
     let is_keywordless = kv.has_flag("keywordless");
+    let is_evidence = kv.has_flag("evidence");
     let is_anonymous_redef = kv.has_flag("anonymous")
         || (!redefines.is_empty() && name_override.is_none() && kv.get_str("keep_name").is_none())
         || (is_keywordless && !subsets.is_empty() && name_override.is_none() && kv.get_str("keep_name").is_none());
@@ -536,6 +537,7 @@ pub fn build_attr_usage_tokens(
             doc: #doc_tok,
             is_keywordless: #is_keywordless,
             nested_attributes: ::std::vec![],
+            is_evidence: #is_evidence,
         }
     })
 }
@@ -585,8 +587,20 @@ pub fn build_auto_default_impl(item: &syn::ItemStruct) -> syn::Result<TokenStrea
         }
         let raw_val = kv.get_str("value").or_else(|| kv.get_str("default"));
         let unit = kv.get_str("unit").unwrap_or_default();
+        let is_float = is_quantity_type(&field.ty)
+            || is_prim_ident(&field.ty, "f64")
+            || is_prim_ident(&field.ty, "f32");
 
-        let init_expr = if let Some(val_str) = raw_val {
+        let init_expr = if raw_val.is_none() && kv.has_flag("evidence") && is_float {
+            // Unmeasured evidence is NaN: every comparison is false, so `evaluate()` cannot
+            // pass until a verification case supplies the measured value.
+            has_any_literal_default = true;
+            if is_quantity_type(&field.ty) {
+                quote!(::sysml_dsl::core_contracts::Quantity::new(f64::NAN, #unit))
+            } else {
+                quote!(f64::NAN as _)
+            }
+        } else if let Some(val_str) = raw_val {
             let trimmed = val_str.trim();
             if is_quantity_type(&field.ty) {
                 if let Ok(num) = trimmed.parse::<f64>() {

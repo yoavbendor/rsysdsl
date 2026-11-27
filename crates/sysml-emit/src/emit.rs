@@ -372,9 +372,18 @@ fn emit_attribute_usage(a: &AttributeUsage, level: usize, out: &mut String) {
             let _ = write!(out, " {}", format_unit(unit));
         }
     }
-    if a.doc.is_some() || !a.nested_attributes.is_empty() {
+    let doc = if a.is_evidence {
+        let base = "measured value supplied by a verification case; any model value is a placeholder, not evidence";
+        Some(match &a.doc {
+            Some(d) => format!("{} {}", sysml_ir::EVIDENCE_DOC_TAG, d.trim()),
+            None => format!("{} {base}", sysml_ir::EVIDENCE_DOC_TAG),
+        })
+    } else {
+        a.doc.clone()
+    };
+    if doc.is_some() || !a.nested_attributes.is_empty() {
         let _ = writeln!(out, " {{");
-        emit_doc(&a.doc, level + 1, out);
+        emit_doc(&doc, level + 1, out);
         for sub in &a.nested_attributes {
             emit_attribute_usage(sub, level + 1, out);
         }

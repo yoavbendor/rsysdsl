@@ -203,6 +203,10 @@ pub struct AttributeDef {
     pub attributes: Vec<AttributeUsage>,
 }
 
+/// Doc-comment prefix that marks an evidence attribute in emitted SysML (lifted back into
+/// [`AttributeUsage::is_evidence`]).
+pub const EVIDENCE_DOC_TAG: &str = "[evidence]";
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct AttributeUsage {
     #[serde(default)]
@@ -227,6 +231,11 @@ pub struct AttributeUsage {
     pub is_keywordless: bool,
     #[serde(default)]
     pub nested_attributes: Vec<AttributeUsage>,
+    /// `#[sysml::attr(..., evidence)]`: a measured / achieved value inside a requirement,
+    /// supplied by a verification case (e.g. a sysml-sim monitor), as opposed to a spec limit.
+    /// Its model value, if any, is a placeholder and never counts as verification.
+    #[serde(default)]
+    pub is_evidence: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

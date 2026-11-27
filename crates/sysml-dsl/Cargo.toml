@@ -18,3 +18,4 @@ sysml-macros = { workspace = true }
 [dev-dependencies]
 trybuild = { workspace = true }
 sysml-emit = { workspace = true }
+serde_json = { workspace = true }

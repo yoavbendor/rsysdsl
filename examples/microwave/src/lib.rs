@@ -106,7 +106,8 @@ pub mod microwave_model {
     pub struct MagnetronRfOutputRequirement {
         #[sysml::attr(default = 800.0, unit = "W")]
         pub min_rf_power_w: Quantity<f64>,
-        #[sysml::attr(default = 900.0, unit = "W")]
+        /// Evidence: supplied by `microwave_sim` (MW-001 monitor); 900 W is a model estimate.
+        #[sysml::attr(default = 900.0, unit = "W", evidence)]
         pub rf_output_power_w: Quantity<f64>,
     }
 
@@ -117,7 +118,7 @@ pub mod microwave_model {
     pub struct MagnetronCoolingTempRequirement {
         #[sysml::attr(default = 45.0, unit = "K")]
         pub max_temp_rise_k: Quantity<f64>,
-        #[sysml::attr(default = 33.17, unit = "K")]
+        #[sysml::attr(default = 33.17, unit = "K", evidence)]
         pub actual_temp_rise_k: Quantity<f64>,
     }
 
@@ -128,7 +129,7 @@ pub mod microwave_model {
     pub struct AcousticNoiseLimitRequirement {
         #[sysml::attr(default = 58.0)]
         pub max_noise_db: f64,
-        #[sysml::attr(default = 54.0)]
+        #[sysml::attr(default = 54.0, evidence)]
         pub operating_noise_db: f64,
     }
 
@@ -150,7 +151,8 @@ pub mod microwave_model {
     pub struct DoorInterlockCutoffRequirement {
         #[sysml::attr(default = 0.020, unit = "s")]
         pub max_cutoff_latency_s: Quantity<f64>,
-        #[sysml::attr(default = 0.008, unit = "s")]
+        /// Evidence: supplied by `microwave_sim` (MW-004 monitor); 8 ms is a model estimate.
+        #[sysml::attr(default = 0.008, unit = "s", evidence)]
         pub actual_cutoff_latency_s: Quantity<f64>,
     }
 

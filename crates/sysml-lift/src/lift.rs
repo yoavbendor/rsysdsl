@@ -1844,6 +1844,15 @@ fn lift_attribute_usage(u: &ast::Usage) -> AttributeUsage {
             }
         }
     }
+    // `doc /* [evidence] ... */` marks an evidence attribute (see `EVIDENCE_DOC_TAG`).
+    let mut is_evidence = false;
+    if let Some(d) = &doc {
+        if let Some(rest) = d.trim_start().strip_prefix(sysml_ir::EVIDENCE_DOC_TAG) {
+            is_evidence = true;
+            let rest = rest.trim();
+            doc = if rest.is_empty() { None } else { Some(rest.to_string()) };
+        }
+    }
     let (value_kind, value, unit) = if let Some(fv) = &u.value {
         let vk = match fv.kind {
             ast::ValueKind::Bound => ValueKind::Bound,
@@ -1883,6 +1892,7 @@ fn lift_attribute_usage(u: &ast::Usage) -> AttributeUsage {
         doc,
         is_keywordless: false,
         nested_attributes,
+        is_evidence,
     }
 }
 

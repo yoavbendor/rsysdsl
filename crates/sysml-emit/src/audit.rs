@@ -38,6 +38,12 @@ pub struct AuditReport {
     pub satisfied_requirements: usize,
     pub orphan_requirements: Vec<String>,
     pub unverified_constrained_requirements: Vec<String>,
+    /// Requirements whose constraint compares two attributes holding the same model value
+    /// (a "measured" value copied from the limit). Reported as `hollow-requirement` warnings;
+    /// they do not fail the audit (inventing a different number would be worse): mark the
+    /// measured attribute `evidence` and supply it from a verification case.
+    #[serde(default)]
+    pub hollow_requirements: Vec<String>,
     pub total_calcs: usize,
     pub findings: Vec<AuditFinding>,
 }
@@ -187,6 +193,26 @@ fn build_audit_report(
         }
     }
 
+    let mut hollow_requirements = Vec::new();
+    for (req_name, rdef) in &req_defs {
+        let ev = crate::evidence::analyze_requirement(rdef);
+        if ev.hollow_comparisons.is_empty() {
+            continue;
+        }
+        let req_id = rdef.short_name.as_deref().unwrap_or(req_name.as_str());
+        let label = format!("{req_id} ({req_name})");
+        hollow_requirements.push(label.clone());
+        findings.push(AuditFinding {
+            rule: "hollow-requirement".to_string(),
+            severity: "warning".to_string(),
+            element: label,
+            message: format!(
+                "constraint operands hold the same model value ({}): the measured value looks copied from the limit. Mark it `#[sysml::attr(..., evidence)]` without a default and let a verification case supply it",
+                ev.hollow_comparisons.join("; ")
+            ),
+        });
+    }
+
     let total_requirements = req_defs.len();
     let satisfied_requirements = total_requirements.saturating_sub(orphan_requirements.len());
     let strict_ok = !strict || val.warning_count == 0;
@@ -205,6 +231,7 @@ fn build_audit_report(
         satisfied_requirements,
         orphan_requirements,
         unverified_constrained_requirements,
+        hollow_requirements,
         total_calcs,
         findings,
     }

@@ -5,6 +5,7 @@
 pub mod audit;
 pub mod emit;
 pub mod emit_cli;
+pub mod evidence;
 pub mod lint;
 pub mod resolve;
 pub mod safety_report;

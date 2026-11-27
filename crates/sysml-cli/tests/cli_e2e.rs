@@ -297,7 +297,7 @@ fn cli_trace_matrix_json_markdown_csv_and_sysml_files() {
     assert_eq!(csv_out.status.code(), Some(0));
     let csv = String::from_utf8(csv_out.stdout).unwrap();
     assert!(csv.starts_with(
-        "req_id,req_name,package,satisfied_by,allocated_functions,constraints,refines,verification_status,verification_scenario\n"
+        "req_id,req_name,package,satisfied_by,allocated_functions,constraints,refines,verification_status,verification_scenario,evidence_source\n"
     ));
     assert!(csv.contains("CLR-R050"));
 
