@@ -99,3 +99,47 @@ Re-run the same three specs after S1, S4 and S6 to measure improvement against t
 | N11 | Connecting to an inherited port needs a redeclared `#[sysml::port(redefines)]` field | 1 | Document in PATTERNS |
 
 N1–N3, N5–N7 and N11 are small (scaffold + docs); N4 is S7; N8–N10 are new features. Proposed as S6b before S7 so T3 is not dominated by N1.
+
+---
+
+# Trial 3 (after S7 TBD suite, on top of S6b)
+
+**Setup:** pre-registered in [`trials/T3_PROTOCOL.md`](trials/T3_PROTOCOL.md) before any run: specs 1–3 unchanged plus a new ventilation spec with five deliberate gaps (D1 protocol, D2 exchanger efficiency, D3 "TBD W" power limit, D4 frost entry condition, D5 non-SI 2400 rpm); 3 runs each, Haiku, canonical trial rules, CLI at `bf1ceb5`. The prompt did not mention TBDs, so all TBD use came from `AGENTS.md`. **Graded from source by a separate agent, not from self-reports** — full per-run grading with file:line in [`trials/T3_GRADING.md`](trials/T3_GRADING.md). Measures S7 (with S6b).
+
+## Results
+
+| Spec | Invocations | Friction failures | Verify rounds | TBDs | Unmarked invented triggers |
+| --- | --- | --- | --- | --- | --- |
+| Greenhouse | 8, 11, 11 (median 11) | 1, 0, 0 | 1, 2, 2 | 5, 8, 10 | r1, r3 |
+| E-bike | 13, 6, 10 (median 10) | 0, 1, 0 | 2, 1, 2 | 8, 3, 16 | r2 |
+| Water heater | 5, 5, 6 (median 5) | 0, 0, 0 | 1, 1, 1 | 5, 12, 2 | r2, r3 (minor) |
+| Ventilation (new) | 7, 10, 7 (median 7) | 1, 0, 2 | 1, 2, 1 | 8, 19, 11 | — |
+
+- **12/12 runs** reached clean `cargo test`, `audit --stdlib --strict` and `lint --strict`, all within the 15-invocation cap (max 13). 5 friction failures in 12 runs (excluded: 4 deliberate `--maturity` probes, 1 call misrouted through another agent's shared helper script).
+- **107 TBDs: 75 honest gaps, 28 blanked sysml-std defaults, 4 borderline, 0 misuse** (no TBD on a spec-given value, no TBD hiding an error, every measured value used `evidence`). **0 numeric leakage** — every non-spec number was an exact conversion (2400 rpm → 40 Hz, 80 L → 0.08 m^3) or a redefined std value; 11 `0.0` "off" initializers listed as conventions.
+- **Ventilation deliberate gaps: 15/15** handled honestly (TBD channel for the protocol, `tbd_value` on HRV-3/HRV-4, TBD transition for frost entry, exact 40 Hz conversion).
+- Several runs went beyond the loop unprompted: re-checked their own model and marked invented triggers (e-bike r1), ran `audit --maturity` probes (4 runs), blanked std defaults after the lint info (4 runs).
+
+**Verdict:** the TBD suite works as intended for its main purpose — Haiku used it honestly and without prompting, and nothing was invented. The remaining honesty gap is structural, not numeric: **invented triggers left unmarked in 5 of 12 runs**, and in every spec a sibling run marked the same transitions, so it is inconsistency rather than inability. Invocation counts are not comparable to T1–T2 (more modeling work per run: TBDs, std blanking, a harder spec); friction stayed low (5 failures in 12 runs vs 4 in 8 in T2).
+
+## Borderline items (grading rules to settle)
+1. **Design value vs requirement bound** (water heater r1, r2): `tbd_value` on the cutoff trip point because WH-002 gives only "≤ 368 K"; r3 set the trip point to 368 K instead. Both readings are defensible; the docs need a rule.
+2. **TBD channel where typed ports exist** (e-bike r3 torque/speed links): honest reason, but it switches off port checking that was available.
+
+## Findings
+
+| # | Finding | Evidence | Proposed fix |
+| --- | --- | --- | --- |
+| T3-1 | Documented non-SI route `unit = "rpm", custom_unit = "..."` fails strict audit (`unresolved reference 'rpm'`): nothing defines rpm | ventilation r3; PATTERNS P8, ERRORS rows 23/27 | Fix docs now; add an in-model unit definition (e.g. `#[sysml::unit_def]`) or emit custom units in a resolvable form |
+| T3-2 | Invented triggers left unmarked | 5/12 runs | Phase 3 checklist line; built-in TBD trigger (T3-4); S8 reviewer target |
+| T3-3 | Blanking every inherited std default floods the ledger (ventilation r2: 10 of 19 TBDs are params like supply mass) and pushes authors away from sysml-std (8/12 specialized no std part) | 4 runs | Separate `not_modeled = "reason"` marker / ledger kind, not maturity-gated; resolve the lint-vs-AGENTS wording conflict |
+| T3-4 | No way to express an open trigger: agents invent placeholder events (`BoostRequest`, `FrostEvent`, `BmsExchange`); a state-level `#[sysml::tbd]` does not clear `unreachable_state` | 3 runs | Built-in `TbdTrigger`; a TBD state counts as reachable-by-TBD |
+| T3-5 | sysml-std defaults enter through **ports/items/interfaces** (12 V / 1 A on `ElectricalPowerPort`, 0.98 link efficiency, 293.15 K thermal ports) and lint does not report them | 5 runs | Extend `inherited_std_default` to port/item/interface types |
+| T3-6 | Numeric attr in a package without `ScalarValues::*` compiles but fails audit (`unresolved reference 'Real'`); audit line numbers point into stdlib-inclusive text | ventilation r1 | Auto-import or compile error; report lines in the emitted file |
+| T3-7 | `overlapping_guards` fires on guards over different fields (band edges, fault flag vs band) | 3 runs | Only flag same-field/unguarded overlaps, or document |
+| T3-8 | sysml-std `BatteryPack` carries two voltage defaults (own 18 V + inherited 12 V); prelude glob collides with authors' own names | e-bike r2, r3 | Std cleanup; document explicit paths |
+| T3-9 | Doc gaps: `dimensionless` + `tbd_value`, `tbd_unit` with no default, subject-less state template, camelCase in `redefines`, grandparent defaults count, "100% linkage" means satisfied not verified | several | PATTERNS/ERRORS/AGENTS updates |
+| T3-10 | Trial hygiene: agents wrote helper scripts in the shared trial folder; one overwrote another's | 2 runs | Canonical rule: every file inside the run's own crate dir |
+
+## Ground truth for S8
+The labelled set for the AI reviewer is now: 5 runs with unmarked invented triggers (should be flagged), 4 borderline items, 5 runs with port-level std defaults, 0 misuse. A useful reviewer must find the unmarked triggers and the port-level defaults without flagging the 75 honest TBDs.

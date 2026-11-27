@@ -157,6 +157,19 @@ Goal: support gradual, cyclical design without silent holes. Every escape hatch 
 - Metrics: honest TBD use (real gaps → TBD with true reason), misuse (TBD where the spec gives the value, or TBD masking a real error), leaked numbers not in any source, invocations.
 - The hand-labelled results become ground truth for S8.
 
+### T3 — Haiku trial 3 (measures S7)
+- **Status: done.** 12/12 runs clean; 107 TBDs, 0 misuse, 0 numeric leakage; ventilation deliberate gaps 15/15. Main gap: invented triggers unmarked in 5/12 runs. Findings T3-1..T3-10 in [`HAIKU_TRIAL.md`](HAIKU_TRIAL.md); per-run grading in [`trials/T3_GRADING.md`](trials/T3_GRADING.md).
+
+### S7b — Fixes from trial 3 (before S8)
+- T3-1: fix the `custom_unit` docs now; add an in-model unit definition or a resolvable emission for custom units.
+- T3-3: `not_modeled = "reason"` marker (own ledger kind, not maturity-gated) for inherited std parameters out of scope; align lint suggestion and AGENTS Golden Rule 3.
+- T3-4: built-in TBD trigger; a `#[sysml::tbd]` state satisfies `unreachable_state`.
+- T3-5: `inherited_std_default` covers port, item and interface types.
+- T3-6: auto-import `ScalarValues::*` (or compile error); audit line numbers relative to the emitted file.
+- T3-2, T3-9: Phase 3 checklist line "every trigger not in the source is a TBD transition"; doc gaps; rule for design value vs requirement bound.
+- T3-7, T3-8: narrower `overlapping_guards`; `BatteryPack` voltage cleanup.
+- T3-10: add the own-folder rule to the canonical trial rules.
+
 ### S8 — Adversarial AI reviewer (`rsysdsl review`)
 - Advisory only (never a blocking gate): separate context sees spec + diff + TBD ledger, never the author's reasoning.
 - Checks: number provenance against the spec, TBD-reason honesty, hollow requirements (measured value copied from limit).
