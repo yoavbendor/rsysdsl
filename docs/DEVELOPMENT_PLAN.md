@@ -100,7 +100,31 @@ one or more self-contained commits on the work branch, gated by
 - sysml-std numeric-default policy (no unstated numbers leaking into models) and an emit option to omit std packages from output.
 - Separate requirement limits from measured/evidence values; tie evidence to verification cases.
 - Document installing the CLI as `rsysdsl`.
-- **Gate:** re-run the 3 trial specs; target ≤ 10 invocations each.
+- **Gate:** `cargo test --workspace` green; all examples strict audit 0/0/0 and lint CLEAN.
+
+### T2 — Haiku trial 2 (measures S6 alone)
+- Same 3 specs, same instructions and cap as the baseline; **2–3 runs per spec**, report medians.
+- Metric: invocations to clean audit + lint, compared with baseline (8 / 17 / 24, single runs).
+- Kept separate from S7 so friction reduction is not confounded with TBD behavior.
+
+### S7 — TBD / technical-debt suite (controlled escape hatches)
+Goal: support gradual, cyclical design without silent holes. Every escape hatch costs a written reason, is visible in the emitted SysML, is counted, and must shrink as maturity rises.
+1. **Close the free hatch:** a `Quantity` attribute must declare exactly one of `unit = "..."`, `dimensionless`, or `tbd_unit = "reason"`; none is a compile error (today an omitted unit silently skips the dimension check). `custom_unit` requires a reason too.
+2. **Visible debt:** every hatch emits `@TBD { reason; owner; resolveBy; }` metadata; `audit` and `trace-matrix` report a TBD ledger; `audit --maturity concept|preliminary|detailed|release` sets the allowed TBD budget (release = 0).
+3. **Ratchet:** committed `tbd-baseline.json`; CI fails if the TBD count rises without the baseline being updated in the same commit.
+4. **Typed placeholders:** `TbdChannel` interface (connects any two ports, payload untyped) for "some comms link, protocol TBD", and `tbd_value = "reason"` on attributes for parameters not yet in the source (no invented numbers).
+- **Gate:** existing examples unchanged or migrated; ratchet demonstrated in CI.
+
+### T3 — Haiku trial 3 (measures S7)
+- Same 3 specs + 1 new spec with deliberate gaps (unstated protocol, missing parameter value, non-SI unit); 2–3 runs each.
+- Metrics: honest TBD use (real gaps → TBD with true reason), misuse (TBD where the spec gives the value, or TBD masking a real error), leaked numbers not in any source, invocations.
+- The hand-labelled results become ground truth for S8.
+
+### S8 — Adversarial AI reviewer (`rsysdsl review`)
+- Advisory only (never a blocking gate): separate context sees spec + diff + TBD ledger, never the author's reasoning.
+- Checks: number provenance against the spec, TBD-reason honesty, hollow requirements (measured value copied from limit).
+- Structured findings that must cite a spec section (uncited findings dropped); run at phase gates / PRs, ideally a different model or prompt from the author.
+- **Gate:** scored against T3 ground truth (recall on labelled misuse, false-positive rate).
 
 ### Deferred (not scheduled)
 - Bond-graph / acausal connections and FMI 3.0 export (`SIMULATION_VISION.md` Tier 3).
@@ -108,5 +132,6 @@ one or more self-contained commits on the work branch, gated by
 - Type-level dimensional analysis.
 
 ## Execution notes
-- S1, S2, S4, S5 are independent and run in parallel on separate worktrees; S3 depends on S2.
-- Each stage lands as its own commit(s) and is pushed after `cargo test --workspace` is green.
+- S0–S5 done (S1, S2, S4, S5 ran in parallel worktrees; S3 after S2).
+- Order from here: S6 → T2 → S7 → T3 → S8. Trials are separated so each change's effect can be measured on its own.
+- Push after every significant item (not only per stage), each after `cargo test --workspace` is green, so work survives an interrupted session.
