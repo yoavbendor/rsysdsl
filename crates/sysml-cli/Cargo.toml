@@ -18,6 +18,8 @@ apollo11-model = { workspace = true }
 apollo11-sim = { workspace = true }
 sysml-sim = { workspace = true }
 embedded-flight-controller = { workspace = true }
+microwave = { workspace = true }
+microwave-sim = { workspace = true }
 clap = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

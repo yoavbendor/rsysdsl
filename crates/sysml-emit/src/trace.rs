@@ -288,10 +288,14 @@ pub fn render_trace_matrix_markdown(matrix: &TraceMatrix) -> String {
             "fail" => "FAIL",
             other => other,
         };
+        let scenario = match &row.verification_scenario {
+            Some(s) if !s.is_empty() => format!(" (scenario: {})", s.replace('|', "\\|")),
+            _ => String::new(),
+        };
         let _ = writeln!(
             out,
-            "| `{}` | `{}` | `{}` | {} | {} | {} | **{}** |",
-            row.req_id, row.req_name, row.package, sat, fns, cons, status
+            "| `{}` | `{}` | `{}` | {} | {} | {} | **{}**{} |",
+            row.req_id, row.req_name, row.package, sat, fns, cons, status, scenario
         );
     }
     out

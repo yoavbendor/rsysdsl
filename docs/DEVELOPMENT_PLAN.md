@@ -61,6 +61,25 @@ one or more self-contained commits on the work branch, gated by
 - Verdicts feed `trace-matrix --verify` so requirements show "verified by scenario" rather than only "satisfied".
 - **Gate:** scenario verdicts pass; a deliberately broken interlock variant fails.
 - Note: simulation shows the model behaves as written; it does not validate the model against hardware. Reports must list assumptions and parameter sources.
+- **Status: done.** Model: `#[sysml::safety_goal(asil = AsilD, safe_state = "doorOpenCutoff", ftti_ms = 20)]`
+  on MW-004 and `#[sysml::fmea(failure_mode = "ContactsWeldedClosed", ...)]` on both door interlocks
+  (strict audit 0/0/0, lint CLEAN). FTTI 20 ms is MW-004's own `max_cutoff_latency_s`; the ASIL and
+  the FMEA severity/occurrence/detection ratings (10/10/10) are **PLACEHOLDER — no source** and are
+  marked as such in the model. Runner `examples/microwave_sim` registers four scenarios with
+  `rsysdsl verify`: `microwave_reheat_nominal` (MW-001 pass), `microwave_door_open_mid_cook`
+  (MW-004 pass, 13 ms = primary interlock 5 ms + HV relay 8 ms), `microwave_door_open_primary_interlock_welded`
+  (MW-004 pass, 16 ms via the monitor interlock) and the deliberately broken
+  `microwave_door_open_both_interlocks_welded` (`expect_pass: false`; MW-004 fails, first violation
+  t = 45.021 s). Faults are looked up from the model's `PartDef::fmea`; verdicts call the model's
+  `evaluate()`, the safe state / FTTI come from its `SafetyGoal` impl, and the door-open reaction is
+  the model's `MicrowaveState::step_with`. `trace-matrix --model microwave --verify` shows MW-001 and
+  MW-004 as PASS with the verifying scenario names (expected-pass scenarios merged; the broken variant
+  is a monitor self-test, not evidence). The 120 s duration and t = 45 s door opening are scenario
+  stimulus from this plan (the model has no cook-time attribute). Not covered: MW-002 / MW-003 (the
+  model has no load/air thermal-mass or specific-heat attributes, so only absorbed RF energy is
+  integrated), MCU processing time (taken as 0). Assumptions and parameter sources are listed in
+  `examples/microwave_sim/src/lib.rs`. **Limitation:** the simulation verifies the model as written,
+  not the hardware.
 
 ### S4 — Authoring ergonomics: `rsysdsl new` scaffold (F7)
 - `rsysdsl new <name> [--layers types,subsystems,context]` generates a compiling crate with the three-layer skeleton (types/ports → subsystems → top context), emit binary and tests, registered in the workspace.

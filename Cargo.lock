@@ -322,6 +322,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "microwave-sim"
+version = "0.1.0"
+dependencies = [
+ "microwave",
+ "serde_json",
+ "sysml-dsl",
+ "sysml-ir",
+ "sysml-sim",
+ "sysml-std",
+]
+
+[[package]]
 name = "num-bigint"
 version = "0.4.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -547,6 +559,8 @@ dependencies = [
  "apollo11-sim",
  "clap",
  "embedded-flight-controller",
+ "microwave",
+ "microwave-sim",
  "serde",
  "serde_json",
  "sysml-emit",

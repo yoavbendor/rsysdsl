@@ -135,6 +135,45 @@ fn cli_verify_scenario_registry_list_all_and_trace() {
 }
 
 #[test]
+fn cli_verify_microwave_fault_scenarios_and_trace_matrix() {
+    let all = Command::new(bin_path())
+        .args(["verify", "--scenario", "all"])
+        .output()
+        .expect("run rsysdsl verify all");
+    assert_eq!(all.status.code(), Some(0));
+    let all_json: serde_json::Value = serde_json::from_slice(&all.stdout).unwrap();
+    assert_eq!(all_json["microwave_nominal"]["all_passed"], true);
+    assert_eq!(all_json["microwave_door_open"]["all_passed"], true);
+    assert_eq!(all_json["microwave_primary_interlock_welded"]["all_passed"], true);
+    assert_eq!(all_json["microwave_broken_interlock"]["all_passed"], false);
+
+    // Deliberately broken interlock: expected failure, exit 1, MW-004 is the failing requirement.
+    let broken = Command::new(bin_path())
+        .args(["verify", "--scenario", "mw-broken-interlock"])
+        .output()
+        .expect("run rsysdsl verify mw-broken-interlock");
+    assert_eq!(broken.status.code(), Some(1));
+    let report: serde_json::Value = serde_json::from_slice(&broken.stdout).unwrap();
+    let failed: Vec<_> = report["verdicts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|v| v["status"] == "fail")
+        .map(|v| v["req_id"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(failed, vec!["MW-004"]);
+
+    let md = Command::new(bin_path())
+        .args(["trace-matrix", "--model", "microwave", "--verify", "--format", "markdown"])
+        .output()
+        .expect("run rsysdsl trace-matrix microwave");
+    assert_eq!(md.status.code(), Some(0));
+    let md = String::from_utf8(md.stdout).unwrap();
+    assert!(md.contains("2 verified PASS / 0 FAIL / 2 unverified"), "{md}");
+    assert!(md.contains("microwave_door_open_mid_cook, microwave_door_open_primary_interlock_welded"));
+}
+
+#[test]
 fn cli_roundtrip_check_on_apollo11_slice_passes() {
     let root = workspace_root().join("tests/fixtures/apollo-11-sysml-v2");
     let out = Command::new(bin_path())

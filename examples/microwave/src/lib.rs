@@ -20,6 +20,8 @@ use sysml_dsl::prelude::*;
 #[sysml::import("SysmlStdMechanics::*")]
 #[sysml::import("SysmlStdElectronics::*")]
 #[sysml::import("SysmlStdHmi::*")]
+#[sysml::import("ModelingMetadata::*")]
+#[sysml::import("ISO26262Metadata::*")]
 pub mod microwave_model {
     use super::*;
     use sysml_std::prelude::*;
@@ -131,7 +133,18 @@ pub mod microwave_model {
     }
 
     /// MW-004: Dual redundant door interlocks shall cut off HV magnetron excitation within 20 ms of door opening.
+    ///
+    /// Also carries the door-interlock safety goal (hazard: RF exposure with the door open;
+    /// safe state: `DoorOpenCutoff`, i.e. HV/RF off).
+    /// - `ftti_ms = 20`: taken from this requirement's own `max_cutoff_latency_s = 0.020 s`
+    ///   (same quantity: door opening -> HV excitation cut off). Not derived from a separate
+    ///   hazard analysis.
+    /// - `asil = AsilD`: PLACEHOLDER — no source. The model has no hazard analysis / risk
+    ///   assessment; the highest integrity level is used as a conservative stand-in and must be
+    ///   replaced by a real classification.
     #[sysml::requirement(id = "MW-004")]
+    #[sysml::rationale("Safety goal metadata: FTTI 20 ms from max_cutoff_latency_s (MW-004); ASIL D is a PLACEHOLDER with no source.")]
+    #[sysml::safety_goal(asil = AsilD, safe_state = "doorOpenCutoff", ftti_ms = 20)]
     #[sysml::require_constraint(actual_cutoff_latency_s <= max_cutoff_latency_s)]
     #[derive(Debug, Clone, Copy)]
     pub struct DoorInterlockCutoffRequirement {
@@ -400,9 +413,21 @@ pub mod microwave_model {
     // =========================================================================
 
     /// Primary mechanical door-latch interlock switch directly sensing door latch state.
+    ///
+    /// FMEA: contacts welded closed -> the switch keeps reporting "door closed" when the door
+    /// opens, so HV cutoff relies on `MonitorDoorInterlock` alone (failure mode named in the
+    /// `MonitorDoorInterlock` description). `severity`/`occurrence`/`detection` = 10/10/10 are
+    /// PLACEHOLDER — no source (worst-case stand-ins; the model has no FMEA ratings).
     #[sysml::part]
     #[sysml::specializes(SafetyInterlockSwitch)]
     #[sysml::satisfy(req = DoorInterlockCutoffRequirement, id = "MW-004")]
+    #[sysml::fmea(
+        failure_mode = "ContactsWeldedClosed",
+        effect = "DoorOpenNotReportedByPrimaryInterlock",
+        severity = 10,
+        occurrence = 10,
+        detection = 10
+    )]
     #[derive(Debug, Clone, Copy)]
     pub struct PrimaryDoorInterlock {
         #[sysml::attr(redefines = "mass", default = 0.03, unit = "kg")]
@@ -416,9 +441,21 @@ pub mod microwave_model {
     }
 
     /// Secondary redundant monitor interlock switch detecting welded contacts or unlatched door.
+    ///
+    /// FMEA: contacts welded closed -> loss of the redundant door-open detection; combined
+    /// with the same fault on `PrimaryDoorInterlock` the HV is never cut off (MW-004 violated).
+    /// `severity`/`occurrence`/`detection` = 10/10/10 are PLACEHOLDER — no source (worst-case
+    /// stand-ins; the model has no FMEA ratings).
     #[sysml::part]
     #[sysml::specializes(SafetyInterlockSwitch)]
     #[sysml::satisfy(req = DoorInterlockCutoffRequirement, id = "MW-004")]
+    #[sysml::fmea(
+        failure_mode = "ContactsWeldedClosed",
+        effect = "RedundantDoorOpenDetectionLost",
+        severity = 10,
+        occurrence = 10,
+        detection = 10
+    )]
     #[derive(Debug, Clone, Copy)]
     pub struct MonitorDoorInterlock {
         #[sysml::attr(redefines = "mass", default = 0.03, unit = "kg")]
@@ -659,9 +696,11 @@ pub mod microwave_model {
     }
 }
 
-/// Build the complete Microwave Oven `sysml_ir::Model` including all `sysml-std` packages.
+/// Build the complete Microwave Oven `sysml_ir::Model` including all `sysml-std` packages
+/// and the ISO 26262 metadata package (for `@SafetyGoal` / `@FMEA`).
 pub fn build_model() -> Model {
     let mut pkgs = sysml_std::std_packages();
+    pkgs.push(sysml_emit::iso26262_metadata_package());
     pkgs.push(microwave_model::sysml_package());
     Model::new(pkgs)
 }

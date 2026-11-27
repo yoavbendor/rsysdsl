@@ -622,8 +622,20 @@ fn resolve_builtin_model(model_name: &str) -> Result<sysml_ir::Model, String> {
             iso26262_metadata_package(),
             embedded_flight_controller::flight_controller::sysml_package(),
         ])),
+        "microwave" => Ok(microwave::build_model()),
         other => Err(format!(
-            "unknown model '{other}' (available: apollo11-model, embedded-flight-controller)"
+            "unknown model '{other}' (available: apollo11-model, embedded-flight-controller, microwave)"
+        )),
+    }
+}
+
+/// Executable verification evidence for a built-in model (`--verify`).
+fn builtin_verification(model_name: &str) -> Result<sysml_ir::VerificationReport, String> {
+    match model_name {
+        "apollo11-model" => Ok(apollo11_sim::run_nominal_verification()),
+        "microwave" => Ok(microwave_sim::verification_report()),
+        other => Err(format!(
+            "`--verify` has no simulation runner for model '{other}' (available: apollo11-model, microwave)"
         )),
     }
 }
@@ -868,7 +880,13 @@ fn cmd_audit(
             }
         };
         let verification = if with_verify {
-            Some(apollo11_sim::run_nominal_verification())
+            match builtin_verification(model_name) {
+                Ok(v) => Some(v),
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    return ExitCode::from(2);
+                }
+            }
         } else {
             None
         };
@@ -934,7 +952,13 @@ fn cmd_trace_matrix(
             }
         };
         let verification = if with_verify {
-            Some(apollo11_sim::run_nominal_verification())
+            match builtin_verification(model_name) {
+                Ok(v) => Some(v),
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    return ExitCode::from(2);
+                }
+            }
         } else {
             None
         };
@@ -1101,6 +1125,7 @@ fn cmd_roundtrip_check(
 fn verify_registry() -> sysml_sim::Registry {
     let mut registry = sysml_sim::Registry::new();
     registry.extend(apollo11_sim::scenarios());
+    registry.extend(microwave_sim::scenarios());
     registry
 }
 
