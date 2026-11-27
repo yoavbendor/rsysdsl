@@ -41,6 +41,13 @@ one or more self-contained commits on the work branch, gated by
 - Port `apollo11_sim` onto it without changing its verdicts.
 - `rsysdsl verify` becomes generic (scenario registry) instead of Apollo-only.
 - **Gate:** Apollo verdicts unchanged; new unit tests for integrator accuracy and monitor timing.
+- **Status: done.** `crates/sysml-sim` ships `Scenario`, `run`, `rk4_step`, `ZeroCrossing`, `Monitor`
+  (closure or `EvaluableRequirement`; every-step or at-end; min margin + first violation time),
+  time-triggered `Fault`s, a deterministic JSON `RunResult` trace and a `Registry`.
+  `apollo11-sim` runs on it (`PoweredDescentScenario`); `rsysdsl verify` output for
+  `nominal`, `fault`, `all` and the default is byte-identical to the pre-port output
+  (HLR-R002, CLR-R050, CLR-R057, CLR-R058 unchanged). New flags: `--scenario <name|alias|all>`,
+  `--list`, `--trace <file>`. API summary: [`SIMULATION_VISION.md` §4](SIMULATION_VISION.md).
 
 ### S3 — FMEA-driven fault injection on the microwave (F6)
 - `examples/microwave_sim`: 120 s reheat scenario + door-opened-mid-cook fault at t = 45 s.

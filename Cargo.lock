@@ -69,6 +69,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sysml-ir",
+ "sysml-sim",
 ]
 
 [[package]]
@@ -551,6 +552,7 @@ dependencies = [
  "sysml-emit",
  "sysml-ir",
  "sysml-lift",
+ "sysml-sim",
  "tempfile",
 ]
 
@@ -612,6 +614,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "sysml-sim"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sysml-ir",
 ]
 
 [[package]]

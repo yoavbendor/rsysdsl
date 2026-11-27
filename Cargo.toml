@@ -9,6 +9,7 @@ members = [
     "crates/sysml-emit",
     "crates/sysml-lift",
     "crates/sysml-cli",
+    "crates/sysml-sim",
     "examples/apollo11_model",
     "examples/apollo11_sim",
     "examples/embedded_flight_controller",
@@ -39,6 +40,7 @@ sysml-dsl = { path = "crates/sysml-dsl" }
 sysml-std = { path = "crates/sysml-std" }
 sysml-emit = { path = "crates/sysml-emit" }
 sysml-lift = { path = "crates/sysml-lift" }
+sysml-sim = { path = "crates/sysml-sim" }
 apollo11-model = { path = "examples/apollo11_model" }
 apollo11-sim = { path = "examples/apollo11_sim" }
 embedded-flight-controller = { path = "examples/embedded_flight_controller" }

@@ -79,6 +79,62 @@ fn cli_verify_nominal_and_fault_exit_codes() {
 }
 
 #[test]
+fn cli_verify_scenario_registry_list_all_and_trace() {
+    let list = Command::new(bin_path())
+        .args(["verify", "--list"])
+        .output()
+        .expect("run rsysdsl verify --list");
+    assert_eq!(list.status.code(), Some(0));
+    let list_json: serde_json::Value = serde_json::from_slice(&list.stdout).unwrap();
+    let names: Vec<_> = list_json
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["name"].as_str().unwrap().to_string())
+        .collect();
+    assert!(names.contains(&"nominal_tranquility_base_landing".to_string()));
+    assert!(names.contains(&"fault_dps_throttle_stuck_65pct".to_string()));
+
+    let all = Command::new(bin_path())
+        .args(["verify", "--scenario", "all"])
+        .output()
+        .expect("run rsysdsl verify all");
+    assert_eq!(all.status.code(), Some(0));
+    let all_json: serde_json::Value = serde_json::from_slice(&all.stdout).unwrap();
+    assert_eq!(all_json["ok"], true);
+    assert_eq!(all_json["nominal"]["all_passed"], true);
+    assert_eq!(all_json["fault_injection"]["all_passed"], false);
+
+    let unknown = Command::new(bin_path())
+        .args(["verify", "--scenario", "no_such_scenario"])
+        .output()
+        .expect("run rsysdsl verify unknown");
+    assert_eq!(unknown.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&unknown.stderr).contains("unknown scenario"));
+
+    let dir = tempfile::tempdir().unwrap();
+    let trace_path = dir.path().join("trace.json");
+    let traced = Command::new(bin_path())
+        .args(["verify", "--scenario", "fault_dps_throttle_stuck_65pct", "--trace"])
+        .arg(&trace_path)
+        .output()
+        .expect("run rsysdsl verify --trace");
+    assert_eq!(traced.status.code(), Some(1));
+    let run: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&trace_path).unwrap()).unwrap();
+    assert_eq!(run["scenario"], "fault_dps_throttle_stuck_65pct");
+    assert!(run["trace"]["time_s"].as_array().unwrap().len() > 100);
+    let dps = run["verdicts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|v| v["requirement_id"] == "CLR-R057")
+        .unwrap();
+    assert_eq!(dps["pass"], false);
+    assert_eq!(dps["first_violation_s"], 0.0);
+}
+
+#[test]
 fn cli_roundtrip_check_on_apollo11_slice_passes() {
     let root = workspace_root().join("tests/fixtures/apollo-11-sysml-v2");
     let out = Command::new(bin_path())

@@ -84,11 +84,17 @@ enum Commands {
         reemitted_out: Option<PathBuf>,
     },
 
-    /// Execute closed-loop verification on the Rust DSL Apollo 11 model and emit JSON verdicts.
+    /// Execute registered closed-loop verification scenarios (sysml-sim) and emit JSON verdicts.
     Verify {
-        /// Scenario to execute.
-        #[arg(long, value_enum, default_value = "nominal")]
-        scenario: VerifyScenario,
+        /// Scenario name or alias (see `--list`); `all` runs every registered scenario.
+        #[arg(long, default_value = "nominal")]
+        scenario: String,
+        /// List registered scenarios as JSON and exit.
+        #[arg(long)]
+        list: bool,
+        /// Write the sysml-sim run (JSON time-series trace + per-requirement verdicts) here.
+        #[arg(long)]
+        trace: Option<PathBuf>,
     },
 
     /// Audit semantic validity, orphan requirements, and verification traceability completeness.
@@ -256,13 +262,6 @@ enum Commands {
 }
 
 #[derive(Clone, Copy, ValueEnum)]
-enum VerifyScenario {
-    Nominal,
-    Fault,
-    All,
-}
-
-#[derive(Clone, Copy, ValueEnum)]
 enum TraceFormat {
     Json,
     Markdown,
@@ -380,7 +379,11 @@ fn main() -> ExitCode {
             files,
             reemitted_out,
         } => cmd_roundtrip_check(&files, reemitted_out, cli.pretty),
-        Commands::Verify { scenario } => cmd_verify(scenario, cli.pretty),
+        Commands::Verify {
+            scenario,
+            list,
+            trace,
+        } => cmd_verify(&scenario, list, trace, cli.pretty),
         Commands::Audit {
             model,
             files,
@@ -1094,56 +1097,99 @@ fn cmd_roundtrip_check(
     }
 }
 
-fn cmd_verify(scenario: VerifyScenario, pretty: bool) -> ExitCode {
-    match scenario {
-        VerifyScenario::Nominal => {
-            let report = apollo11_sim::run_nominal_verification();
-            print_json(&report, pretty);
-            if report.all_passed {
-                ExitCode::SUCCESS
-            } else {
-                eprintln!("error: {} requirement(s) failed verification", report.failed);
-                ExitCode::from(1)
-            }
+/// Every scenario `rsysdsl verify` can run. Runner crates register here.
+fn verify_registry() -> sysml_sim::Registry {
+    let mut registry = sysml_sim::Registry::new();
+    registry.extend(apollo11_sim::scenarios());
+    registry
+}
+
+/// `--scenario all` output: `{"ok": .., "<key>": report, ...}` in registration order.
+struct AllVerifyOutput {
+    ok: bool,
+    reports: Vec<(&'static str, sysml_ir::VerificationReport)>,
+}
+
+impl Serialize for AllVerifyOutput {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(Some(self.reports.len() + 1))?;
+        map.serialize_entry("ok", &self.ok)?;
+        for (key, report) in &self.reports {
+            map.serialize_entry(key, report)?;
         }
-        VerifyScenario::Fault => {
-            let report = apollo11_sim::run_fault_injection_verification();
-            print_json(&report, pretty);
-            if report.all_passed {
-                ExitCode::SUCCESS
-            } else {
+        map.end()
+    }
+}
+
+fn cmd_verify(scenario: &str, list: bool, trace: Option<PathBuf>, pretty: bool) -> ExitCode {
+    let registry = verify_registry();
+    if list {
+        print_json(&registry.iter().collect::<Vec<_>>(), pretty);
+        return ExitCode::SUCCESS;
+    }
+
+    let selected: Vec<&sysml_sim::RegisteredScenario> = if scenario == "all" {
+        registry.iter().collect()
+    } else {
+        match registry.find(scenario) {
+            Some(s) => vec![s],
+            None => {
+                let names: Vec<_> = registry.iter().map(|s| s.name).collect();
                 eprintln!(
-                    "info: fault-injection scenario triggered {} expected requirement failure(s)",
-                    report.failed
+                    "error: unknown scenario '{scenario}' (available: all, {}; see `rsysdsl verify --list`)",
+                    names.join(", ")
                 );
-                ExitCode::from(1)
+                return ExitCode::from(2);
             }
         }
-        VerifyScenario::All => {
-            let nominal = apollo11_sim::run_nominal_verification();
-            let fault = apollo11_sim::run_fault_injection_verification();
-            let ok = nominal.all_passed && !fault.all_passed;
-            #[derive(Serialize)]
-            struct AllVerifyOutput {
-                ok: bool,
-                nominal: sysml_ir::VerificationReport,
-                fault_injection: sysml_ir::VerificationReport,
-            }
-            print_json(
-                &AllVerifyOutput {
-                    ok,
-                    nominal,
-                    fault_injection: fault,
-                },
-                pretty,
-            );
-            if ok {
-                ExitCode::SUCCESS
-            } else {
-                eprintln!("error: verification suite expectation mismatch");
-                ExitCode::from(1)
-            }
+    };
+
+    let outcomes: Vec<_> = selected.iter().map(|s| (s, (s.run)())).collect();
+
+    if let Some(path) = trace {
+        let runs: Vec<&sysml_sim::RunResult> = outcomes.iter().map(|(_, o)| &o.run).collect();
+        let text = if runs.len() == 1 {
+            serde_json::to_string(runs[0])
+        } else {
+            serde_json::to_string(&runs)
         }
+        .expect("run results serialize");
+        if let Err(e) = fs::write(&path, text) {
+            eprintln!("error: cannot write trace to {}: {e}", path.display());
+            return ExitCode::from(2);
+        }
+    }
+
+    if scenario == "all" {
+        let ok = outcomes.iter().all(|(s, o)| s.meets_expectation(o));
+        let reports = outcomes
+            .into_iter()
+            .map(|(s, o)| (s.key, o.report))
+            .collect();
+        print_json(&AllVerifyOutput { ok, reports }, pretty);
+        return if ok {
+            ExitCode::SUCCESS
+        } else {
+            eprintln!("error: verification suite expectation mismatch");
+            ExitCode::from(1)
+        };
+    }
+
+    let (entry, outcome) = &outcomes[0];
+    let report = &outcome.report;
+    print_json(report, pretty);
+    if report.all_passed {
+        ExitCode::SUCCESS
+    } else if !entry.expect_pass {
+        eprintln!(
+            "info: fault-injection scenario triggered {} expected requirement failure(s)",
+            report.failed
+        );
+        ExitCode::from(1)
+    } else {
+        eprintln!("error: {} requirement(s) failed verification", report.failed);
+        ExitCode::from(1)
     }
 }
 

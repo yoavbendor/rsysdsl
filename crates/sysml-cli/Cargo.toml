@@ -16,6 +16,7 @@ sysml-emit = { workspace = true }
 sysml-lift = { workspace = true }
 apollo11-model = { workspace = true }
 apollo11-sim = { workspace = true }
+sysml-sim = { workspace = true }
 embedded-flight-controller = { workspace = true }
 clap = { workspace = true }
 serde = { workspace = true }
