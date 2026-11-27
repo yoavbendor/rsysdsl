@@ -1,8 +1,12 @@
 error[E0599]: no variant, associated function, or constant named `NonExistentPhase` found for enum `BrokenMissionMachine` in the current scope
   --> tests/ui/bad_state_transition.rs:12:49
    |
-10 | pub enum BrokenMissionMachine {
-   | ----------------------------- variant, associated function, or constant `NonExistentPhase` not found for this enum
-11 |     #[sysml::initial]
-12 |     #[sysml::transition(on = TriggerEvent, to = NonExistentPhase)]
-   |                                                 ^^^^^^^^^^^^^^^^ variant, associated function, or constant not found in `BrokenMissionMachine`
+10 |   pub enum BrokenMissionMachine {
+   |  _-----------------------------
+   | | |
+   | | variant, associated function, or constant `NonExistentPhase` not found for this enum
+11 | |     #[sysml::initial]
+12 | |     #[sysml::transition(on = TriggerEvent, to = NonExistentPhase)]
+   | |                                                -^^^^^^^^^^^^^^^^ variant, associated function, or constant not found in `BrokenMissionMachine`
+   | |________________________________________________|
+   |
