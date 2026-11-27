@@ -125,7 +125,7 @@ Always build the system in **compiling, auditable increments** — never try to 
    - **Gate:** `audit --stdlib --strict` -> **0 orphan requirements** + `trace-matrix --format markdown` shows 100% linkage.
 4. **Phase 3 — Functions, Modes & Calculations:**
    - Add `#[sysml::action]` + `#[sysml::perform(...)]`, executable guarded `#[sysml::state]` enums, and `#[sysml::calc]` formulas (reusing `SysmlStdFlows` physical laws).
-   - **Gate:** Unit tests exercise `evaluate()`, `step_with()`, and `#[sysml::calc]` functions; `audit --stdlib --strict` stays at 0 errors / 0 warnings.
+   - **Gate:** Unit tests exercise `evaluate()`, `dispatch_with()` (returns `StepOutcome::Ignored` for an event no transition takes; `step_with()` returns `Err` for it), and `#[sysml::calc]` functions; `audit --stdlib --strict` stays at 0 errors / 0 warnings.
 5. **Phase 4 — ISO 26262 Safety & Closed-Loop Simulation (Optional):**
    - Add `#[sysml::safety_goal]`, `#[sysml::fmea]`, `#[sysml::independent]`, `#[sysml::asil_decompose]`, and (if needed) a separate `<system>_sim` crate.
 

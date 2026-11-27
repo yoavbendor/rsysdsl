@@ -18,7 +18,7 @@ pub use sysml_macros as sysml;
 pub mod prelude {
     pub use sysml_core::{
         Asil, AsilA, AsilB, AsilC, AsilD, AsilDecomposable, AsilLevel, Conjugated,
-        EvaluableRequirement, IndependentFrom, NoStdTransitionError, Performs, PortConnectable,
+        EvaluableRequirement, IndependentFrom, NoStdTransitionError, Performs, StepOutcome, PortConnectable,
         Qm, Quantity, SafetyGoal, Satisfies, Specializes, SymmetricPort, SysmlActionCore,
         SysmlCalcCore, SysmlEnumCore, SysmlInterfaceCore, SysmlItemCore, SysmlPartCore,
         SysmlPortCore, SysmlRequirementCore, SysmlStateCore, ToScalar, Verifies,

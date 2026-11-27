@@ -658,6 +658,19 @@ fn expand_state_enum(args: TokenStream, mut item: ItemEnum) -> syn::Result<Token
                         event: <E as ::sysml_dsl::core_contracts::SysmlItemCore>::SYSML_NAME,
                     })
                 }
+
+                /// Like `step_with`, but an event that matches no transition (wrong trigger, or
+                /// every guard false) is the normal SysML no-op `StepOutcome::Ignored`, not an error.
+                pub fn dispatch_with<E: ::sysml_dsl::core_contracts::SysmlItemCore + 'static>(
+                    &mut self,
+                    event: &E,
+                    subject: &#subj,
+                ) -> ::sysml_dsl::core_contracts::StepOutcome<Self> {
+                    match self.step_with(event, subject) {
+                        ::core::result::Result::Ok(s) => ::sysml_dsl::core_contracts::StepOutcome::Moved(s),
+                        ::core::result::Result::Err(_) => ::sysml_dsl::core_contracts::StepOutcome::Ignored,
+                    }
+                }
             }
         } else {
             quote! {
@@ -672,6 +685,18 @@ fn expand_state_enum(args: TokenStream, mut item: ItemEnum) -> syn::Result<Token
                         from: self.sysml_state_name(),
                         event: <E as ::sysml_dsl::core_contracts::SysmlItemCore>::SYSML_NAME,
                     })
+                }
+
+                /// Like `step_event`, but an event that matches no transition (wrong trigger, or
+                /// every guard false) is the normal SysML no-op `StepOutcome::Ignored`, not an error.
+                pub fn dispatch_event<E: ::sysml_dsl::core_contracts::SysmlItemCore + 'static>(
+                    &mut self,
+                    event: &E,
+                ) -> ::sysml_dsl::core_contracts::StepOutcome<Self> {
+                    match self.step_event(event) {
+                        ::core::result::Result::Ok(s) => ::sysml_dsl::core_contracts::StepOutcome::Moved(s),
+                        ::core::result::Result::Err(_) => ::sysml_dsl::core_contracts::StepOutcome::Ignored,
+                    }
                 }
             }
         };
@@ -722,6 +747,19 @@ fn expand_state_enum(args: TokenStream, mut item: ItemEnum) -> syn::Result<Token
                         allowed_triggers: self.allowed_triggers(),
                     })
                 }
+
+                /// Like `step_with`, but an event that matches no transition (wrong trigger, or
+                /// every guard false) is the normal SysML no-op `StepOutcome::Ignored`, not an error.
+                pub fn dispatch_with<E: ::sysml_dsl::core_contracts::SysmlItemCore + 'static>(
+                    &mut self,
+                    event: &E,
+                    subject: &#subj,
+                ) -> ::sysml_dsl::core_contracts::StepOutcome<Self> {
+                    match self.step_with(event, subject) {
+                        ::std::result::Result::Ok(s) => ::sysml_dsl::core_contracts::StepOutcome::Moved(s),
+                        ::std::result::Result::Err(_) => ::sysml_dsl::core_contracts::StepOutcome::Ignored,
+                    }
+                }
             }
         } else {
             quote! {
@@ -738,6 +776,18 @@ fn expand_state_enum(args: TokenStream, mut item: ItemEnum) -> syn::Result<Token
                         trigger: ::std::string::String::from(<E as ::sysml_dsl::core_contracts::SysmlItemCore>::SYSML_NAME),
                         allowed_triggers: self.allowed_triggers(),
                     })
+                }
+
+                /// Like `step_event`, but an event that matches no transition (wrong trigger, or
+                /// every guard false) is the normal SysML no-op `StepOutcome::Ignored`, not an error.
+                pub fn dispatch_event<E: ::sysml_dsl::core_contracts::SysmlItemCore + 'static>(
+                    &mut self,
+                    event: &E,
+                ) -> ::sysml_dsl::core_contracts::StepOutcome<Self> {
+                    match self.step_event(event) {
+                        ::std::result::Result::Ok(s) => ::sysml_dsl::core_contracts::StepOutcome::Moved(s),
+                        ::std::result::Result::Err(_) => ::sysml_dsl::core_contracts::StepOutcome::Ignored,
+                    }
                 }
             }
         };

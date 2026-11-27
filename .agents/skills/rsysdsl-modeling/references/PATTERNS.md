@@ -178,6 +178,8 @@ pub struct ControlModule {
 
 Guards reference `event.<field>` (from the `on = EventItem` struct) and `subject.<field>` (from the `subject = Part` struct). The exact same guard emits SysML `if ...` AND runs in `mode.step_with(&event, &subject)`.
 
+> **Ignored events are not errors in SysML — but `step_with` returns `Err` for them.** An event that matches no transition from the current state (wrong trigger, or every guard false) leaves the state unchanged. Use **`mode.dispatch_with(&event, &subject)`** (or `dispatch_event(&event)` for a machine without `subject`), which returns `StepOutcome::Moved(new_state)` or `StepOutcome::Ignored`. Use `step_with` / `step_event` (`Result<State, _>`, `Err` = no transition matched) only when an unmatched event should fail the test. `StepOutcome` is in `sysml_dsl::prelude`.
+
 ```rust
 #[sysml::item]
 #[derive(Debug, Clone, Copy, Default)]
@@ -206,15 +208,20 @@ pub enum PlantMode {
     SafeShutdown,
 }
 
-// Driving it (tests or a separate sim crate). `step_with` takes `&mut self` and returns
-// `Result<PlantMode, NoStdTransitionError>`: `Err` means no transition matched the event.
+// Driving it (tests or a separate sim crate). Both take `&mut self`:
+// - `dispatch_with` -> `StepOutcome::Moved(state)` | `StepOutcome::Ignored` (normal no-op);
+// - `step_with`     -> `Result<PlantMode, _>`, where `Err` means "no transition matched"
+//   (`TransitionError`, or `NoStdTransitionError` in a `#![no_std]` model).
 #[cfg(test)]
 #[test]
 fn plant_shuts_down_on_overtemp() {
     let plant = ThermalPlant::default();
     let mut mode = PlantMode::Operating;
+    let normal = ThermalAlert { measured_temp: 300.0 };
+    assert_eq!(mode.dispatch_with(&normal, &plant), StepOutcome::Ignored); // guard false
+    assert_eq!(mode, PlantMode::Operating);
     let alert = ThermalAlert { measured_temp: 360.0 };
-    assert_eq!(mode.step_with(&alert, &plant), Ok(PlantMode::SafeShutdown));
+    assert_eq!(mode.dispatch_with(&alert, &plant), StepOutcome::Moved(PlantMode::SafeShutdown));
 }
 ```
 

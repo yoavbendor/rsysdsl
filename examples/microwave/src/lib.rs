@@ -845,6 +845,12 @@ mod tests {
         };
         assert!(state.step_with(&start_while_open, &mcu).is_err());
         assert_eq!(state, MicrowaveState::Standby);
+        // `dispatch_with` reports the same unmatched event as the normal SysML no-op.
+        assert_eq!(
+            state.dispatch_with(&start_while_open, &mcu),
+            StepOutcome::Ignored
+        );
+        assert_eq!(state, MicrowaveState::Standby);
 
         // Door closed allows entering Cooking
         let start_valid = CookStartCommand {

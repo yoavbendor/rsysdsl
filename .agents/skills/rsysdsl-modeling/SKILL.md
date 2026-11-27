@@ -43,7 +43,7 @@ Use this skill to incrementally build and validate **System as Code** models in 
 - [ ] Functions modeled as `#[sysml::action]` and allocated via `#[sysml::perform(...)]`.
 - [ ] Operating modes / fault transitions modeled as `#[sysml::state(subject = ...)] pub enum`.
 - [ ] Budgets / engineering formulas modeled as `#[sysml::calc] pub fn`.
-- [ ] Unit tests execute `evaluate()`, `step_with()`, and `#[sysml::calc]` directly.
+- [ ] Unit tests execute `evaluate()`, `dispatch_with()` (`Ignored` for unmatched events) / `step_with()` (`Err` for them), and `#[sysml::calc]` directly.
 
 ### Phase 4: ISO 26262 Safety & Simulation (When Applicable)
 - [ ] Top-level safety goals annotated with `#[sysml::safety_goal(asil = ..., safe_state = "...", ftti_ms = ...)]`.

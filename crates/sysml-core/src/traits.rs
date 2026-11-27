@@ -130,6 +130,33 @@ impl fmt::Display for NoStdTransitionError {
     }
 }
 
+/// Outcome of dispatching an event to a state machine with `dispatch_with` / `dispatch_event`.
+///
+/// In SysML v2 an event that matches no transition from the current state (wrong trigger, or
+/// every guard false) is simply not consumed: the machine stays where it is. That is a normal
+/// outcome, so it is `Ignored` here rather than an error. (`step_with` / `step_event` keep
+/// returning `Err` for it, for callers that treat an unmatched event as a test failure.)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StepOutcome<S> {
+    /// A transition fired; the payload is the new current state (may equal the old one for a
+    /// self-transition).
+    Moved(S),
+    /// No transition matched; the state is unchanged.
+    Ignored,
+}
+
+impl<S> StepOutcome<S> {
+    /// `true` if a transition fired.
+    pub fn moved(&self) -> bool {
+        matches!(self, StepOutcome::Moved(_))
+    }
+
+    /// `true` if no transition matched.
+    pub fn is_ignored(&self) -> bool {
+        matches!(self, StepOutcome::Ignored)
+    }
+}
+
 /// Compile-time assertion helpers usable in `#![no_std]` crates.
 pub const fn assert_part_core<T: SysmlPartCore>() {}
 pub const fn assert_port_core<T: SysmlPortCore>() {}
