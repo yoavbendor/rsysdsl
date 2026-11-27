@@ -1,0 +1,5 @@
+error[E0080]: evaluation panicked: `redefines` target field `nonexistentField` does not exist on any specialized ancestor part
+  --> tests/ui/bad_redefines_field.rs:10:1
+   |
+10 | #[sysml::part]
+   | ^^^^^^^^^^^^^^ evaluation of `_` failed here

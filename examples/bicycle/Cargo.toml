@@ -1,0 +1,12 @@
+[package]
+name = "bicycle"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Human-powered Bicycle multi-domain mechanical, HMI, friction heat, and acoustic model"
+
+[dependencies]
+sysml-dsl = { workspace = true }
+sysml-std = { workspace = true }
+sysml-emit = { workspace = true }

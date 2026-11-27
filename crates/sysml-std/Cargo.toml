@@ -1,0 +1,13 @@
+[package]
+name = "sysml-std"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Universal SI-unit engineering standard library for rsysdsl: physical flows, comms, power, mechanics, electronics, HMI, and natural systems"
+
+[dependencies]
+sysml-dsl = { path = "../sysml-dsl" }
+
+[dev-dependencies]
+sysml-emit = { path = "../sysml-emit" }

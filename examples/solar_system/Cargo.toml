@@ -1,0 +1,12 @@
+[package]
+name = "solar-system"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Solar System hierarchical physics model (Star, Planets, Moons, radiation, orbital mechanics)"
+
+[dependencies]
+sysml-dsl = { workspace = true }
+sysml-std = { workspace = true }
+sysml-emit = { workspace = true }

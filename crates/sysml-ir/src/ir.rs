@@ -230,20 +230,41 @@ pub struct AttributeUsage {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct VariantPart {
+    pub name: String,
+    pub type_name: String,
+    pub doc: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct AllocationUsage {
+    pub name: Option<String>,
+    pub from: String,
+    pub to: String,
+    pub doc: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct PartDef {
     pub name: String,
     pub is_abstract: bool,
     pub is_individual: bool,
+    #[serde(default)]
+    pub is_variation: bool,
     pub doc: Option<String>,
     #[serde(default)]
     pub comments: Vec<Comment>,
     pub specializes: Vec<String>,
     pub attributes: Vec<AttributeUsage>,
     pub parts: Vec<PartUsage>,
+    #[serde(default)]
+    pub variants: Vec<VariantPart>,
     pub ports: Vec<PortUsage>,
     pub items: Vec<DirectedItem>,
     pub performs: Vec<PerformAction>,
     pub connections: Vec<ConnectionUsage>,
+    #[serde(default)]
+    pub allocations: Vec<AllocationUsage>,
     pub exhibit_states: Vec<StateUsage>,
     pub requirements: Vec<RequirementUsage>,
     pub satisfies: Vec<SatisfyStmt>,
@@ -314,6 +335,8 @@ pub struct ViewUsage {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct PortDef {
     pub name: String,
+    #[serde(default)]
+    pub is_abstract: bool,
     pub doc: Option<String>,
     pub specializes: Vec<String>,
     pub is_symmetric: bool,
@@ -327,6 +350,8 @@ pub struct PortUsage {
     pub type_name: String,
     pub conjugated: bool,
     pub multiplicity: Option<Multiplicity>,
+    #[serde(default)]
+    pub redefines: Vec<String>,
     pub doc: Option<String>,
 }
 
@@ -369,8 +394,12 @@ pub struct InterfaceEnd {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct InterfaceDef {
     pub name: String,
+    #[serde(default)]
+    pub is_abstract: bool,
     pub doc: Option<String>,
     pub specializes: Vec<String>,
+    #[serde(default)]
+    pub attributes: Vec<AttributeUsage>,
     pub ends: Vec<InterfaceEnd>,
 }
 

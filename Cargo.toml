@@ -5,6 +5,7 @@ members = [
     "crates/sysml-ir",
     "crates/sysml-macros",
     "crates/sysml-dsl",
+    "crates/sysml-std",
     "crates/sysml-emit",
     "crates/sysml-lift",
     "crates/sysml-cli",
@@ -12,6 +13,12 @@ members = [
     "examples/apollo11_sim",
     "examples/embedded_flight_controller",
     "examples/starter_model",
+    "examples/solar_system",
+    "examples/earth_water_cycle",
+    "examples/bicycle",
+    "examples/power_tools_family",
+    "examples/dishwasher",
+    "examples/microwave",
 ]
 exclude = [
     "third_party/open-mbee/crates/sysmlv2-syntax",
@@ -29,6 +36,7 @@ sysml-core = { path = "crates/sysml-core" }
 sysml-ir = { path = "crates/sysml-ir" }
 sysml-macros = { path = "crates/sysml-macros" }
 sysml-dsl = { path = "crates/sysml-dsl" }
+sysml-std = { path = "crates/sysml-std" }
 sysml-emit = { path = "crates/sysml-emit" }
 sysml-lift = { path = "crates/sysml-lift" }
 apollo11-model = { path = "examples/apollo11_model" }

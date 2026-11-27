@@ -1,0 +1,12 @@
+[package]
+name = "microwave"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Multi-domain Microwave Oven model (AC/HV power, magnetron RF, safety interlocks, electronics, HMI, heat, noise)"
+
+[dependencies]
+sysml-dsl = { workspace = true }
+sysml-std = { workspace = true }
+sysml-emit = { workspace = true }

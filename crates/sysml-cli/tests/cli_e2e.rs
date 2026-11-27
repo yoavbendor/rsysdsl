@@ -449,3 +449,69 @@ fn cli_view_generates_standalone_html_for_files_and_builtin_models() {
     assert_eq!(snap_json["currentView"], "ibd");
 }
 
+#[test]
+fn cli_lint_reports_metrics_and_smells() {
+    // 1. Built-in embedded-flight-controller exits 0 and emits valid JSON with summary.total_parts > 0
+    let fc_out = Command::new(bin_path())
+        .args(["lint", "--model", "embedded-flight-controller"])
+        .output()
+        .expect("run rsysdsl lint on embedded-flight-controller");
+    assert_eq!(
+        fc_out.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&fc_out.stderr)
+    );
+    let fc_json: serde_json::Value =
+        serde_json::from_slice(&fc_out.stdout).expect("stdout must be valid JSON");
+    assert!(
+        fc_json["summary"]["total_parts"].as_u64().unwrap_or(0) > 0,
+        "expected summary.total_parts > 0, got {}",
+        fc_json["summary"]["total_parts"]
+    );
+
+    // 2. Duplicate unspecialized parts sharing 3 features trigger duplicate_part_shape and exit 1 under --strict
+    let dir = tempfile::tempdir().unwrap();
+    let smell_path = dir.path().join("smells.sysml");
+    std::fs::write(
+        &smell_path,
+        r#"package LintSmellDemo {
+    port def PowerPort;
+    part def TempSensor {
+        attribute sampleRate : Real = 100.0;
+        attribute mass : Real = 0.05;
+        port powerIn : PowerPort;
+    }
+    part def PressSensor {
+        attribute sampleRate : Real = 50.0;
+        attribute mass : Real = 0.06;
+        port powerIn : PowerPort;
+    }
+}
+"#,
+    )
+    .unwrap();
+
+    let strict_out = Command::new(bin_path())
+        .arg("lint")
+        .arg("--files")
+        .arg(&smell_path)
+        .arg("--strict")
+        .output()
+        .expect("run rsysdsl lint --files --strict");
+    assert_eq!(
+        strict_out.status.code(),
+        Some(1),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&strict_out.stdout),
+        String::from_utf8_lossy(&strict_out.stderr)
+    );
+    let stdout_str = String::from_utf8(strict_out.stdout).unwrap();
+    assert!(
+        stdout_str.contains("duplicate_part_shape"),
+        "expected duplicate_part_shape in stdout, got: {stdout_str}"
+    );
+    let smell_json: serde_json::Value =
+        serde_json::from_str(&stdout_str).expect("stdout must be valid JSON");
+    assert_eq!(smell_json["clean"], false);
+}

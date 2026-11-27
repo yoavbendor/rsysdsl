@@ -31,4 +31,8 @@ fn gate1_compile_time_safety() {
     // ISO 26262 safety contracts (Track C)
     t.compile_fail("tests/ui/bad_asil_decomposition.rs");
     t.compile_fail("tests/ui/missing_asil_independence.rs");
+    // Phase 1 hierarchy & reuse contracts (abstract, redefines, variation, allocate)
+    t.pass("tests/ui/valid_hierarchy.rs");
+    t.compile_fail("tests/ui/bad_redefines_field.rs");
+    t.compile_fail("tests/ui/bad_variation_member.rs");
 }

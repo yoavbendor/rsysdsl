@@ -16,9 +16,9 @@ use std::process::ExitCode;
 use sysml_emit::{
     audit_model_with_lib, audit_units_with_lib, build_safety_report, build_trace_matrix,
     build_viewer_snapshot, discover_omg_stdlib, emit_model, iso26262_metadata_package,
-    render_safety_report_markdown, render_standalone_html, render_trace_matrix_csv,
-    render_trace_matrix_markdown, validate_sysml_units, validate_sysml_units_with_lib,
-    ViewerOptions, ViewerTheme, ViewerView,
+    lint_model, render_lint_markdown, render_safety_report_markdown, render_standalone_html,
+    render_trace_matrix_csv, render_trace_matrix_markdown, validate_sysml_units,
+    validate_sysml_units_with_lib, ViewerOptions, ViewerTheme, ViewerView,
 };
 use sysml_lift::{
     compare_sysml_roundtrip, generate_rust_dsl, lift_sysml_units, CodegenOptions,
@@ -177,6 +177,29 @@ enum Commands {
         output: Option<PathBuf>,
     },
 
+    /// Lint a model for architecture, hierarchy, reuse, and physical-modeling smells.
+    Lint {
+        /// Built-in model name (ignored when `--files` is provided).
+        #[arg(long, default_value = "apollo11-model")]
+        model: String,
+
+        /// Optional `.sysml` input files to lift and lint directly.
+        #[arg(long, num_args = 1..)]
+        files: Vec<PathBuf>,
+
+        /// Output format: json or markdown.
+        #[arg(long, value_enum, default_value = "json")]
+        format: LintFormat,
+
+        /// Fail with exit code 1 if any lint warnings are detected (`!report.clean`).
+        #[arg(long)]
+        strict: bool,
+
+        /// Optional file path to write the rendered lint report.
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+
     /// Generate a standalone offline interactive HTML diagram viewer (or serve locally).
     View {
         /// Optional `.sysml` files to lift and view (uses `--model` when empty).
@@ -232,6 +255,12 @@ enum TraceFormat {
 
 #[derive(Clone, Copy, ValueEnum)]
 enum SafetyFormat {
+    Json,
+    Markdown,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum LintFormat {
     Json,
     Markdown,
 }
@@ -363,6 +392,13 @@ fn main() -> ExitCode {
             format,
             output,
         } => cmd_safety_report(&model, &files, format, output, cli.pretty),
+        Commands::Lint {
+            model,
+            files,
+            format,
+            strict,
+            output,
+        } => cmd_lint(&model, &files, format, strict, output, cli.pretty),
         Commands::View {
             files,
             model,
@@ -634,6 +670,83 @@ fn cmd_safety_report(
     }
     print!("{rendered}");
     ExitCode::SUCCESS
+}
+
+fn cmd_lint(
+    model_name: &str,
+    files: &[PathBuf],
+    format: LintFormat,
+    strict: bool,
+    output: Option<PathBuf>,
+    pretty: bool,
+) -> ExitCode {
+    let (label, model) = if !files.is_empty() {
+        let units = match read_units(files) {
+            Ok(u) => u,
+            Err(e) => {
+                eprintln!("error: {e}");
+                return ExitCode::from(2);
+            }
+        };
+        let lifted = lift_sysml_units(&units);
+        if !lifted.parse_errors.is_empty() {
+            for err in &lifted.parse_errors {
+                eprintln!("parse error: {err}");
+            }
+            return ExitCode::from(2);
+        }
+        let label = if files.len() == 1 {
+            files[0].display().to_string()
+        } else {
+            format!("{} files", files.len())
+        };
+        (label, lifted.model)
+    } else {
+        let model = match resolve_builtin_model(model_name) {
+            Ok(m) => m,
+            Err(e) => {
+                eprintln!("error: {e}");
+                return ExitCode::from(2);
+            }
+        };
+        (model_name.to_string(), model)
+    };
+
+    let report = lint_model(label, &model);
+    let rendered = match format {
+        LintFormat::Json => {
+            let text = if pretty {
+                serde_json::to_string_pretty(&report)
+            } else {
+                serde_json::to_string(&report)
+            };
+            match text {
+                Ok(s) => format!("{s}\n"),
+                Err(e) => {
+                    eprintln!("error: failed to serialize lint report: {e}");
+                    return ExitCode::from(2);
+                }
+            }
+        }
+        LintFormat::Markdown => render_lint_markdown(&report),
+    };
+
+    if let Some(path) = &output {
+        if let Err(e) = fs::write(path, &rendered) {
+            eprintln!("error: failed to write '{}': {e}", path.display());
+            return ExitCode::from(2);
+        }
+    }
+    print!("{rendered}");
+    if strict && !report.clean {
+        eprintln!(
+            "error: lint failed in strict mode with {} warning(s)",
+            report.summary.warning_count
+        );
+        ExitCode::from(1)
+    } else {
+        ExitCode::SUCCESS
+    }
 }
 
 fn cmd_emit(model_name: &str, output: Option<PathBuf>, raw: bool, pretty: bool) -> ExitCode {

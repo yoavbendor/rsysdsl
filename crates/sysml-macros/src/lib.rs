@@ -159,6 +159,7 @@ fn reorder_below_primary(
 ) -> Option<proc_macro2::TokenStream> {
     const PRIMARY: &[&str] = &[
         "part",
+        "variation",
         "port",
         "interface",
         "connection",
@@ -386,6 +387,29 @@ pub fn asil_decompose(args: TokenStream, input: TokenStream) -> TokenStream {
     syn::Error::new_spanned(
         item,
         "#[sysml::asil_decompose] must be attached to a #[sysml::part] struct",
+    )
+    .to_compile_error()
+    .into()
+}
+
+#[proc_macro_attribute]
+pub fn variation(args: TokenStream, input: TokenStream) -> TokenStream {
+    let item = parse_macro_input!(input as ItemEnum);
+    part::expand_variation(args.into(), item)
+        .unwrap_or_else(|e| e.to_compile_error())
+        .into()
+}
+
+#[proc_macro_attribute]
+pub fn allocate(args: TokenStream, input: TokenStream) -> TokenStream {
+    let args2: proc_macro2::TokenStream = args.into();
+    let mut item = parse_macro_input!(input as Item);
+    if let Some(reordered) = reorder_below_primary("allocate", args2, &mut item) {
+        return reordered.into();
+    }
+    syn::Error::new_spanned(
+        item,
+        "#[sysml::allocate] must be attached to a #[sysml::part] struct",
     )
     .to_compile_error()
     .into()

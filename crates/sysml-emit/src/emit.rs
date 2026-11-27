@@ -424,7 +424,8 @@ fn emit_directed_item(it: &DirectedItem, level: usize, out: &mut String) {
 
 fn emit_port_def(p: &PortDef, level: usize, out: &mut String) {
     let ind = indent(level);
-    let _ = write!(out, "{ind}port def {}", escape_sysml_name(&p.name));
+    let abs = if p.is_abstract { "abstract " } else { "" };
+    let _ = write!(out, "{ind}{abs}port def {}", escape_sysml_name(&p.name));
     emit_specializes(&p.specializes, out);
     if p.doc.is_none() && p.items.is_empty() && p.attributes.is_empty() {
         let _ = writeln!(out, ";");
@@ -449,12 +450,31 @@ fn emit_port_usage(p: &PortUsage, level: usize, out: &mut String) {
         .as_ref()
         .map(|m| m.render())
         .unwrap_or_default();
-    let _ = write!(
-        out,
-        "{ind}port {}{mult} : {conj}{}",
-        escape_sysml_name(&p.name),
-        format_qualified(&p.type_name)
-    );
+    if !p.redefines.is_empty() {
+        let joined = p
+            .redefines
+            .iter()
+            .map(|r| format_ref(r))
+            .collect::<Vec<_>>()
+            .join(", ");
+        if p.redefines.len() == 1 && p.redefines[0] == p.name {
+            let _ = write!(out, "{ind}port{mult} :>> {joined}");
+        } else {
+            let _ = write!(
+                out,
+                "{ind}port {}{mult} : {conj}{} :>> {joined}",
+                escape_sysml_name(&p.name),
+                format_qualified(&p.type_name)
+            );
+        }
+    } else {
+        let _ = write!(
+            out,
+            "{ind}port {}{mult} : {conj}{}",
+            escape_sysml_name(&p.name),
+            format_qualified(&p.type_name)
+        );
+    }
     if p.doc.is_some() {
         let _ = writeln!(out, " {{");
         emit_doc(&p.doc, level + 1, out);
@@ -466,10 +486,18 @@ fn emit_port_usage(p: &PortUsage, level: usize, out: &mut String) {
 
 fn emit_interface_def(i: &InterfaceDef, level: usize, out: &mut String) {
     let ind = indent(level);
-    let _ = write!(out, "{ind}interface def {}", escape_sysml_name(&i.name));
+    let abs = if i.is_abstract { "abstract " } else { "" };
+    let _ = write!(out, "{ind}{abs}interface def {}", escape_sysml_name(&i.name));
     emit_specializes(&i.specializes, out);
+    if i.doc.is_none() && i.attributes.is_empty() && i.ends.is_empty() {
+        let _ = writeln!(out, ";");
+        return;
+    }
     let _ = writeln!(out, " {{");
     emit_doc(&i.doc, level + 1, out);
+    for a in &i.attributes {
+        emit_attribute_usage(a, level + 1, out);
+    }
     for end in &i.ends {
         let conj = if end.conjugated { "~" } else { "" };
         let mult = end
@@ -729,10 +757,11 @@ fn emit_portion_usage(p: &PortionUsage, level: usize, out: &mut String) {
 fn emit_part_def(p: &PartDef, level: usize, out: &mut String) {
     let ind = indent(level);
     let abs = if p.is_abstract { "abstract " } else { "" };
+    let var = if p.is_variation { "variation " } else { "" };
     let ind_kw = if p.is_individual { "individual " } else { "" };
     let _ = write!(
         out,
-        "{ind}{abs}{ind_kw}part def {}",
+        "{ind}{abs}{var}{ind_kw}part def {}",
         escape_sysml_name(&p.name)
     );
     emit_specializes(&p.specializes, out);
@@ -741,10 +770,12 @@ fn emit_part_def(p: &PartDef, level: usize, out: &mut String) {
         || !p.comments.is_empty()
         || !p.attributes.is_empty()
         || !p.parts.is_empty()
+        || !p.variants.is_empty()
         || !p.ports.is_empty()
         || !p.items.is_empty()
         || !p.performs.is_empty()
         || !p.connections.is_empty()
+        || !p.allocations.is_empty()
         || !p.exhibit_states.is_empty()
         || !p.requirements.is_empty()
         || !p.satisfies.is_empty()
@@ -793,6 +824,22 @@ fn emit_part_def(p: &PartDef, level: usize, out: &mut String) {
     for sub in &p.parts {
         emit_part_usage(sub, level + 1, out);
     }
+    for v in &p.variants {
+        let _ = write!(
+            out,
+            "{}variant part {} : {}",
+            indent(level + 1),
+            escape_sysml_name(&v.name),
+            format_qualified(&v.type_name)
+        );
+        if v.doc.is_some() {
+            let _ = writeln!(out, " {{");
+            emit_doc(&v.doc, level + 2, out);
+            let _ = writeln!(out, "{}}}", indent(level + 1));
+        } else {
+            let _ = writeln!(out, ";");
+        }
+    }
     for port in &p.ports {
         emit_port_usage(port, level + 1, out);
     }
@@ -804,6 +851,20 @@ fn emit_part_def(p: &PartDef, level: usize, out: &mut String) {
     }
     for conn in &p.connections {
         emit_connection_usage(conn, level + 1, out);
+    }
+    for alloc in &p.allocations {
+        let from_s = format_ref(&alloc.from);
+        let to_s = format_ref(&alloc.to);
+        if let Some(name) = &alloc.name {
+            let _ = writeln!(
+                out,
+                "{}allocation {} allocate {from_s} to {to_s};",
+                indent(level + 1),
+                escape_sysml_name(name)
+            );
+        } else {
+            let _ = writeln!(out, "{}allocate {from_s} to {to_s};", indent(level + 1));
+        }
     }
     for st in &p.exhibit_states {
         emit_state_usage(st, level + 1, out);

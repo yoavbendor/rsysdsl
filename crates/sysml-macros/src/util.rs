@@ -46,6 +46,25 @@ pub fn is_sysml_attr(attr: &Attribute, name: &str) -> bool {
     }
 }
 
+/// Convert camelCase SysML field identifier to snake_case Rust field identifier
+/// for compile-time parent field redefinition checks.
+pub fn camel_to_snake(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 4);
+    for (i, ch) in s.chars().enumerate() {
+        if ch.is_uppercase() {
+            if i > 0 {
+                out.push('_');
+            }
+            for lc in ch.to_lowercase() {
+                out.push(lc);
+            }
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
 /// Convert a Rust `snake_case` field name into SysML `camelCase`.
 pub fn snake_to_camel(s: &str) -> String {
     let s = s.trim_start_matches("r#");
@@ -309,6 +328,7 @@ pub fn strip_sysml_attrs(attrs: Vec<Attribute>) -> Vec<Attribute> {
         "satisfy",
         "verify",
         "connect",
+        "allocate",
         "attr",
         "part",
         "port",
@@ -428,7 +448,10 @@ pub fn build_attr_usage_tokens(
         }
     }
     let name_override = extract_sysml_name_override(attrs)?.or_else(|| kv.get_str("name"));
-    let redefines = kv.get_all_str("redefines");
+    let mut redefines = kv.get_all_str("redefines");
+    if redefines.is_empty() && kv.has_flag("redefines") {
+        redefines.push(snake_to_camel(field_name_rust));
+    }
     let subsets = kv.get_all_str("subsets");
     let is_keywordless = kv.has_flag("keywordless");
     let is_anonymous_redef = kv.has_flag("anonymous")

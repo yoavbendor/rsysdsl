@@ -119,6 +119,7 @@ impl fmt::Display for NoStdTransitionError {
 /// Compile-time assertion helpers usable in `#![no_std]` crates.
 pub const fn assert_part_core<T: SysmlPartCore>() {}
 pub const fn assert_port_core<T: SysmlPortCore>() {}
+pub const fn assert_interface_core<T: SysmlInterfaceCore>() {}
 pub const fn assert_item_core<T: SysmlItemCore>() {}
 pub const fn assert_action_core<T: SysmlActionCore>() {}
 pub const fn assert_state_core<T: SysmlStateCore>() {}
