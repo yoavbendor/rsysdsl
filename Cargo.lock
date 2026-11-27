@@ -78,6 +78,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
+name = "bicycle"
+version = "0.1.0"
+dependencies = [
+ "sysml-dsl",
+ "sysml-emit",
+ "sysml-std",
+]
+
+[[package]]
 name = "bitflags"
 version = "2.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -140,6 +149,24 @@ name = "colorchoice"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
+
+[[package]]
+name = "dishwasher"
+version = "0.1.0"
+dependencies = [
+ "sysml-dsl",
+ "sysml-emit",
+ "sysml-std",
+]
+
+[[package]]
+name = "earth-water-cycle"
+version = "0.1.0"
+dependencies = [
+ "sysml-dsl",
+ "sysml-emit",
+ "sysml-std",
+]
 
 [[package]]
 name = "embedded-flight-controller"
@@ -285,6 +312,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "microwave"
+version = "0.1.0"
+dependencies = [
+ "sysml-dsl",
+ "sysml-emit",
+ "sysml-std",
+]
+
+[[package]]
 name = "num-bigint"
 version = "0.4.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -340,6 +376,15 @@ name = "pin-project-lite"
 version = "0.2.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c938015719552d665fd0553b90d96cd7ff58e83e4c061ca99e6bb78865a72752"
+
+[[package]]
+name = "power-tools-family"
+version = "0.1.0"
+dependencies = [
+ "sysml-dsl",
+ "sysml-emit",
+ "sysml-std",
+]
 
 [[package]]
 name = "proc-macro2"
@@ -447,6 +492,15 @@ name = "slab"
 version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
+
+[[package]]
+name = "solar-system"
+version = "0.1.0"
+dependencies = [
+ "sysml-dsl",
+ "sysml-emit",
+ "sysml-std",
+]
 
 [[package]]
 name = "starter-model"
@@ -558,6 +612,14 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "sysml-std"
+version = "0.1.0"
+dependencies = [
+ "sysml-dsl",
+ "sysml-emit",
 ]
 
 [[package]]

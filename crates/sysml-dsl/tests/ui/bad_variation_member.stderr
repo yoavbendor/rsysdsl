@@ -1,0 +1,22 @@
+error[E0277]: the trait bound `UnrelatedPart: Specializes<BatteryBase>` is not satisfied
+  --> tests/ui/bad_variation_member.rs:14:11
+   |
+14 |     Wrong(UnrelatedPart),
+   |           ^^^^^^^^^^^^^ unsatisfied trait bound
+   |
+help: the trait `Specializes<BatteryBase>` is not implemented for `UnrelatedPart`
+  --> tests/ui/bad_variation_member.rs:9:1
+   |
+ 9 | pub struct UnrelatedPart {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^
+help: the trait `Specializes<BatteryBase>` is implemented for `BadVar`
+  --> tests/ui/bad_variation_member.rs:12:1
+   |
+12 | #[sysml::variation(of = BatteryBase)]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `assert_specializes`
+  --> $WORKSPACE/crates/sysml-core/src/traits.rs
+   |
+   | pub const fn assert_specializes<Sub: Specializes<Base>, Base>() {}
+   |                                      ^^^^^^^^^^^^^^^^^ required by this bound in `assert_specializes`
+   = note: this error originates in the attribute macro `sysml::variation` (in Nightly builds, run with -Z macro-backtrace for more info)

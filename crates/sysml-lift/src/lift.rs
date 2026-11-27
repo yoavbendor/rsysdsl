@@ -264,6 +264,7 @@ impl LifterCtx {
                 self.stats.port_defs += 1;
                 let mut pd = PortDef {
                     name: name.clone(),
+                    is_abstract: def.prefix.is_abstract,
                     doc: None,
                     specializes: specs,
                     is_symmetric: false,
@@ -308,8 +309,10 @@ impl LifterCtx {
                 self.stats.interface_defs += 1;
                 let mut id = InterfaceDef {
                     name: name.clone(),
+                    is_abstract: def.prefix.is_abstract,
                     doc: None,
                     specializes: specs,
+                    attributes: Vec::new(),
                     ends: Vec::new(),
                 };
                 if let Some(body) = &def.body {
@@ -317,6 +320,10 @@ impl LifterCtx {
                         let mline = lines.line_col(m.span.start).line as usize;
                         match &m.kind {
                             ast::MemberKind::Doc(d) => append_doc(&mut id.doc, &d.body),
+                            ast::MemberKind::Usage(u) if u.kind == ast::UsageKind::Attribute => {
+                                self.stats.attributes += 1;
+                                id.attributes.push(lift_attribute_usage(u));
+                            }
                             ast::MemberKind::Usage(u) if u.prefix.is_end => {
                                 let ename = u
                                     .declaration
@@ -1917,11 +1924,17 @@ fn lift_port_usage(u: &ast::Usage) -> PortUsage {
             }
         }
     }
+    let redefines = all_redefines(&u.declaration);
     PortUsage {
-        name,
+        name: if name.is_empty() {
+            redefines.first().cloned().unwrap_or_default()
+        } else {
+            name
+        },
         type_name: ty.unwrap_or_default(),
         conjugated: conj,
         multiplicity: lift_multiplicity(u.declaration.multiplicity.as_deref()),
+        redefines,
         doc,
     }
 }

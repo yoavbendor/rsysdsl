@@ -424,6 +424,15 @@ impl SnapshotBuilder {
             el.children
                 .push(self.convert_part_usage(sub, Some(&p.name)));
         }
+        for v in &p.variants {
+            let mut vel = make_element(&v.name, "part");
+            let ty = simple_name(&v.type_name).to_string();
+            vel.typing = Some(ty.clone());
+            vel.typings.push(ty.clone());
+            set_doc(&mut vel, v.doc.as_deref());
+            el.children.push(vel);
+            self.push_rel("typing", &v.name, &ty, Some("variant".to_string()));
+        }
         for perf in &p.performs {
             let act_name = perf
                 .name
@@ -442,6 +451,14 @@ impl SnapshotBuilder {
         }
         for conn in &p.connections {
             self.record_connection_usage(conn);
+        }
+        for alloc in &p.allocations {
+            self.push_rel(
+                "allocation",
+                &alloc.from,
+                &alloc.to,
+                alloc.name.clone().or_else(|| Some("allocate".to_string())),
+            );
         }
         for st in &p.exhibit_states {
             el.children.push(self.convert_state_usage(st, Some(&p.name)));
@@ -660,6 +677,9 @@ impl SnapshotBuilder {
         set_doc(&mut el, i.doc.as_deref());
         for sup in &i.specializes {
             self.push_rel("specialization", &i.name, simple_name(sup), None);
+        }
+        for attr in &i.attributes {
+            el.children.push(self.convert_attribute_usage(attr));
         }
         for end in &i.ends {
             let mut end_el = make_element(&end.name, "end");

@@ -1,0 +1,12 @@
+[package]
+name = "earth-water-cycle"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Earth Water Cycle hydrologic mass & thermal energy balance model"
+
+[dependencies]
+sysml-dsl = { workspace = true }
+sysml-std = { workspace = true }
+sysml-emit = { workspace = true }

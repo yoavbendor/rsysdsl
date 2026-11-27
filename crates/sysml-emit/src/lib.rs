@@ -4,6 +4,7 @@
 #[cfg(feature = "validate")]
 pub mod audit;
 pub mod emit;
+pub mod lint;
 pub mod safety_report;
 pub mod trace;
 #[cfg(feature = "validate")]
@@ -16,6 +17,9 @@ pub use audit::{
     AuditReport,
 };
 pub use emit::{emit_model, emit_package, escape_sysml_name, iso26262_metadata_package};
+pub use lint::{
+    lint_model, render_lint_markdown, LintFinding, LintReport, LintSeverity, LintSummary,
+};
 pub use safety_report::{
     build_safety_report, render_safety_report_markdown, AsilDecompositionSummary, FaultCutSet,
     FmeaSummary, SafetyGoalSummary, SafetyReport,

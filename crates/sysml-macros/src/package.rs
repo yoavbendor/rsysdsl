@@ -171,6 +171,10 @@ pub fn expand_package(args: TokenStream, mut item: ItemMod) -> syn::Result<Token
                         member_tokens.push(quote! {
                             ::sysml_dsl::ir::PackageMember::StateDef(<#id as ::sysml_dsl::ir::SysmlState>::state_def())
                         });
+                    } else if e.attrs.iter().any(|a| is_sysml_attr(a, "variation")) {
+                        member_tokens.push(quote! {
+                            ::sysml_dsl::ir::PackageMember::PartDef(<#id as ::sysml_dsl::ir::SysmlPart>::part_def())
+                        });
                     } else if e.attrs.iter().any(|a| is_sysml_attr(a, "enum_def")) {
                         member_tokens.push(quote! {
                             ::sysml_dsl::ir::PackageMember::EnumDef(<#id as ::sysml_dsl::ir::SysmlEnum>::enum_def())
@@ -178,7 +182,7 @@ pub fn expand_package(args: TokenStream, mut item: ItemMod) -> syn::Result<Token
                     } else {
                         return Err(syn::Error::new_spanned(
                             &e.ident,
-                            "unannotated `enum` is forbidden inside `#[sysml::package]` (semantic leakage prevented): annotate with `#[sysml::state]` or `#[sysml::enum_def]`",
+                            "unannotated `enum` is forbidden inside `#[sysml::package]` (semantic leakage prevented): annotate with `#[sysml::state]`, `#[sysml::variation]`, or `#[sysml::enum_def]`",
                         ));
                     }
                 }

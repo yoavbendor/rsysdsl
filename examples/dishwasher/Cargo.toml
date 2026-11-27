@@ -1,0 +1,12 @@
+[package]
+name = "dishwasher"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Multi-domain Dishwasher model (power, electronics, fluidics, mechanics, logic, HMI, heat, noise)"
+
+[dependencies]
+sysml-dsl = { workspace = true }
+sysml-std = { workspace = true }
+sysml-emit = { workspace = true }

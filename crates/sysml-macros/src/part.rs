@@ -183,6 +183,58 @@ impl Parse for ConnectArgs {
     }
 }
 
+/// Parses `#[sysml::allocate(from = logical_part, to = physical_part)]` or
+/// `#[sysml::allocate(name = "ctrlToMcu", from = logical_ctrl, to = mcu_hw)]`.
+pub struct AllocateArgs {
+    pub name: Option<String>,
+    pub from_expr: Expr,
+    pub to_expr: Expr,
+}
+
+impl Parse for AllocateArgs {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let mut name = None;
+        let mut from_expr = None;
+        let mut to_expr = None;
+
+        while !input.is_empty() {
+            let key: Ident = input.parse()?;
+            let _eq: Token![=] = input.parse()?;
+            match key.to_string().as_str() {
+                "name" => {
+                    let s: LitStr = input.parse()?;
+                    name = Some(s.value());
+                }
+                "from" => {
+                    from_expr = Some(input.parse::<Expr>()?);
+                }
+                "to" => {
+                    to_expr = Some(input.parse::<Expr>()?);
+                }
+                other => {
+                    return Err(syn::Error::new(
+                        key.span(),
+                        format!("unknown key `{other}` in #[sysml::allocate(...)]"),
+                    ));
+                }
+            }
+            if input.peek(Token![,]) {
+                let _comma: Token![,] = input.parse()?;
+            }
+        }
+
+        Ok(Self {
+            name,
+            from_expr: from_expr.ok_or_else(|| {
+                syn::Error::new(input.span(), "missing `from = ...` in #[sysml::allocate(...)]")
+            })?,
+            to_expr: to_expr.ok_or_else(|| {
+                syn::Error::new(input.span(), "missing `to = ...` in #[sysml::allocate(...)]")
+            })?,
+        })
+    }
+}
+
 /// Convert a Rust field-access chain like `lunar_module_descent_stage.upper_stage_port`
 /// into SysML camelCase chain `lunarModuleDescentStage.upperStagePort`.
 fn expr_chain_to_sysml(expr: &Expr) -> String {
@@ -236,6 +288,8 @@ pub fn expand_part(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
     let mut verifies = Vec::new();
     // Collect `#[sysml::connect(...)]`
     let mut connects = Vec::new();
+    // Collect `#[sysml::allocate(...)]`
+    let mut allocates = Vec::new();
     // Collect `#[sysml::exhibit(name = "phases", state = StateType)]`
     let mut exhibits = Vec::new();
     // Collect ISO 26262 `#[sysml::fmea(...)]`, `#[sysml::independent(...)]`, `#[sysml::asil_decompose(...)]`
@@ -260,6 +314,9 @@ pub fn expand_part(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
         } else if is_sysml_attr(attr, "connect") {
             let c: ConnectArgs = attr.parse_args()?;
             connects.push(c);
+        } else if is_sysml_attr(attr, "allocate") {
+            let a: AllocateArgs = attr.parse_args()?;
+            allocates.push(a);
         } else if is_sysml_attr(attr, "exhibit") {
             let ekv: KvArgs = attr.parse_args()?;
             let ename = ekv.get_str("name").unwrap_or_else(|| "stateMachine".to_string());
@@ -363,10 +420,16 @@ pub fn expand_part(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
     let mut item_tokens = Vec::new();
     let mut req_tokens = Vec::new();
     let mut field_type_checks = Vec::new();
+    let mut redef_checks = Vec::new();
+    let mut declared_field_names: Vec<String> = Vec::new();
 
     if let Fields::Named(fields) = &mut item.fields {
         for field in &mut fields.named {
             let fname_rust = field.ident.as_ref().unwrap().to_string();
+            let fname_sysml_default = extract_sysml_name_override(&field.attrs)?
+                .unwrap_or_else(|| snake_to_camel(&fname_rust));
+            declared_field_names.push(fname_rust.clone());
+            declared_field_names.push(fname_sysml_default.clone());
             let fdoc = extract_doc(&field.attrs);
             let fdoc_tok = quote_opt_str(&fdoc);
 
@@ -414,8 +477,30 @@ pub fn expand_part(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
                 let is_ind = fkv.has_flag("individual");
                 let is_ref = fkv.has_flag("ref");
                 let subsets = fkv.get_all_str("subsets");
-                let redefines = fkv.get_all_str("redefines");
+                let mut redefines = fkv.get_all_str("redefines");
+                if redefines.is_empty() && fkv.has_flag("redefines") {
+                    redefines.push(snake_to_camel(&fname_rust));
+                }
                 let default_val = fkv.get_str("default");
+
+                // Compile-time check: verify `redefines` target exists on some specialized ancestor
+                // (walking the full multi-level inheritance chain across crates).
+                if !specializes_paths.is_empty() {
+                    for r in &redefines {
+                        if !r.contains("::") && !r.contains('.') {
+                            let r_str = r.as_str();
+                            let ancestor_checks = specializes_paths.iter().map(|base_path| {
+                                quote!(#base_path::__sysml_has_field(#r_str))
+                            });
+                            redef_checks.push(quote! {
+                                const _: () = assert!(
+                                    #(#ancestor_checks)||*,
+                                    concat!("`redefines` target field `", #r_str, "` does not exist on any specialized ancestor part")
+                                );
+                            });
+                        }
+                    }
+                }
 
                 // Compile-time check: inner type of a #[sysml::part] field must implement SysmlPartCore
                 if let Some(inner_ty) = unwrap_container_type(&field.ty) {
@@ -470,6 +555,27 @@ pub fn expand_part(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
                     .map(|m| parse_multiplicity_str(&m))
                     .or(rust_mult);
                 let mult_tok = quote_opt_mult(&mult);
+                let mut port_redefs = fkv.get_all_str("redefines");
+                if port_redefs.is_empty() && fkv.has_flag("redefines") {
+                    port_redefs.push(fname_sysml.clone());
+                }
+                if !specializes_paths.is_empty() {
+                    for r in &port_redefs {
+                        if !r.contains("::") && !r.contains('.') {
+                            let r_str = r.as_str();
+                            let ancestor_checks = specializes_paths.iter().map(|base_path| {
+                                quote!(#base_path::__sysml_has_field(#r_str))
+                            });
+                            redef_checks.push(quote! {
+                                const _: () = assert!(
+                                    #(#ancestor_checks)||*,
+                                    concat!("`redefines` target port `", #r_str, "` does not exist on any specialized ancestor part")
+                                );
+                            });
+                        }
+                    }
+                }
+                let port_redefs_tok = quote_vec_str(&port_redefs);
                 let fty = &field.ty;
                 field_type_checks.push(quote! { ::sysml_dsl::core_contracts::assert_port_core::<#fty>(); });
                 port_tokens.push(quote! {
@@ -478,6 +584,7 @@ pub fn expand_part(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
                         type_name: ::std::string::String::from(#ty_name),
                         conjugated: #conjugated,
                         multiplicity: #mult_tok,
+                        redefines: #port_redefs_tok,
                         doc: #fdoc_tok,
                     }
                 });
@@ -549,6 +656,34 @@ pub fn expand_part(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
                 });
             } else {
                 // Default: typed attribute usage
+                if !specializes_paths.is_empty() {
+                    let mut akv = KvArgs::default();
+                    for a in &field.attrs {
+                        if is_sysml_attr(a, "attr") {
+                            if let Meta::List(_) = &a.meta {
+                                akv = a.parse_args()?;
+                            }
+                        }
+                    }
+                    let mut redefs = akv.get_all_str("redefines");
+                    if redefs.is_empty() && akv.has_flag("redefines") {
+                        redefs.push(fname_sysml_default.clone());
+                    }
+                    for r in &redefs {
+                        if !r.contains("::") && !r.contains('.') {
+                            let r_str = r.as_str();
+                            let ancestor_checks = specializes_paths.iter().map(|base_path| {
+                                quote!(#base_path::__sysml_has_field(#r_str))
+                            });
+                            redef_checks.push(quote! {
+                                const _: () = assert!(
+                                    #(#ancestor_checks)||*,
+                                    concat!("`redefines` target field `", #r_str, "` does not exist on any specialized ancestor part")
+                                );
+                            });
+                        }
+                    }
+                }
                 attr_tokens.push(build_attr_usage_tokens(&fname_rust, &field.ty, &field.attrs)?);
             }
 
@@ -792,6 +927,38 @@ pub fn expand_part(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
         }
     });
 
+    let mut alloc_tokens = Vec::new();
+    let mut alloc_checks = Vec::new();
+    for a in &allocates {
+        let aname_tok = quote_opt_str(&a.name);
+        let from_s = expr_chain_to_sysml(&a.from_expr);
+        let to_s = expr_chain_to_sysml(&a.to_expr);
+        let from_acc = prefix_with_self_param(&a.from_expr);
+        let to_acc = prefix_with_self_param(&a.to_expr);
+        alloc_tokens.push(quote! {
+            ::sysml_dsl::ir::AllocationUsage {
+                name: #aname_tok,
+                from: ::std::string::String::from(#from_s),
+                to: ::std::string::String::from(#to_s),
+                doc: ::std::option::Option::None,
+            }
+        });
+        alloc_checks.push(quote! {
+            const _: fn(&#ident) = |s| {
+                let _ = &#from_acc;
+                let _ = &#to_acc;
+            };
+        });
+    }
+
+    let own_field_checks = declared_field_names.iter().map(|n| {
+        quote!(::sysml_dsl::core_contracts::const_str_eq(name, #n))
+    });
+    let parent_field_checks = specializes_paths.iter().map(|base| {
+        quote!(#base::__sysml_has_field(name))
+    });
+    let has_field_expr = quote!(false #(|| #own_field_checks)* #(|| #parent_field_checks)*);
+
     item.attrs = strip_sysml_attrs(std::mem::take(&mut item.attrs));
     let doc_tok = quote_opt_str(&doc);
     let spec_tok = quote_vec_str(&spec_names);
@@ -800,6 +967,14 @@ pub fn expand_part(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
         #item
 
         #auto_default_impl
+
+        impl #ident {
+            #[doc(hidden)]
+            #[allow(dead_code)]
+            pub const fn __sysml_has_field(name: &str) -> bool {
+                #has_field_expr
+            }
+        }
 
         impl ::sysml_dsl::core_contracts::SysmlPartCore for #ident {
             const SYSML_NAME: &'static str = #sysml_name;
@@ -812,15 +987,18 @@ pub fn expand_part(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
                     name: ::std::string::String::from(#sysml_name),
                     is_abstract: #is_abstract,
                     is_individual: #is_individual,
+                    is_variation: false,
                     doc: #doc_tok,
                     comments: ::std::vec![#(#comment_tokens),*],
                     specializes: #spec_tok,
                     attributes: ::std::vec![#(#attr_tokens),*],
                     parts: ::std::vec![#(#part_tokens),*],
+                    variants: ::std::vec![],
                     ports: ::std::vec![#(#port_tokens),*],
                     items: ::std::vec![#(#item_tokens),*],
                     performs: ::std::vec![#(#perform_tokens),*],
                     connections: ::std::vec![#(#conn_tokens),*],
+                    allocations: ::std::vec![#(#alloc_tokens),*],
                     exhibit_states: ::std::vec![#(#exhibit_tokens),*],
                     requirements: ::std::vec![#(#req_tokens),*],
                     satisfies: ::std::vec![#(#satisfy_tokens),*],
@@ -837,13 +1015,132 @@ pub fn expand_part(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
         };
 
         #(#spec_impls)*
+        #(#redef_checks)*
         #(#independent_impls)*
         #(#asil_decomp_checks)*
         #(#perform_impls)*
         #(#satisfy_impls)*
         #(#verify_impls)*
         #(#conn_checks)*
+        #(#alloc_checks)*
         #(#exhibit_checks)*
+    })
+}
+
+/// Expands `#[sysml::variation(of = BasePart)]` on a Rust `enum` whose tuple variants
+/// name concrete product-line variants specializing `BasePart`.
+pub fn expand_variation(args: TokenStream, mut item: syn::ItemEnum) -> syn::Result<TokenStream> {
+    let kv: KvArgs = if args.is_empty() {
+        KvArgs::default()
+    } else {
+        syn::parse2(args)?
+    };
+    let is_no_std = has_no_std_mode(&kv, &item.attrs);
+    let rcfg = reflect_cfg(is_no_std);
+    let doc = extract_doc(&item.attrs);
+    let sysml_name = extract_sysml_name_override(&item.attrs)?
+        .or_else(|| kv.get_str("name"))
+        .unwrap_or_else(|| item.ident.to_string());
+
+    let base_path = kv.get_path("of");
+    let spec_names: Vec<String> = base_path
+        .iter()
+        .map(path_to_sysml_string)
+        .collect();
+
+    let mut variant_tokens = Vec::new();
+    let mut variant_checks = Vec::new();
+
+    for v in &mut item.variants {
+        let vdoc = extract_doc(&v.attrs);
+        let vdoc_tok = quote_opt_str(&vdoc);
+        let vname_rust = v.ident.to_string();
+        let vname_sysml = extract_sysml_name_override(&v.attrs)?
+            .unwrap_or_else(|| snake_to_camel(&crate::util::camel_to_snake(&vname_rust)));
+
+        let payload_ty = match &v.fields {
+            Fields::Unnamed(u) if u.unnamed.len() == 1 => u.unnamed[0].ty.clone(),
+            _ => {
+                return Err(syn::Error::new_spanned(
+                    v,
+                    "#[sysml::variation] variants must be single-field tuple variants like `Compact(Battery2Ah)`",
+                ));
+            }
+        };
+
+        let (ty_name, _, _) = analyze_rust_type(&payload_ty);
+        variant_checks.push(quote! {
+            ::sysml_dsl::core_contracts::assert_part_core::<#payload_ty>();
+        });
+        if let Some(base) = &base_path {
+            variant_checks.push(quote! {
+                ::sysml_dsl::core_contracts::assert_specializes::<#payload_ty, #base>();
+            });
+        }
+        variant_tokens.push(quote! {
+            ::sysml_dsl::ir::VariantPart {
+                name: ::std::string::String::from(#vname_sysml),
+                type_name: ::std::string::String::from(#ty_name),
+                doc: #vdoc_tok,
+            }
+        });
+        v.attrs = strip_sysml_attrs(std::mem::take(&mut v.attrs));
+    }
+
+    let ident = &item.ident;
+    let doc_tok = quote_opt_str(&doc);
+    let spec_tok = quote_vec_str(&spec_names);
+    let base_impl = base_path.as_ref().map(|base| {
+        quote! {
+            impl ::sysml_dsl::core_contracts::Specializes<#base> for #ident {}
+            const _: fn() = || { ::sysml_dsl::core_contracts::assert_part_core::<#base>(); };
+        }
+    });
+
+    item.attrs = strip_sysml_attrs(std::mem::take(&mut item.attrs));
+
+    Ok(quote! {
+        #item
+
+        impl ::sysml_dsl::core_contracts::SysmlPartCore for #ident {
+            const SYSML_NAME: &'static str = #sysml_name;
+        }
+
+        #base_impl
+
+        #rcfg
+        impl ::sysml_dsl::ir::SysmlPart for #ident {
+            fn part_def() -> ::sysml_dsl::ir::PartDef {
+                ::sysml_dsl::ir::PartDef {
+                    name: ::std::string::String::from(#sysml_name),
+                    is_abstract: false,
+                    is_individual: false,
+                    is_variation: true,
+                    doc: #doc_tok,
+                    comments: ::std::vec![],
+                    specializes: #spec_tok,
+                    attributes: ::std::vec![],
+                    parts: ::std::vec![],
+                    variants: ::std::vec![#(#variant_tokens),*],
+                    ports: ::std::vec![],
+                    items: ::std::vec![],
+                    performs: ::std::vec![],
+                    connections: ::std::vec![],
+                    allocations: ::std::vec![],
+                    exhibit_states: ::std::vec![],
+                    requirements: ::std::vec![],
+                    satisfies: ::std::vec![],
+                    verifies: ::std::vec![],
+                    refinements: ::std::vec![],
+                    fmea: ::std::vec![],
+                    asil_decompositions: ::std::vec![],
+                }
+            }
+        }
+
+        const _: fn() = || {
+            #(#variant_checks)*
+        };
     })
 }
 

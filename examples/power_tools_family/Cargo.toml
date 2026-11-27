@@ -1,0 +1,12 @@
+[package]
+name = "power-tools-family"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Shared-platform Cordless Power Tool Family (18V Battery, Drill, Impact Driver, Circular Saw)"
+
+[dependencies]
+sysml-dsl = { workspace = true }
+sysml-std = { workspace = true }
+sysml-emit = { workspace = true }
