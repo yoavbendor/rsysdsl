@@ -53,6 +53,7 @@ one or more self-contained commits on the work branch, gated by
 - `rsysdsl new <name> [--layers types,subsystems,context]` generates a compiling crate with the three-layer skeleton (types/ports → subsystems → top context), emit binary and tests, registered in the workspace.
 - Generated crate passes `cargo test`, strict audit and strict lint out of the box.
 - **Gate:** CLI e2e test creates, builds and audits a scaffolded crate.
+- **Status: done.** `rsysdsl new <name> [--dir <path>] [--no-workspace]` (`crates/sysml-cli/src/scaffold.rs`, templates in `crates/sysml-cli/templates/new/`) generates `<Name>Types` / `<Name>Subsystems` / `<Name>Requirements` / `<Name>Context` packages with one placeholder requirement (`Source: TODO`), refuses to overwrite, and registers the crate in the workspace. Generated crate passes `cargo test`, strict stdlib audit (0/0/0) and strict lint (CLEAN). The layer list is fixed (no `--layers` flag yet). CLI e2e: `cli_new_scaffolds_layered_crate_and_refuses_overwrite` (default) and `cli_new_scaffold_builds_audits_and_lints_clean` (full build + emit + audit + lint, `#[ignore]`d for speed, ~40 s; run with `-- --ignored`).
 
 ### S5 — Haiku-class authoring trial (F8)
 - Give a Haiku-class model 3 small written specs plus `AGENTS.md`; record first-pass compile rate, iterations to green audit, lint findings and error classes.

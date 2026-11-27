@@ -20,6 +20,8 @@ use sysml_emit::{
     render_trace_matrix_csv, render_trace_matrix_markdown, validate_sysml_units,
     validate_sysml_units_with_lib, ViewerOptions, ViewerTheme, ViewerView,
 };
+mod scaffold;
+
 use sysml_lift::{
     compare_sysml_roundtrip, generate_rust_dsl, lift_sysml_units, CodegenOptions,
 };
@@ -237,6 +239,20 @@ enum Commands {
         #[arg(long, default_value_t = 8080)]
         port: u16,
     },
+
+    /// Scaffold a new compiling model crate with layered Types -> Subsystems -> Requirements -> Context packages.
+    New {
+        /// System name in any case (`my_system`, `my-system`, `MySystem`); package name becomes kebab-case.
+        name: String,
+
+        /// Target directory (default: `<workspace>/examples/<snake_name>`). Must not exist.
+        #[arg(long)]
+        dir: Option<PathBuf>,
+
+        /// Do not add the crate to the root `Cargo.toml` `members`; generate a standalone crate instead.
+        #[arg(long)]
+        no_workspace: bool,
+    },
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -421,6 +437,11 @@ fn main() -> ExitCode {
             port,
             cli.pretty,
         ),
+        Commands::New {
+            name,
+            dir,
+            no_workspace,
+        } => cmd_new(&name, dir, no_workspace, cli.pretty),
     }
 }
 
@@ -1164,5 +1185,19 @@ fn cmd_validate(
             report.warning_count
         );
         ExitCode::from(1)
+    }
+}
+
+fn cmd_new(name: &str, dir: Option<PathBuf>, no_workspace: bool, pretty: bool) -> ExitCode {
+    match scaffold::scaffold(name, dir, no_workspace) {
+        Ok(report) => {
+            eprintln!("created {} at {}", report.package, report.dir);
+            print_json(&report, pretty);
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            ExitCode::from(2)
+        }
     }
 }

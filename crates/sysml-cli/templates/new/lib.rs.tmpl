@@ -1,0 +1,228 @@
+//! `{{PASCAL}}` system model, scaffolded by `rsysdsl new`.
+//!
+//! Layered structure (keep it this way as the model grows):
+//! 1. `{{PASCAL}}Types`        - payload items, ports, interfaces (the "arrows").
+//! 2. `{{PASCAL}}Subsystems`   - reusable part definitions (the "boxes").
+//! 3. `{{PASCAL}}Requirements` - requirements with document provenance.
+//! 4. `{{PASCAL}}Context`      - ONE top-level context part composing subsystems with `#[sysml::connect]`.
+//!
+//! A package may only use elements from packages listed above it: add
+//! `#[sysml::import("<Package>::*")]` (SysML side) AND `use super::<module>::*;` (Rust side).
+//!
+//! Verify after every change:
+//! ```text
+//! cargo test -p {{KEBAB}}
+//! cargo run -q -p {{KEBAB}} --bin emit -- -o target/{{SNAKE}}.sysml
+//! cargo run -q -p sysml-cli -- audit --files target/{{SNAKE}}.sysml --stdlib --strict --pretty
+//! cargo run -q -p sysml-cli -- lint --files target/{{SNAKE}}.sysml --strict --format markdown
+//! ```
+
+use sysml_dsl::prelude::*;
+
+/// Layer 1: payloads, ports and interfaces shared by every subsystem.
+#[sysml::package(name = "{{PASCAL}}Types")]
+#[sysml::import("ScalarValues::*")]
+#[sysml::import("SI::*")]
+pub mod types {
+    use super::*;
+
+    // TODO(types): add every payload (`#[sysml::item]`), port (`#[sysml::port]`) and
+    // interface (`#[sysml::interface]`) HERE, never in the subsystem or context layers.
+    // With 3+ interfaces, give them an abstract parent (`#[sysml::interface(abstract)]`
+    // or `sysml_std` `InfoChannel`) to keep `rsysdsl lint --strict` clean.
+
+    /// Placeholder command payload (rename to match your diagram's arrow label).
+    #[sysml::item]
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct CommandSignal {
+        #[sysml::attr(default = 0.0, unit = "W")]
+        pub setpoint: Quantity<f64>,
+    }
+
+    /// Placeholder status payload (rename to match your diagram's arrow label).
+    #[sysml::item]
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct StatusSignal {
+        #[sysml::attr(default = 0.0, unit = "W")]
+        pub measured: Quantity<f64>,
+    }
+
+    /// Directed command output port (connect to `Conjugated<CommandPort>`).
+    #[sysml::port]
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct CommandPort {
+        #[sysml::out_item]
+        pub command: CommandSignal,
+    }
+
+    /// Directed status output port (connect to `Conjugated<StatusPort>`).
+    #[sysml::port]
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct StatusPort {
+        #[sysml::out_item]
+        pub status: StatusSignal,
+    }
+
+    /// Typed interface carrying commands.
+    #[sysml::interface]
+    pub struct CommandLink {
+        #[sysml::end]
+        pub source: CommandPort,
+        #[sysml::end]
+        pub sink: Conjugated<CommandPort>,
+    }
+
+    /// Typed interface carrying status feedback.
+    #[sysml::interface]
+    pub struct StatusLink {
+        #[sysml::end]
+        pub source: StatusPort,
+        #[sysml::end]
+        pub sink: Conjugated<StatusPort>,
+    }
+}
+
+/// Layer 2: reusable subsystem blueprints (`part def`), typed only by layer-1 ports.
+#[sysml::package(name = "{{PASCAL}}Subsystems")]
+#[sysml::import("{{PASCAL}}Types::*")]
+pub mod subsystems {
+    use super::types::*;
+    use super::*;
+
+    // TODO(subsystems): add one `#[sysml::part]` per diagram box HERE. Parts that share
+    // features get an `#[sysml::part(abstract)]` parent + `#[sysml::specializes(...)]`.
+    // Add `#[sysml::import("SI::*")]` to this package when you add `unit = "..."` attributes.
+
+    /// Placeholder controlling subsystem (rename to match your diagram).
+    #[sysml::part]
+    #[derive(Debug, Clone, Copy)]
+    pub struct Controller {
+        #[sysml::port]
+        pub cmd_out: CommandPort,
+        #[sysml::port]
+        pub status_in: Conjugated<StatusPort>,
+    }
+
+    /// Placeholder controlled subsystem (rename to match your diagram).
+    #[sysml::part]
+    #[derive(Debug, Clone, Copy)]
+    pub struct Actuator {
+        #[sysml::port]
+        pub cmd_in: Conjugated<CommandPort>,
+        #[sysml::port]
+        pub status_out: StatusPort,
+    }
+}
+
+/// Layer 3: requirements with explicit document provenance.
+#[sysml::package(name = "{{PASCAL}}Requirements")]
+#[sysml::import("ScalarValues::*")]
+#[sysml::import("SI::*")]
+#[sysml::import("ModelingMetadata::*")]
+pub mod requirements {
+    use super::*;
+
+    // TODO(requirements): add one `#[sysml::requirement(id = "...")]` per requirement in
+    // your source document HERE, each with `#[sysml::rationale("Source: <doc>, <section>")]`.
+    // Never invent thresholds: omit `require_constraint` until the document gives a value.
+
+    /// PLACEHOLDER requirement: replace or delete it.
+    ///
+    /// The 1.0 s limit below is NOT taken from any source document; it only shows the
+    /// `require_constraint` syntax. Replace it with the value from your specification.
+    #[sysml::requirement(id = "SYS-REQ-001")]
+    #[sysml::rationale("Source: TODO — replace with document reference")]
+    #[sysml::require_constraint(measured_response_time <= max_response_time)]
+    #[derive(Debug, Clone, Copy)]
+    pub struct PlaceholderResponseTime {
+        /// PLACEHOLDER limit (not from a source document).
+        #[sysml::attr(default = 1.0, unit = "s")]
+        pub max_response_time: Quantity<f64>,
+        #[sysml::attr(default = 0.0, unit = "s")]
+        pub measured_response_time: Quantity<f64>,
+    }
+}
+
+/// Layer 4: the single top-level context that composes and wires the subsystems.
+#[sysml::package(name = "{{PASCAL}}Context")]
+#[sysml::import("{{PASCAL}}Types::*")]
+#[sysml::import("{{PASCAL}}Subsystems::*")]
+#[sysml::import("{{PASCAL}}Requirements::*")]
+pub mod context {
+    use super::requirements::*;
+    use super::subsystems::*;
+    use super::types::*;
+    use super::*;
+
+    // TODO(context): add each subsystem as a `#[sysml::part]` field and each diagram arrow
+    // as a `#[sysml::connect(...)]` HERE. Keep exactly one top-level context part; with
+    // more than 10 children, group them into intermediate subsystem parts in layer 2.
+
+    /// Top-level system context: composes all subsystems and their connections.
+    #[sysml::part]
+    #[sysml::satisfy(req = PlaceholderResponseTime, id = "SYS-REQ-001")]
+    #[sysml::connect(
+        interface = CommandLink,
+        name = "controllerToActuator",
+        from = controller.cmd_out,
+        to = actuator.cmd_in
+    )]
+    #[sysml::connect(
+        interface = StatusLink,
+        name = "actuatorToController",
+        from = actuator.status_out,
+        to = controller.status_in
+    )]
+    #[derive(Debug, Clone, Copy)]
+    pub struct {{PASCAL}}System {
+        #[sysml::part]
+        pub controller: Controller,
+        #[sysml::part]
+        pub actuator: Actuator,
+    }
+}
+
+/// Assemble all `#[sysml::package]` modules (in layer order) into one `sysml_ir::Model`.
+pub fn build_model() -> Model {
+    Model::new(vec![
+        types::sysml_package(),
+        subsystems::sysml_package(),
+        requirements::sysml_package(),
+        context::sysml_package(),
+    ])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sysml_emit::{audit_model_with_stdlib, emit_model, lint_model};
+
+    #[test]
+    fn model_emits_and_audits_zero_errors_zero_warnings() {
+        let model = build_model();
+        let sysml = emit_model(&model);
+        assert!(sysml.contains("package {{PASCAL}}Context"));
+
+        let audit = audit_model_with_stdlib("{{SNAKE}}", &model, None, None, true);
+        assert!(audit.stdlib_loaded, "OMG sysml.library must be loaded");
+        assert!(
+            audit.ok && audit.validation_errors == 0 && audit.validation_warnings == 0,
+            "{{SNAKE}} audit failed: {audit:#?}\n--- SYSML ---\n{sysml}"
+        );
+    }
+
+    #[test]
+    fn model_is_lint_clean() {
+        let report = lint_model("{{SNAKE}}", &build_model());
+        assert!(report.clean, "lint findings: {:#?}", report.findings);
+    }
+
+    #[test]
+    fn placeholder_requirement_constraint_executes() {
+        let nominal = requirements::PlaceholderResponseTime {
+            max_response_time: Quantity::new(1.0, "s"),
+            measured_response_time: Quantity::new(0.5, "s"),
+        };
+        assert!(nominal.evaluate());
+    }
+}

@@ -515,3 +515,137 @@ fn cli_lint_reports_metrics_and_smells() {
         serde_json::from_str(&stdout_str).expect("stdout must be valid JSON");
     assert_eq!(smell_json["clean"], false);
 }
+
+fn run_new(dir: &Path, name: &str) -> std::process::Output {
+    Command::new(bin_path())
+        .args(["new", name, "--no-workspace", "--dir"])
+        .arg(dir)
+        .output()
+        .expect("run rsysdsl new")
+}
+
+#[test]
+fn cli_new_scaffolds_layered_crate_and_refuses_overwrite() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("pump_station");
+    let out = run_new(&dir, "PumpStation");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let val: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(val["ok"], true);
+    assert_eq!(val["package"], "pump-station");
+    assert_eq!(val["crate_name"], "pump_station");
+    assert!(val["workspace_member"].is_null());
+
+    let cargo = std::fs::read_to_string(dir.join("Cargo.toml")).unwrap();
+    assert!(cargo.contains("name = \"pump-station\""));
+    assert!(
+        cargo.contains("[workspace]"),
+        "standalone crate must declare its own workspace"
+    );
+    assert!(cargo.contains("sysml-dsl = { path = "));
+
+    let lib = std::fs::read_to_string(dir.join("src/lib.rs")).unwrap();
+    for needle in [
+        "#[sysml::package(name = \"PumpStationTypes\")]",
+        "#[sysml::package(name = \"PumpStationSubsystems\")]",
+        "#[sysml::package(name = \"PumpStationRequirements\")]",
+        "#[sysml::package(name = \"PumpStationContext\")]",
+        "#[sysml::import(\"PumpStationSubsystems::*\")]",
+        "pub struct PumpStationSystem",
+        "#[sysml::connect(",
+        "Source: TODO — replace with document reference",
+        "audit_model_with_stdlib(\"pump_station\"",
+    ] {
+        assert!(lib.contains(needle), "lib.rs missing `{needle}`");
+    }
+    assert!(
+        !lib.contains("{{"),
+        "unrendered template placeholder in lib.rs"
+    );
+
+    let emit = std::fs::read_to_string(dir.join("src/bin/emit.rs")).unwrap();
+    assert!(emit.contains("pump_station::build_model()"));
+
+    // A second run must refuse to overwrite the existing directory.
+    let again = run_new(&dir, "PumpStation");
+    assert_eq!(again.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&again.stderr).contains("refusing to overwrite"));
+
+    // Invalid names are rejected before anything is written.
+    let bad = run_new(&tmp.path().join("bad"), "9lives");
+    assert_eq!(bad.status.code(), Some(2));
+    assert!(!tmp.path().join("bad").exists());
+}
+
+/// Full gate on a scaffolded crate: `cargo test`, emit, strict stdlib audit and strict lint.
+/// Ignored by default because it compiles the crate and its deps in a fresh target dir;
+/// run with `cargo test -p sysml-cli --test cli_e2e -- --ignored`.
+#[test]
+#[ignore = "slow: compiles the scaffolded crate from scratch"]
+fn cli_new_scaffold_builds_audits_and_lints_clean() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("gate_demo");
+    let out = run_new(&dir, "gate_demo");
+    assert_eq!(out.status.code(), Some(0));
+    std::fs::copy(workspace_root().join("Cargo.lock"), dir.join("Cargo.lock")).unwrap();
+
+    let manifest = dir.join("Cargo.toml");
+    let test = Command::new(env!("CARGO"))
+        .args(["test", "-q", "--offline", "--manifest-path"])
+        .arg(&manifest)
+        .output()
+        .unwrap();
+    assert!(
+        test.status.success(),
+        "cargo test failed: {}",
+        String::from_utf8_lossy(&test.stderr)
+    );
+
+    let sysml = dir.join("gate_demo.sysml");
+    let emit = Command::new(env!("CARGO"))
+        .args(["run", "-q", "--offline", "--bin", "emit", "--manifest-path"])
+        .arg(&manifest)
+        .arg("--")
+        .arg("-o")
+        .arg(&sysml)
+        .output()
+        .unwrap();
+    assert!(
+        emit.status.success(),
+        "{}",
+        String::from_utf8_lossy(&emit.stderr)
+    );
+
+    let audit = Command::new(bin_path())
+        .args(["audit", "--stdlib", "--strict", "--files"])
+        .arg(&sysml)
+        .output()
+        .unwrap();
+    assert_eq!(
+        audit.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&audit.stdout)
+    );
+    let val: serde_json::Value = serde_json::from_slice(&audit.stdout).unwrap();
+    assert_eq!(val["validation_errors"], 0);
+    assert_eq!(val["validation_warnings"], 0);
+    assert_eq!(val["orphan_requirements"].as_array().unwrap().len(), 0);
+
+    let lint = Command::new(bin_path())
+        .args(["lint", "--strict", "--files"])
+        .arg(&sysml)
+        .output()
+        .unwrap();
+    assert_eq!(
+        lint.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&lint.stdout)
+    );
+}

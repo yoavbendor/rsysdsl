@@ -22,12 +22,14 @@ You are authoring a **System as Code** model in **`rsysdsl`** — a strongly typ
 
 ## 2. Quickstart: Creating & Verifying a New System Model
 
-Copy the minimal template crate [`examples/starter_model/`](examples/starter_model/) to start any new system:
+Scaffold every new system with `rsysdsl new`. It generates a compiling crate with the layered package structure (`<Name>Types` -> `<Name>Subsystems` -> `<Name>Requirements` -> `<Name>Context`), an emit binary and audit/lint tests, and registers it in the root `Cargo.toml`:
 
 ```bash
-# 1. Copy starter template (e.g., to examples/my_system) and add "examples/my_system" to root Cargo.toml
-cp -r examples/starter_model examples/my_system
-# Rename package name in examples/my_system/Cargo.toml and crate name in src/bin/emit.rs
+# 1. Scaffold examples/my_system (package `my-system`); refuses to overwrite an existing directory.
+#    Options: --dir <path>, --no-workspace (standalone crate, not added to root Cargo.toml members)
+cargo run -q -p sysml-cli -- new my_system
+# Alternative: copy the single-package starter template (examples/starter_model/), add
+# "examples/my_system" to root Cargo.toml members, and rename the package in Cargo.toml + src/bin/emit.rs
 
 # 2. Fast compile + unit tests (catches port, connection, specialization, and constraint bugs)
 cargo test -p my-system
