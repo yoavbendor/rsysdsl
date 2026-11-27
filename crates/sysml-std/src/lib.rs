@@ -10,12 +10,17 @@
 //! - [`natural`]: `NaturalBody`, `StarBody`, `PlanetaryBody` (`RockyPlanet`, `GasGiant`, `IceGiant`, `NaturalSatellite`), `FluidReservoir`
 //!
 //! ## Library defaults policy
-//! Numeric `#[sysml::attr(default = ...)]` values in this crate (e.g. mains `mainsFrequency = 50 Hz`,
-//! MCU `clockFreq = 48 MHz`, pump `flowRate = 0.25 kg/s`, link `transmissionEfficiency = 0.98`)
-//! are generic **library defaults**: placeholders so the library compiles and simulates, never
-//! values from a model's source document. A specializing model must redefine every value its
-//! source specifies (`#[sysml::attr(redefines = "mainsFrequency", default = 60.0, unit = "Hz")]`);
-//! `rsysdsl lint` reports the defaults a model still inherits as `inherited_std_default` (info).
+//! Abstract bases (`PowerElement`, `PowerSource`, `BatteryPack`, `PhysicalComponent`,
+//! `ElectricMotor`, `Microcontroller`, `SensorBase`, `HmiPanel`, `NaturalBody`, etc.), flow
+//! items (`ElectricalEnergy`, `ThermalEnergy`, `FluidFlow`, ...), and generic links
+//! (`ElectricalLink`, `MechanicalLink`, `CommandChannel`, `TelemetryChannel`) declare SI units
+//! with **no numeric defaults**, so specializing models never inherit fictional placeholders.
+//! Concrete standard parts and protocol channels (`AcMainsSupply`, `UartChannel`, `I2cChannel`,
+//! `SpiChannel`, `CanFdChannel`, `EthernetChannel`, `AmbientEnvironment`, `DeepSpaceSink`, etc.)
+//! carry normative/reference library defaults: a specializing model must redefine every value its
+//! source specifies (`#[sysml::attr(redefines = "mainsFrequency", default = 60.0, unit = "Hz")]`),
+//! or blank any open one with `redefines = "...", tbd_value = "reason"`. `rsysdsl lint` reports
+//! inherited concrete defaults as `inherited_std_default` (info).
 //! Emit with `emit --omit-std` to keep these packages out of the model's `.sysml` file.
 
 pub mod comms;

@@ -28,8 +28,6 @@ pub mod power_tools_family_model {
     #[sysml::specializes(BatteryPack)]
     #[derive(Debug, Clone, Copy)]
     pub struct Battery18VBase {
-        #[sysml::attr(redefines = "packVoltage", default = 18.0, unit = "V")]
-        pub pack_voltage: Quantity<f64>,
         #[sysml::attr(redefines = "nominalVoltage", default = 18.0, unit = "V")]
         pub nominal_voltage: Quantity<f64>,
         #[sysml::attr(redefines = "maxCurrent", default = 45.0, unit = "A")]

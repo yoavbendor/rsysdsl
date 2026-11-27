@@ -2,13 +2,11 @@
 
 use sysml_dsl::prelude::*;
 
-/// sysml-std library package. Numeric attribute defaults here are generic LIBRARY DEFAULTS
-/// (placeholders), not values from any source document: a model that specializes these
-/// definitions must redefine every value its source specifies. `rsysdsl lint` lists the
-/// defaults a model still inherits as `inherited_std_default`.
+/// sysml-std library package defining universal physical flows, ports, links, and physics calcs.
+/// Flow items and generic physical links declare units without numeric placeholder defaults so
+/// specializing models never inherit fictional numbers.
 #[sysml::package(library, name = "SysmlStdFlows")]
 #[sysml::import("ScalarValues::*")]
-#[sysml::import("SI::*")]
 pub mod sysml_std_flows {
     use super::*;
 
@@ -22,7 +20,7 @@ pub mod sysml_std_flows {
     #[sysml::specializes(PhysicalFlow)]
     #[derive(Debug, Clone, Copy, Default)]
     pub struct EnergyFlow {
-        #[sysml::attr(default = 0.0, unit = "W")]
+        #[sysml::attr(unit = "W")]
         pub power: Quantity<f64>,
     }
 
@@ -31,9 +29,9 @@ pub mod sysml_std_flows {
     #[sysml::specializes(EnergyFlow)]
     #[derive(Debug, Clone, Copy, Default)]
     pub struct ElectricalEnergy {
-        #[sysml::attr(default = 12.0, unit = "V")]
+        #[sysml::attr(unit = "V")]
         pub voltage: Quantity<f64>,
-        #[sysml::attr(default = 1.0, unit = "A")]
+        #[sysml::attr(unit = "A")]
         pub current: Quantity<f64>,
     }
 
@@ -42,9 +40,9 @@ pub mod sysml_std_flows {
     #[sysml::specializes(EnergyFlow)]
     #[derive(Debug, Clone, Copy, Default)]
     pub struct MechanicalEnergy {
-        #[sysml::attr(default = 0.0, unit = "N")]
+        #[sysml::attr(unit = "N")]
         pub force: Quantity<f64>,
-        #[sysml::attr(default = 0.0, unit = "m/s")]
+        #[sysml::attr(unit = "m/s")]
         pub velocity: Quantity<f64>,
     }
 
@@ -53,7 +51,7 @@ pub mod sysml_std_flows {
     #[sysml::specializes(EnergyFlow)]
     #[derive(Debug, Clone, Copy, Default)]
     pub struct ThermalEnergy {
-        #[sysml::attr(default = 293.15, unit = "K")]
+        #[sysml::attr(unit = "K")]
         pub temperature: Quantity<f64>,
     }
 
@@ -62,7 +60,7 @@ pub mod sysml_std_flows {
     #[sysml::specializes(EnergyFlow)]
     #[derive(Debug, Clone, Copy, Default)]
     pub struct RadiativeEnergy {
-        #[sysml::attr(default = 0.0, unit = "Hz")]
+        #[sysml::attr(unit = "Hz")]
         pub frequency: Quantity<f64>,
     }
 
@@ -71,9 +69,9 @@ pub mod sysml_std_flows {
     #[sysml::specializes(EnergyFlow)]
     #[derive(Debug, Clone, Copy, Default)]
     pub struct AcousticEmission {
-        #[sysml::attr(default = 0.02, unit = "Pa")]
+        #[sysml::attr(unit = "Pa")]
         pub sound_pressure: Quantity<f64>,
-        #[sysml::attr(default = 1000.0, unit = "Hz")]
+        #[sysml::attr(unit = "Hz")]
         pub dominant_freq: Quantity<f64>,
     }
 
@@ -82,7 +80,7 @@ pub mod sysml_std_flows {
     #[sysml::specializes(PhysicalFlow)]
     #[derive(Debug, Clone, Copy, Default)]
     pub struct MaterialFlow {
-        #[sysml::attr(default = 0.0, unit = "kg/s")]
+        #[sysml::attr(unit = "kg/s")]
         pub mass_rate: Quantity<f64>,
     }
 
@@ -91,9 +89,9 @@ pub mod sysml_std_flows {
     #[sysml::specializes(MaterialFlow)]
     #[derive(Debug, Clone, Copy, Default)]
     pub struct FluidFlow {
-        #[sysml::attr(default = 101325.0, unit = "Pa")]
+        #[sysml::attr(unit = "Pa")]
         pub pressure: Quantity<f64>,
-        #[sysml::attr(default = 293.15, unit = "K")]
+        #[sysml::attr(unit = "K")]
         pub temperature: Quantity<f64>,
     }
 
@@ -235,7 +233,7 @@ pub mod sysml_std_flows {
     #[sysml::interface]
     #[derive(Debug, Clone, Copy)]
     pub struct ElectricalLink {
-        #[sysml::attr(dimensionless, default = 0.98)]
+        #[sysml::attr(dimensionless)]
         pub transmission_efficiency: f64,
         #[sysml::end]
         pub supply: ElectricalPowerPort,
@@ -247,7 +245,7 @@ pub mod sysml_std_flows {
     #[sysml::interface]
     #[derive(Debug, Clone, Copy)]
     pub struct MechanicalLink {
-        #[sysml::attr(dimensionless, default = 0.95)]
+        #[sysml::attr(dimensionless)]
         pub transmission_efficiency: f64,
         #[sysml::end]
         pub driver: MechanicalPowerPort,

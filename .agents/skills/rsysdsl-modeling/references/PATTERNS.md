@@ -416,7 +416,7 @@ When the source leaves something open, write a **TBD with a reason** instead of 
 | --- | --- |
 | Parameter exists, value not given | `#[sysml::attr(unit = "W", tbd_value = "reason")]` (no `default`; `Default` is NaN) |
 | Value given, unit not given | `#[sysml::attr(default = 0.8, tbd_unit = "reason")]` |
-| Unit outside the SI table (model / library defined) | `#[sysml::attr(unit = "rpm", custom_unit = "reason")]` |
+| Unit outside the SI table (prefer exact SI conversion first, e.g. `2400 rpm` -> `40.0` `Hz`) | `#[sysml::attr(default = 2400.0, unit = "rpm", custom_unit = "reason")]` (emitted via auto-generated `CustomUnitMetadata` + `@TBD`) |
 | Pure number (count, ratio, flag) | `#[sysml::attr(default = 4, dimensionless)]` (not a TBD) |
 | Inherited sysml-std default the source does not give | `#[sysml::attr(redefines = "nominalVoltage", tbd_value = "reason", unit = "V")]` |
 | Element itself open (part, port, item, interface, requirement, state, field) | `#[sysml::tbd(reason = "...", owner = "...", resolve_by = "preliminary")]` |

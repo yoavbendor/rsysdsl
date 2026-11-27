@@ -92,6 +92,9 @@ fn format_unit(unit: &str) -> String {
     if u.starts_with('\'') && u.ends_with('\'') {
         return format!("[{u}]");
     }
+    if u.contains("::") {
+        return format!("[{}]", format_qualified(u));
+    }
     if sysml_core::units::parse_unit(u).is_none() {
         // Model-defined / foreign unit name (e.g. `pound-force per square inch (psi)`):
         // emit it as one (quoted if needed) name reference.
@@ -137,8 +140,21 @@ fn sanitize_doc(doc: &str) -> String {
 /// Requirement references in `satisfy` / `verify` that point into another package the owning
 /// package does not import are emitted fully qualified (`satisfy OtherPkg::Req;`), so a
 /// cross-package `#[sysml::satisfy]` resolves without a manual `#[sysml::import]`.
+/// Packages using unqualified `ScalarValues` types (`Real`, `Integer`, `Boolean`, `String`)
+/// get `private import ScalarValues::*;` automatically, and undefined `custom_unit` symbols
+/// are declared in an auto-included `library package CustomUnitMetadata`.
 pub fn emit_model(model: &Model) -> String {
     let mut model = crate::resolve::qualify_requirement_refs(model);
+    crate::resolve::ensure_scalar_values_import(&mut model);
+    let custom_units = crate::resolve::resolve_custom_units(&mut model);
+    if !custom_units.is_empty()
+        && !model
+            .packages
+            .iter()
+            .any(|p| p.name == CUSTOM_UNIT_METADATA_PACKAGE)
+    {
+        model.packages.push(custom_unit_metadata_package(&custom_units));
+    }
     // TBD markers reference `TbdMetadata::TBD`: include its definition so authors cannot forget it.
     if crate::tbd::model_has_tbd(&model)
         && !model.packages.iter().any(|p| p.name == TBD_METADATA_PACKAGE)
@@ -1608,6 +1624,33 @@ pub fn tbd_metadata_package() -> Package {
             ),
             attributes: vec![attr("category"), attr("reason"), attr("owner"), attr("resolveBy")],
         })],
+    }
+}
+
+/// `library package CustomUnitMetadata` declaring non-SI custom unit symbols referenced via
+/// `#[sysml::attr(unit = "...", custom_unit = "reason")]` as `MeasurementReferences::MeasurementUnit`
+/// attributes so strict OMG stdlib validation resolves them with 0 errors and 0 warnings.
+pub fn custom_unit_metadata_package(units: &std::collections::BTreeSet<String>) -> Package {
+    let members = units
+        .iter()
+        .map(|u| {
+            PackageMember::AttributeUsage(AttributeUsage {
+                name: Some(u.clone()),
+                type_name: Some("MeasurementUnit".to_string()),
+                ..Default::default()
+            })
+        })
+        .collect();
+    Package {
+        name: CUSTOM_UNIT_METADATA_PACKAGE.to_string(),
+        is_library: true,
+        doc: Some(
+            "Auto-generated declarations for custom units referenced by `custom_unit` TBDs so models pass strict OMG stdlib validation while tracking each non-SI unit in the TBD ledger."
+                .to_string(),
+        ),
+        comments: Vec::new(),
+        imports: vec![Import::private_star("MeasurementReferences")],
+        members,
     }
 }
 

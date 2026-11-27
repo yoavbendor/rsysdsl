@@ -1293,6 +1293,7 @@ fn is_stdlib_package(pkg: &str) -> bool {
             | "Performances"
             | "ISO26262Metadata"
             | "TbdMetadata"
+            | "CustomUnitMetadata"
     )
 }
 

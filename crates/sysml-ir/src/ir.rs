@@ -117,6 +117,8 @@ pub enum PackageMember {
 pub const TBD_METADATA_PACKAGE: &str = "TbdMetadata";
 /// Name of the `metadata def` inside [`TBD_METADATA_PACKAGE`] (`@TbdMetadata::TBD { ... }`).
 pub const TBD_METADATA_DEF: &str = "TBD";
+/// Name of the auto-included SysML library package that declares non-SI `custom_unit` symbols.
+pub const CUSTOM_UNIT_METADATA_PACKAGE: &str = "CustomUnitMetadata";
 
 /// Design phase by which a TBD must be resolved (`resolve_by`). Ordered:
 /// `Concept < Preliminary < Detailed < Release`.

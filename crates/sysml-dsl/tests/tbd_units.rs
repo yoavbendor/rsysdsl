@@ -86,11 +86,39 @@ fn custom_unit_is_a_counted_tbd() {
     let model = Model::new(vec![custom_unit_demo::sysml_package()]);
     let sysml = sysml_emit::emit_model(&model);
     assert!(sysml.contains("category = \"custom_unit\";"), "{sysml}");
+    assert!(
+        sysml.contains("private import ScalarValues::*;"),
+        "ScalarValues should be auto-imported when omitted: {sysml}"
+    );
+    assert!(
+        sysml.contains("[CustomUnitMetadata::rpm]"),
+        "custom unit should resolve via CustomUnitMetadata: {sysml}"
+    );
+    assert!(
+        sysml.contains("library package CustomUnitMetadata"),
+        "auto-included CustomUnitMetadata: {sysml}"
+    );
+
+    let audit = sysml_emit::audit_model_with_stdlib("custom_unit", &model, None, None, true);
+    assert!(
+        audit.ok && audit.validation_errors == 0 && audit.validation_warnings == 0,
+        "custom_unit + omitted ScalarValues import must pass strict OMG stdlib audit:\n{audit:#?}\n{sysml}"
+    );
+
     let ledger = sysml_emit::collect_tbd_ledger(&model);
     assert_eq!(ledger.len(), 1);
     assert_eq!(ledger[0].kind, TbdKind::CustomUnit);
     assert_eq!(ledger[0].reason, "supplier datasheet uses rpm");
     assert_eq!(ledger[0].resolve_by, TbdPhase::Detailed, "default phase");
+
+    let lifted = sysml_lift::lift_sysml_units(&[("custom.sysml".to_string(), sysml)]);
+    assert!(lifted.unsupported.is_empty(), "{:#?}", lifted.unsupported);
+    assert_eq!(sysml_emit::collect_tbd_ledger(&lifted.model), ledger);
+    let lifted_unit = match &lifted.model.packages[0].members[0] {
+        sysml_ir::PackageMember::PartDef(p) => p.attributes[0].unit.as_deref(),
+        _ => None,
+    };
+    assert_eq!(lifted_unit, Some("rpm"));
 }
 
 #[test]

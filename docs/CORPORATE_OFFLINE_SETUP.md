@@ -6,7 +6,7 @@ This guide covers cloning `rsysdsl` onto a corporate workstation, running Cursor
 
 ## 1. Corporate Host Setup (crates.io Accessible — Zero Git Submodules!)
 
-`Open-MBEE/sysmlv2-syntax`, `sysmlv2-model`, and the official OMG Standard Library (`third_party/omg/sysml.library`) are **bundled directly in `third_party/`**, so Cargo never clones any external GitHub repositories or 2.1 GB git submodules:
+`Open-MBEE/sysmlv2-syntax`, `sysmlv2-model`, and the official OMG Standard Library (`third_party/omg/sysml.library`) are **bundled directly in `third_party/`**, so Cargo never clones any external GitHub repositories or 2.1 GB git submodules. Root `rust-toolchain.toml` is intentionally omitted so `rustup` never stalls trying to download a pinned compiler on air-gapped or fenced corporate hosts (CI pins Rust `1.97.0` directly in `.github/workflows/ci-pages.yml` for deterministic `trybuild` UI snapshot checks).
 
 ```bash
 git clone https://github.com/yoavbendor/rsysdsl.git

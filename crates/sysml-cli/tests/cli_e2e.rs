@@ -806,12 +806,38 @@ fn cli_audit_and_lint_load_sysml_std_for_files_emitted_with_omit_std() {
         .expect("run rsysdsl lint");
     assert_eq!(lint_out.status.code(), Some(0));
     let lint: serde_json::Value = serde_json::from_slice(&lint_out.stdout).unwrap();
-    let findings = lint["findings"].as_array().unwrap();
+    assert!(
+        lint["summary"]["total_packages"].as_u64().unwrap_or(0) >= 9,
+        "bundled sysml-std packages must be auto-loaded: {lint}"
+    );
+    assert_eq!(
+        lint["summary"]["inherited_std_default_count"], 0,
+        "microwave redefines every concrete std default it inherits: {lint}"
+    );
+
+    // Concrete sysml-std defaults (e.g. AcMainsSupply 230 V / 16 A / 50 Hz) must still be
+    // reported as `inherited_std_default` once sysml-std is auto-loaded.
+    let mains_path = dir.path().join("mains_no_std.sysml");
+    std::fs::write(
+        &mains_path,
+        "package MainsDemo {\n    private import SysmlStdPower::*;\n    part def WallInput :> AcMainsSupply;\n}\n",
+    )
+    .unwrap();
+    let mains_lint_out = Command::new(bin_path())
+        .arg("lint")
+        .arg("--files")
+        .arg(&mains_path)
+        .args(["--strict", "--format", "json"])
+        .output()
+        .expect("run rsysdsl lint on mains");
+    assert_eq!(mains_lint_out.status.code(), Some(0));
+    let mains_lint: serde_json::Value = serde_json::from_slice(&mains_lint_out.stdout).unwrap();
+    let findings = mains_lint["findings"].as_array().unwrap();
     assert!(
         findings
             .iter()
             .any(|f| f["code"] == "inherited_std_default"),
-        "std defaults must be reported once std is auto-loaded: {lint}"
+        "concrete std defaults must be reported once std is auto-loaded: {mains_lint}"
     );
 }
 
