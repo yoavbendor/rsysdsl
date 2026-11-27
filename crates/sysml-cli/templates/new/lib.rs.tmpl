@@ -29,8 +29,10 @@ pub mod types {
 
     // TODO(types): add every payload (`#[sysml::item]`), port (`#[sysml::port]`) and
     // interface (`#[sysml::interface]`) HERE, never in the subsystem or context layers.
-    // With 3+ interfaces, give them an abstract parent (`#[sysml::interface(abstract)]`
-    // or `sysml_std` `InfoChannel`) to keep `rsysdsl lint --strict` clean.
+    // With 3+ interfaces, give them an abstract parent to keep `rsysdsl lint --strict` clean:
+    // `#[sysml::interface(abstract)] pub struct {{PASCAL}}Channel {}` (no ends needed) plus
+    // `#[sysml::specializes({{PASCAL}}Channel)]` on each interface. Never drop `interface = ...`
+    // from a connect to silence the lint (that triggers `untyped_connections`).
 
     /// Placeholder command payload (rename to match your diagram's arrow label).
     #[sysml::item]
