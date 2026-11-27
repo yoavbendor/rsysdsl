@@ -114,6 +114,9 @@ pub struct ConnectArgs {
     pub to_expr: Expr,
     pub from_sysml: Option<String>,
     pub to_sysml: Option<String>,
+    /// `tbd = "reason"`: without `interface = ...` an untyped placeholder channel (port
+    /// compatibility unchecked, protocol TBD); with an interface a typed connection marked TBD.
+    pub tbd: Option<(String, proc_macro2::Span)>,
 }
 
 impl Parse for ConnectArgs {
@@ -125,11 +128,23 @@ impl Parse for ConnectArgs {
         let mut to_expr = None;
         let mut from_sysml = None;
         let mut to_sysml = None;
+        let mut tbd = None;
 
         while !input.is_empty() {
             let key: Ident = input.parse()?;
             let _eq: Token![=] = input.parse()?;
             match key.to_string().as_str() {
+                "tbd" => {
+                    let s: LitStr = input.parse()?;
+                    if s.value().trim().is_empty() {
+                        return Err(syn::Error::new(
+                            s.span(),
+                            "`tbd` needs a non-empty reason\n\
+                             help: say what is open, e.g. `tbd = \"protocol between A and B not in the ICD\"`",
+                        ));
+                    }
+                    tbd = Some((s.value(), s.span()));
+                }
                 "interface" => {
                     interface_path = Some(input.parse::<Path>()?);
                 }
@@ -179,6 +194,7 @@ impl Parse for ConnectArgs {
             })?,
             from_sysml,
             to_sysml,
+            tbd,
         })
     }
 }
@@ -807,6 +823,13 @@ pub fn expand_part(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
         let from_access = prefix_with_self_param(&c.from_expr);
         let to_access = prefix_with_self_param(&c.to_expr);
 
+        let conn_tbd_tok = match &c.tbd {
+            Some((reason, span)) => {
+                let kind = if c.interface_path.is_some() { "Element" } else { "Channel" };
+                crate::tbd::quote_marks(&[crate::tbd::mark_tokens(kind, reason, None, None, *span)?])
+            }
+            None => quote!(::std::vec![]),
+        };
         if let Some(iface) = &c.interface_path {
             let iface_name = path_to_sysml_string(iface);
             conn_tokens.push(quote! {
@@ -820,7 +843,7 @@ pub fn expand_part(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
                     from: ::std::option::Option::Some(::std::string::String::from(#from_str)),
                     to: ::std::option::Option::Some(::std::string::String::from(#to_str)),
                     doc: ::std::option::Option::None,
-                    tbd: ::std::vec![],
+                    tbd: #conn_tbd_tok,
                 }
             });
             conn_checks.push(quote! {
@@ -841,14 +864,23 @@ pub fn expand_part(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
                     from: ::std::option::Option::Some(::std::string::String::from(#from_str)),
                     to: ::std::option::Option::Some(::std::string::String::from(#to_str)),
                     doc: ::std::option::Option::None,
-                    tbd: ::std::vec![],
+                    tbd: #conn_tbd_tok,
                 }
             });
-            conn_checks.push(quote! {
-                const _: fn(&#ident) = |s: &#ident| {
-                    ::sysml_dsl::core_contracts::assert_ports_connect_core(&#from_access, &#to_access);
-                };
-            });
+            if c.tbd.is_some() {
+                // TBD channel: field paths are still checked, port compatibility is not.
+                conn_checks.push(quote! {
+                    const _: fn(&#ident) = |s: &#ident| {
+                        let _ = (&#from_access, &#to_access);
+                    };
+                });
+            } else {
+                conn_checks.push(quote! {
+                    const _: fn(&#ident) = |s: &#ident| {
+                        ::sysml_dsl::core_contracts::assert_ports_connect_core(&#from_access, &#to_access);
+                    };
+                });
+            }
         }
     }
 

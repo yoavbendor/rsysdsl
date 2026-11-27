@@ -52,6 +52,8 @@ fn gate1_compile_time_safety() {
     t.compile_fail("tests/ui/bad_tbd_marker.rs");
     t.compile_fail("tests/ui/bad_tbd_no_reason.rs");
     t.compile_fail("tests/ui/bad_tbd_on_action.rs");
+    // S7.4: a TBD channel still checks its field paths
+    t.compile_fail("tests/ui/bad_tbd_channel_path.rs");
     t.compile_fail("tests/ui/bad_unit_not_in_omg.rs");
     t.compile_fail("tests/ui/bad_constraint_dimension.rs");
     t.compile_fail("tests/ui/bad_guard_dimension.rs");

@@ -8,7 +8,8 @@
 //!   parent -> specialize a shared channel base (e.g. `InfoChannel` / `EnergyChannel`).
 //! - `untyped_connections`: `connect` usages with no interface/connection type in a model that
 //!   otherwise declares or uses typed interfaces (deleting the interface is never the fix for
-//!   `unclassified_interfaces`; classify it under an abstract base instead).
+//!   `unclassified_interfaces`; classify it under an abstract base instead). TBD channels
+//!   (`#[sysml::connect(tbd = "reason", ...)]`) are excluded: they are counted as TBDs.
 //! - `flat_god_assembly`: a `PartDef` owning > 10 direct child parts with zero
 //!   intermediate subsystem decomposition.
 //! - `missing_physical_unit`: numeric `Real` attribute carrying a literal value without
@@ -253,7 +254,11 @@ pub fn lint_model(model_name: impl Into<String>, model: &Model) -> LintReport {
             let untyped: Vec<String> = p
                 .connections
                 .iter()
-                .filter(|c| c.type_name.is_none())
+                .filter(|c| {
+                    // TBD channels (`#[sysml::connect(tbd = ...)]`) are counted as TBDs instead.
+                    c.type_name.is_none()
+                        && !c.tbd.iter().any(|m| m.kind == sysml_ir::TbdKind::Channel)
+                })
                 .map(|c| match (&c.name, &c.from, &c.to) {
                     (Some(n), _, _) => n.clone(),
                     (None, Some(f), Some(t)) => format!("{f} -> {t}"),

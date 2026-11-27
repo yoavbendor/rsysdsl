@@ -1049,6 +1049,9 @@ fn emit_rust_part_def(
             parts.push(format!("to = {to_rust}"));
             parts.push(format!("from_sysml = \"{}\"", escape_rust_str(from)));
             parts.push(format!("to_sysml = \"{}\"", escape_rust_str(to)));
+            if let Some(m) = conn.tbd.first() {
+                parts.push(format!("tbd = \"{}\"", escape_rust_str(&m.reason)));
+            }
             let _ = writeln!(out, "    #[sysml::connect({})]", parts.join(", "));
         }
     }
