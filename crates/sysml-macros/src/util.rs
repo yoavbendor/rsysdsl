@@ -462,6 +462,18 @@ pub fn build_attr_usage_tokens(
         }
     }
     crate::units_check::require_unit_decl(&kv, field_name_rust, field_ty, attr_span)?;
+    if kv.get_str("tbd_value").is_some() {
+        if let Some(key) = ["default", "value", "expr"].into_iter().find(|k| kv.get_str(k).is_some()) {
+            return Err(syn::Error::new(
+                kv.get_str_span(key).unwrap_or(attr_span),
+                format!(
+                    "attribute `{field_name_rust}` has both `tbd_value` and `{key}`\n\
+                     help: `tbd_value = \"reason\"` means the value is not in the source yet: remove `{key} = ...`, \
+                     or remove `tbd_value` if the source states the value"
+                ),
+            ));
+        }
+    }
     let tbd_marks = crate::tbd::attr_marks(&kv, attr_span)?;
     let tbd_tok = crate::tbd::quote_marks(&tbd_marks);
     let name_override = extract_sysml_name_override(attrs)?.or_else(|| kv.get_str("name"));
@@ -598,9 +610,10 @@ pub fn build_auto_default_impl(item: &syn::ItemStruct) -> syn::Result<TokenStrea
             || is_prim_ident(&field.ty, "f64")
             || is_prim_ident(&field.ty, "f32");
 
-        let init_expr = if raw_val.is_none() && kv.has_flag("evidence") && is_float {
-            // Unmeasured evidence is NaN: every comparison is false, so `evaluate()` cannot
-            // pass until a verification case supplies the measured value.
+        let unknown_value = kv.has_flag("evidence") || kv.get_str("tbd_value").is_some();
+        let init_expr = if raw_val.is_none() && unknown_value && is_float {
+            // Unmeasured evidence and `tbd_value` parameters are NaN: every comparison is
+            // false, so `evaluate()` cannot pass until a real value is supplied.
             has_any_literal_default = true;
             if is_quantity_type(&field.ty) {
                 quote!(::sysml_dsl::core_contracts::Quantity::new(f64::NAN, #unit))

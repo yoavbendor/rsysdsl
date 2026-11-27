@@ -1,0 +1,6 @@
+error: attribute `rated_power` has both `tbd_value` and `default`
+       help: `tbd_value = "reason"` means the value is not in the source yet: remove `default = ...`, or remove `tbd_value` if the source states the value
+ --> tests/ui/bad_tbd_value_with_default.rs:7:5
+  |
+7 |     #[sysml::attr(default = 1500.0, unit = "W", tbd_value = "datasheet pending")]
+  |     ^

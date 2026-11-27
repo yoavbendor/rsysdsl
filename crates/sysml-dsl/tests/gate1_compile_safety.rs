@@ -46,6 +46,8 @@ fn gate1_compile_time_safety() {
     t.compile_fail("tests/ui/bad_missing_unit.rs");
     t.compile_fail("tests/ui/bad_empty_tbd_reason.rs");
     t.compile_fail("tests/ui/bad_bare_custom_unit.rs");
+    // S7.2: `tbd_value` and a default are mutually exclusive
+    t.compile_fail("tests/ui/bad_tbd_value_with_default.rs");
     t.compile_fail("tests/ui/bad_unit_not_in_omg.rs");
     t.compile_fail("tests/ui/bad_constraint_dimension.rs");
     t.compile_fail("tests/ui/bad_guard_dimension.rs");

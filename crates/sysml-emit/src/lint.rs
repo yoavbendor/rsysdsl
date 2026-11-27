@@ -15,7 +15,8 @@
 //!   an SI unit (excluding dimensionless counts/ratios/efficiencies/factors).
 //! - `inherited_std_default` (info): a model definition specializing a `sysml-std` element
 //!   inherits numeric library defaults (e.g. mains `frequency = 50 Hz`) without redefining
-//!   them. Library defaults are generic placeholders, not source-document values.
+//!   them. Library defaults are generic placeholders, not source-document values. A
+//!   redefinition with `tbd_value = "reason"` (no value, counted TBD) counts as handled.
 //! - `unreachable_state` (warning): a sub-state of a `state def` that no chain of transitions
 //!   reaches from the initial state (`entry; then <initial>;`). Skipped when the initial state
 //!   is unknown (state defs emitted before S6b carry no `entry; then`).
@@ -649,7 +650,7 @@ fn inherited_std_defaults(model: &Model) -> Vec<LintFinding> {
                 inherited.len(),
                 inherited.join("; ")
             ),
-            suggestion: "Library defaults are generic placeholders, not values from your source. Redefine each one your source document specifies (`#[sysml::attr(redefines = \"mainsFrequency\", default = ..., unit = \"Hz\")]`); leave the rest only if the value is genuinely irrelevant to the model.".to_string(),
+            suggestion: "Library defaults are generic placeholders, not values from your source. Redefine each one your source document specifies (`#[sysml::attr(redefines = \"mainsFrequency\", default = ..., unit = \"Hz\")]`); blank each one your source leaves open with `#[sysml::attr(redefines = \"...\", tbd_value = \"reason\", unit = \"...\")]` (a counted TBD); leave the rest only if the value is genuinely irrelevant to the model.".to_string(),
         });
     }
     findings
