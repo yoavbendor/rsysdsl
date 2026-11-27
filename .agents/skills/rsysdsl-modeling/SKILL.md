@@ -7,6 +7,8 @@ description: Author, extend, and validate SysML v2 system architectures in stron
 
 Use this skill to incrementally build and validate **System as Code** models in Rust (`#[sysml::*]`) that emit OMG-valid `.sysml` for VS Code SysML v2 extensions (`JamieD.sysml-v2-support` / `sysml-reactflow`).
 
+`rsysdsl` is the CLI binary of `crates/sysml-cli`: install it with `cargo install --path crates/sysml-cli` from the repo root, or run it in place as `cargo run -q -p sysml-cli -- <cmd>`.
+
 ## Progressive Disclosure — Read Only What You Need
 
 1. **Need copy-pasteable Rust macro templates?** -> Read [`references/PATTERNS.md`](references/PATTERNS.md)

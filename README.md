@@ -56,30 +56,38 @@ cargo check -p embedded-flight-controller --no-default-features
 
 ### Agent-First CLI (`rsysdsl`)
 
+The CLI crate `crates/sysml-cli` builds a binary named `rsysdsl`. Install it once from the repo root:
+
+```bash
+cargo install --path crates/sysml-cli   # puts `rsysdsl` on PATH (~/.cargo/bin); re-run after pulling
+```
+
+Every `rsysdsl <cmd> ...` below is equivalent to `rsysdsl <cmd> ...` run from the repo root (no install needed).
+
 ```bash
 # Emit OMG-valid SysML v2 from the pure declarative 5-layer Apollo 11 Rust DSL model
-cargo run -q -p sysml-cli -- emit --model apollo11-model --pretty
+rsysdsl emit --model apollo11-model --pretty
 
 # Emit raw .sysml text to a file
-cargo run -q -p sysml-cli -- emit --model apollo11-model --raw -o /tmp/apollo11_model.sysml
+rsysdsl emit --model apollo11-model --raw -o /tmp/apollo11_model.sysml
 
 # Run strict 0-warning OMG Standard Library semantic validation + orphan-requirement + verification audit
-cargo run -q -p sysml-cli -- audit --model apollo11-model --verify --stdlib --strict --pretty
+rsysdsl audit --model apollo11-model --verify --stdlib --strict --pretty
 
 # Export ASPICE bidirectional traceability matrix (JSON, Markdown, or RFC-4180 CSV)
-cargo run -q -p sysml-cli -- trace-matrix --model apollo11-model --verify --format markdown
-cargo run -q -p sysml-cli -- trace-matrix --model apollo11-model --verify --format csv -o /tmp/trace.csv
+rsysdsl trace-matrix --model apollo11-model --verify --format markdown
+rsysdsl trace-matrix --model apollo11-model --verify --format csv -o /tmp/trace.csv
 
 # Export ISO 26262 Safety, FMEA RPN Ranking & Minimal Fault Cut-Set Report (JSON or Markdown)
-cargo run -q -p sysml-cli -- safety-report --model embedded-flight-controller --format markdown
+rsysdsl safety-report --model embedded-flight-controller --format markdown
 
 # Generate a traceability matrix directly from existing Airbus Apollo 11 .sysml files
-cargo run -q -p sysml-cli -- trace-matrix --format markdown --files \
+rsysdsl trace-matrix --format markdown --files \
   tests/fixtures/apollo-11-sysml-v2/Requirements/TechnicalRequirementsPackage.sysml \
   tests/fixtures/apollo-11-sysml-v2/Technical/SystemSpecificationPackage.sysml
 
 # Lift real Airbus Apollo 11 .sysml files into compilable Rust DSL
-cargo run -q -p sysml-cli -- lift \
+rsysdsl lift \
   tests/fixtures/apollo-11-sysml-v2/CoSMA/CoSMAPackage.sysml \
   tests/fixtures/apollo-11-sysml-v2/Logical/LogicalComponentsPackage.sysml \
   tests/fixtures/apollo-11-sysml-v2/Technical/TechnicalPortsPackage.sysml \
@@ -87,17 +95,17 @@ cargo run -q -p sysml-cli -- lift \
   -o /tmp/apollo11_lifted.rs
 
 # Run bidirectional round-trip check (exit 0 = valid + 100% semantic fidelity)
-cargo run -q -p sysml-cli -- roundtrip-check --pretty \
+rsysdsl roundtrip-check --pretty \
   tests/fixtures/apollo-11-sysml-v2/CoSMA/CoSMAPackage.sysml \
   tests/fixtures/apollo-11-sysml-v2/Logical/LogicalComponentsPackage.sysml \
   tests/fixtures/apollo-11-sysml-v2/Technical/TechnicalPortsPackage.sysml \
   tests/fixtures/apollo-11-sysml-v2/Technical/TechnicalComponentsPackage.sysml
 
 # Execute closed-loop Powered Descent verification (nominal + fault injection)
-cargo run -q -p sysml-cli -- verify --scenario all --pretty
+rsysdsl verify --scenario all --pretty
 
 # Validate any .sysml file with the embedded Open-MBEE sysml-toolkit oracle + OMG stdlib
-cargo run -q -p sysml-cli -- validate --stdlib --strict --pretty /tmp/apollo11_model.sysml
+rsysdsl validate --stdlib --strict --pretty /tmp/apollo11_model.sysml
 ```
 
 ## References & Provenance

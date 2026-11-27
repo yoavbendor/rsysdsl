@@ -25,9 +25,13 @@ You are authoring a **System as Code** model in **`rsysdsl`** — a strongly typ
 Scaffold every new system with `rsysdsl new`. It generates a compiling crate with the layered package structure (`<Name>Types` -> `<Name>Subsystems` -> `<Name>Requirements` -> `<Name>Context`), an emit binary and audit/lint tests, and registers it in the root `Cargo.toml`:
 
 ```bash
+# 0. Install the CLI once as `rsysdsl` (from the repo root; re-run after pulling changes).
+#    Without installing, `cargo run -q -p sysml-cli -- <cmd>` from the repo root is equivalent.
+cargo install --path crates/sysml-cli
+
 # 1. Scaffold examples/my_system (package `my-system`); refuses to overwrite an existing directory.
 #    Options: --dir <path>, --no-workspace (standalone crate, not added to root Cargo.toml members)
-cargo run -q -p sysml-cli -- new my_system
+rsysdsl new my_system
 # Alternative: copy the single-package starter template (examples/starter_model/), add
 # "examples/my_system" to root Cargo.toml members, and rename the package in Cargo.toml + src/bin/emit.rs
 
@@ -39,16 +43,16 @@ cargo test -p my-system
 cargo run -q -p my-system --bin emit -- -o target/my_system.sysml --omit-std
 
 # 4. Strict 0-error / 0-warning OMG Standard Library audit + orphan requirement check
-cargo run -q -p sysml-cli -- audit --files target/my_system.sysml --stdlib --strict --pretty
+rsysdsl audit --files target/my_system.sysml --stdlib --strict --pretty
 
 # 5. Export ASPICE bidirectional traceability matrix (Markdown or CSV)
-cargo run -q -p sysml-cli -- trace-matrix --files target/my_system.sysml --format markdown
+rsysdsl trace-matrix --files target/my_system.sysml --format markdown
 
 # 6. Check architecture & hierarchy smells (duplicate parts, unclassified interfaces, flat assemblies)
-cargo run -q -p sysml-cli -- lint --files target/my_system.sysml --strict --format markdown
+rsysdsl lint --files target/my_system.sysml --strict --format markdown
 
 # 7. Generate a standalone interactive offline HTML viewer (opens directly in Chrome/Edge; 0 VS Code extensions or internet)
-cargo run -q -p sysml-cli -- view target/my_system.sysml --view interconnection -o target/my_system.html
+rsysdsl view target/my_system.sysml --view interconnection -o target/my_system.html
 ```
 
 ---

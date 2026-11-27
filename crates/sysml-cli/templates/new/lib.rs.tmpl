@@ -9,12 +9,13 @@
 //! A package may only use elements from packages listed above it: add
 //! `#[sysml::import("<Package>::*")]` (SysML side) AND `use super::<module>::*;` (Rust side).
 //!
-//! Verify after every change:
+//! Verify after every change (`rsysdsl` = `cargo install --path crates/sysml-cli` in the rsysdsl
+//! repo, or run it there as `cargo run -q -p sysml-cli -- ...`):
 //! ```text
 //! cargo test -p {{KEBAB}}
 //! cargo run -q -p {{KEBAB}} --bin emit -- -o target/{{SNAKE}}.sysml
-//! cargo run -q -p sysml-cli -- audit --files target/{{SNAKE}}.sysml --stdlib --strict --pretty
-//! cargo run -q -p sysml-cli -- lint --files target/{{SNAKE}}.sysml --strict --format markdown
+//! rsysdsl audit --files target/{{SNAKE}}.sysml --stdlib --strict --pretty
+//! rsysdsl lint --files target/{{SNAKE}}.sysml --strict --format markdown
 //! ```
 
 use sysml_dsl::prelude::*;
