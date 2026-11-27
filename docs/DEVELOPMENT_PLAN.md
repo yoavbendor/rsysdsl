@@ -122,6 +122,16 @@ one or more self-contained commits on the work branch, gated by
 - N1 scaffold layer order `Types → Requirements → Subsystems → Context`; N2 no invented number in the scaffold placeholder; N3 standalone scaffold adds sysml-std and correct next steps; N5 distinct "no evidence supplied" trace label; N6 `step_with` ignored-event outcome; N7/N11 PATTERNS updates.
 - Lint `unreachable_state` / `overlapping_guards` (N8) if small; N9 n-ary bus and N10 guard→requirement references go to the backlog.
 - Trial hygiene: trial prompts must forbid reading `docs/HAIKU_TRIAL.md`.
+- **Status: done.**
+  - N1: `rsysdsl new` scaffolds `Types → Requirements → Subsystems → Context`; the placeholder requirement is satisfied by a subsystem part (`Controller`). CLI help, layer comments and AGENTS.md updated; e2e test checks the order.
+  - N2: the placeholder requirement is text-only (`Source: TODO`, no constraint, no number); the limit/evidence constraint shape is a comment with `<value from the document>`.
+  - N3: scaffolds (workspace and `--no-workspace`) depend on `sysml-std` and prepend `sysml_std::std_packages()`; emit steps use `--omit-std`; standalone `lib.rs` header and JSON next steps never use `-p`. AGENTS.md documents the absolute path deps and warns that `rsysdsl new` without `--dir` writes into the repo's `examples/`.
+  - N5: trace matrix `evidence_source = "no evidence supplied"` (evidence attr without default; not counted as placeholder evidence) vs `"model default (placeholder)"`; markdown labels `no evidence supplied yet` / `evidence is a model default (placeholder)`.
+  - N6: generated state machines add `dispatch_with` / `dispatch_event` returning `StepOutcome::{Moved(state), Ignored}` (std and no_std); `step_with` / `step_event` unchanged. Documented in Pattern 4, AGENTS Phase 3 gate and SKILL.
+  - N7/N11: PATTERNS documents cross-package `satisfy` (Rust `use` needed, SysML import not), exact guard grammar (bool fields, `!`/`&&`/`||`/`==`, no calls/casts/paths), field-less event items, and `#[sysml::port(redefines)]` to connect inherited ports; all snippets compiled + strict-audited in `crates/sysml-dsl/tests/patterns_s6b.rs`.
+  - N8: `StateDef::initial_state` (emitted as `entry; then <state>;`, lifted back) enables lint `unreachable_state` (warning) plus `dead_end_state` and `overlapping_guards` (info, counted as `state_review_count`, never fail `--strict`). All examples stay audit 0/0/0 and `lint --strict` CLEAN (dishwasher, power_tools_family and microwave show intended prioritized-guard / latched-fault review items).
+  - Trial hygiene: "Running an authoring trial" section in `docs/HAIKU_TRIAL.md` (no reading trial reports/plan; report failing invocations and verify rounds separately).
+  - Not done here: N4 (inherited std default "not specified") is S7 `tbd_value`; N9 and N10 moved to the Backlog below.
 
 ### S7 — TBD / technical-debt suite (controlled escape hatches)
 Goal: support gradual, cyclical design without silent holes. Every escape hatch costs a written reason, is visible in the emitted SysML, is counted, and must shrink as maturity rises.
@@ -141,6 +151,10 @@ Goal: support gradual, cyclical design without silent holes. Every escape hatch 
 - Checks: number provenance against the spec, TBD-reason honesty, hollow requirements (measured value copied from limit).
 - Structured findings that must cite a spec section (uncited findings dropped); run at phase gates / PRs, ideally a different model or prompt from the author.
 - **Gate:** scored against T3 ground truth (recall on labelled misuse, false-positive rate).
+
+### Backlog (from trial 2, not scheduled)
+- **N9 n-ary bus:** a shared bus (CAN, I2C) with >2 members can only be modelled as point-to-point connects. Needs a bus connection with >2 ends (SysML `connection` with n `end`s) in the IR, macro, emitter, viewer and lint. Open question: model it as an n-ary `connection def` or as a bus part with one port per member.
+- **N10 guard→requirement references:** guards cannot read requirement limits, so limits get duplicated into part attributes (drift risk). Options: allow `req.<Requirement>.<attr>` operands in guards, or a lint for numeric literals duplicated between requirement and part attributes.
 
 ### Deferred (not scheduled)
 - Bond-graph / acausal connections and FMI 3.0 export (`SIMULATION_VISION.md` Tier 3).
