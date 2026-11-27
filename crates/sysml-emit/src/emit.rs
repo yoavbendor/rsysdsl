@@ -138,7 +138,13 @@ fn sanitize_doc(doc: &str) -> String {
 /// package does not import are emitted fully qualified (`satisfy OtherPkg::Req;`), so a
 /// cross-package `#[sysml::satisfy]` resolves without a manual `#[sysml::import]`.
 pub fn emit_model(model: &Model) -> String {
-    let model = crate::resolve::qualify_requirement_refs(model);
+    let mut model = crate::resolve::qualify_requirement_refs(model);
+    // TBD markers reference `TbdMetadata::TBD`: include its definition so authors cannot forget it.
+    if crate::tbd::model_has_tbd(&model)
+        && !model.packages.iter().any(|p| p.name == TBD_METADATA_PACKAGE)
+    {
+        model.packages.push(tbd_metadata_package());
+    }
     let mut out = String::new();
     for (i, pkg) in model.packages.iter().enumerate() {
         if i > 0 {
@@ -381,9 +387,10 @@ fn emit_attribute_usage(a: &AttributeUsage, level: usize, out: &mut String) {
     } else {
         a.doc.clone()
     };
-    if doc.is_some() || !a.nested_attributes.is_empty() {
+    if doc.is_some() || !a.nested_attributes.is_empty() || !a.tbd.is_empty() {
         let _ = writeln!(out, " {{");
         emit_doc(&doc, level + 1, out);
+        emit_tbd(&a.tbd, level + 1, out);
         for sub in &a.nested_attributes {
             emit_attribute_usage(sub, level + 1, out);
         }
@@ -398,11 +405,12 @@ fn emit_item_def(item: &ItemDef, level: usize, out: &mut String) {
     let abs = if item.is_abstract { "abstract " } else { "" };
     let _ = write!(out, "{ind}{abs}item def {}", escape_sysml_name(&item.name));
     emit_specializes(&item.specializes, out);
-    if item.doc.is_none() && item.attributes.is_empty() {
+    if item.doc.is_none() && item.attributes.is_empty() && item.tbd.is_empty() {
         let _ = writeln!(out, ";");
     } else {
         let _ = writeln!(out, " {{");
         emit_doc(&item.doc, level + 1, out);
+        emit_tbd(&item.tbd, level + 1, out);
         for a in &item.attributes {
             emit_attribute_usage(a, level + 1, out);
         }
@@ -483,11 +491,12 @@ fn emit_port_def(p: &PortDef, level: usize, out: &mut String) {
     let abs = if p.is_abstract { "abstract " } else { "" };
     let _ = write!(out, "{ind}{abs}port def {}", escape_sysml_name(&p.name));
     emit_specializes(&p.specializes, out);
-    if p.doc.is_none() && p.items.is_empty() && p.attributes.is_empty() {
+    if p.doc.is_none() && p.items.is_empty() && p.attributes.is_empty() && p.tbd.is_empty() {
         let _ = writeln!(out, ";");
     } else {
         let _ = writeln!(out, " {{");
         emit_doc(&p.doc, level + 1, out);
+        emit_tbd(&p.tbd, level + 1, out);
         for it in &p.items {
             emit_directed_item(it, level + 1, out);
         }
@@ -531,9 +540,10 @@ fn emit_port_usage(p: &PortUsage, level: usize, out: &mut String) {
             format_qualified(&p.type_name)
         );
     }
-    if p.doc.is_some() {
+    if p.doc.is_some() || !p.tbd.is_empty() {
         let _ = writeln!(out, " {{");
         emit_doc(&p.doc, level + 1, out);
+        emit_tbd(&p.tbd, level + 1, out);
         let _ = writeln!(out, "{ind}}}");
     } else {
         let _ = writeln!(out, ";");
@@ -545,12 +555,13 @@ fn emit_interface_def(i: &InterfaceDef, level: usize, out: &mut String) {
     let abs = if i.is_abstract { "abstract " } else { "" };
     let _ = write!(out, "{ind}{abs}interface def {}", escape_sysml_name(&i.name));
     emit_specializes(&i.specializes, out);
-    if i.doc.is_none() && i.attributes.is_empty() && i.ends.is_empty() {
+    if i.doc.is_none() && i.attributes.is_empty() && i.ends.is_empty() && i.tbd.is_empty() {
         let _ = writeln!(out, ";");
         return;
     }
     let _ = writeln!(out, " {{");
     emit_doc(&i.doc, level + 1, out);
+    emit_tbd(&i.tbd, level + 1, out);
     for a in &i.attributes {
         emit_attribute_usage(a, level + 1, out);
     }
@@ -633,9 +644,10 @@ fn emit_connection_usage(c: &ConnectionUsage, level: usize, out: &mut String) {
     if let (Some(from), Some(to)) = (&c.from, &c.to) {
         let _ = write!(out, " connect {} to {}", format_ref(from), format_ref(to));
     }
-    if c.doc.is_some() {
+    if c.doc.is_some() || !c.tbd.is_empty() {
         let _ = writeln!(out, " {{");
         emit_doc(&c.doc, level + 1, out);
+        emit_tbd(&c.tbd, level + 1, out);
         let _ = writeln!(out, "{ind}}}");
     } else {
         let _ = writeln!(out, ";");
@@ -720,12 +732,14 @@ fn emit_part_usage(p: &PartUsage, level: usize, out: &mut String) {
         || !p.performs.is_empty()
         || !p.connections.is_empty()
         || !p.requirements.is_empty()
-        || !p.portions.is_empty();
+        || !p.portions.is_empty()
+        || !p.tbd.is_empty();
     if !has_body {
         let _ = writeln!(out, ";");
     } else {
         let _ = writeln!(out, " {{");
         emit_doc(&p.doc, level + 1, out);
+        emit_tbd(&p.tbd, level + 1, out);
         for a in &p.attributes {
             emit_attribute_usage(a, level + 1, out);
         }
@@ -838,7 +852,8 @@ fn emit_part_def(p: &PartDef, level: usize, out: &mut String) {
         || !p.verifies.is_empty()
         || !p.refinements.is_empty()
         || !p.fmea.is_empty()
-        || !p.asil_decompositions.is_empty();
+        || !p.asil_decompositions.is_empty()
+        || !p.tbd.is_empty();
 
     if !has_body {
         let _ = writeln!(out, ";");
@@ -847,6 +862,7 @@ fn emit_part_def(p: &PartDef, level: usize, out: &mut String) {
 
     let _ = writeln!(out, " {{");
     emit_doc(&p.doc, level + 1, out);
+    emit_tbd(&p.tbd, level + 1, out);
     for c in &p.comments {
         emit_comment(c, level + 1, out);
     }
@@ -1085,9 +1101,10 @@ fn emit_transition(t: &Transition, level: usize, out: &mut String) {
         let _ = write!(out, " do {effect}");
     }
     let _ = write!(out, " then {}", format_ref(&t.target));
-    if t.doc.is_some() {
+    if t.doc.is_some() || !t.tbd.is_empty() {
         let _ = writeln!(out, " {{");
         emit_doc(&t.doc, level + 1, out);
+        emit_tbd(&t.tbd, level + 1, out);
         let _ = writeln!(out, "{ind}}}");
     } else {
         let _ = writeln!(out, ";");
@@ -1106,13 +1123,15 @@ fn emit_state_usage(s: &StateUsage, level: usize, out: &mut String) {
         || s.do_action.is_some()
         || s.exit_action.is_some()
         || !s.states.is_empty()
-        || !s.transitions.is_empty();
+        || !s.transitions.is_empty()
+        || !s.tbd.is_empty();
     if !has_body {
         let _ = writeln!(out, ";");
         return;
     }
     let _ = writeln!(out, " {{");
     emit_doc(&s.doc, level + 1, out);
+    emit_tbd(&s.tbd, level + 1, out);
     if let Some(e) = &s.entry_action {
         emit_action_usage(e, "entry ", level + 1, out);
     }
@@ -1142,13 +1161,15 @@ fn emit_state_def(s: &StateDef, level: usize, out: &mut String) {
         || s.do_action.is_some()
         || s.exit_action.is_some()
         || !s.states.is_empty()
-        || !s.transitions.is_empty();
+        || !s.transitions.is_empty()
+        || !s.tbd.is_empty();
     if !has_body {
         let _ = writeln!(out, ";");
         return;
     }
     let _ = writeln!(out, " {{");
     emit_doc(&s.doc, level + 1, out);
+    emit_tbd(&s.tbd, level + 1, out);
     if let Some(subj_ty) = &s.subject_type {
         let _ = writeln!(
             out,
@@ -1201,13 +1222,15 @@ fn emit_requirement_def(r: &RequirementDef, level: usize, out: &mut String) {
         || !r.attributes.is_empty()
         || !r.require_constraints.is_empty()
         || !r.assume_constraints.is_empty()
-        || !r.refinements.is_empty();
+        || !r.refinements.is_empty()
+        || !r.tbd.is_empty();
     if !has_body {
         let _ = writeln!(out, ";");
         return;
     }
     let _ = writeln!(out, " {{");
     emit_doc(&r.doc, level + 1, out);
+    emit_tbd(&r.tbd, level + 1, out);
     if let Some(rat) = &r.rationale {
         let escaped = rat.replace('\\', "\\\\").replace('"', "\\\"");
         let _ = writeln!(out, "{}@Rationale {{", indent(level + 1));
@@ -1519,6 +1542,31 @@ fn emit_analysis_usage(a: &AnalysisUsage, level: usize, out: &mut String) {
     let _ = writeln!(out, "{ind}}}");
 }
 
+fn tbd_str(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+/// `@TbdMetadata::TBD { category = "..."; reason = "..."; owner = "..."; resolveBy = "..."; }`
+fn emit_tbd(marks: &[TbdMark], level: usize, out: &mut String) {
+    for m in marks {
+        let _ = writeln!(
+            out,
+            "{}@{}::{} {{",
+            indent(level),
+            TBD_METADATA_PACKAGE,
+            TBD_METADATA_DEF
+        );
+        let ind2 = indent(level + 1);
+        let _ = writeln!(out, "{ind2}category = \"{}\";", m.kind.as_str());
+        let _ = writeln!(out, "{ind2}reason = \"{}\";", tbd_str(&m.reason));
+        if let Some(o) = &m.owner {
+            let _ = writeln!(out, "{ind2}owner = \"{}\";", tbd_str(o));
+        }
+        let _ = writeln!(out, "{ind2}resolveBy = \"{}\";", m.resolve_by.as_str());
+        let _ = writeln!(out, "{}}}", indent(level));
+    }
+}
+
 fn emit_metadata_def(m: &MetadataDef, level: usize, out: &mut String) {
     let ind = indent(level);
     let _ = write!(out, "{ind}metadata def {}", escape_sysml_name(&m.name));
@@ -1531,6 +1579,35 @@ fn emit_metadata_def(m: &MetadataDef, level: usize, out: &mut String) {
             emit_attribute_usage(a, level + 1, out);
         }
         let _ = writeln!(out, "{ind}}}");
+    }
+}
+
+/// `library package TbdMetadata` defining the `TBD` metadata used by every S7 escape hatch
+/// (`tbd_unit`, `tbd_value`, `custom_unit`, `#[sysml::tbd]`, `#[sysml::connect(tbd = ...)]`).
+/// [`emit_model`] appends it automatically whenever a model carries a TBD marker.
+pub fn tbd_metadata_package() -> Package {
+    let attr = |name: &str| AttributeUsage {
+        name: Some(name.to_string()),
+        type_name: Some("String".to_string()),
+        ..Default::default()
+    };
+    Package {
+        name: TBD_METADATA_PACKAGE.to_string(),
+        is_library: true,
+        doc: Some(
+            "To-be-determined markers: every rsysdsl escape hatch carries a reason, an optional owner and the design phase (concept, preliminary, detailed, release) by which it must be resolved."
+                .to_string(),
+        ),
+        comments: Vec::new(),
+        imports: vec![Import::private_star("ScalarValues")],
+        members: vec![PackageMember::MetadataDef(MetadataDef {
+            name: TBD_METADATA_DEF.to_string(),
+            doc: Some(
+                "category: unit | value | element | channel | custom_unit; resolveBy: concept | preliminary | detailed | release."
+                    .to_string(),
+            ),
+            attributes: vec![attr("category"), attr("reason"), attr("owner"), attr("resolveBy")],
+        })],
     }
 }
 

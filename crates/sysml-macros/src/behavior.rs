@@ -98,6 +98,8 @@ struct TransitionArgs {
     guard: Option<GuardSpec>,
     effect: Option<String>,
     doc: Option<String>,
+    /// `tbd = "reason"`: the transition is a placeholder (emitted as @TBD).
+    tbd: Option<(String, proc_macro2::Span)>,
 }
 
 impl Parse for TransitionArgs {
@@ -107,6 +109,7 @@ impl Parse for TransitionArgs {
         let mut guard = None;
         let mut effect = None;
         let mut doc = None;
+        let mut tbd = None;
         while !input.is_empty() {
             let key: Ident = input.parse()?;
             let _eq: Token![=] = input.parse()?;
@@ -136,6 +139,16 @@ impl Parse for TransitionArgs {
                     let s: LitStr = input.parse()?;
                     doc = Some(s.value());
                 }
+                "tbd" => {
+                    let s: LitStr = input.parse()?;
+                    if s.value().trim().is_empty() {
+                        return Err(syn::Error::new(
+                            s.span(),
+                            "`tbd` needs a non-empty reason\nhelp: say why the transition is a placeholder, e.g. `tbd = \"trigger not specified in <source>\"`",
+                        ));
+                    }
+                    tbd = Some((s.value(), s.span()));
+                }
                 other => {
                     return Err(syn::Error::new(
                         key.span(),
@@ -155,6 +168,7 @@ impl Parse for TransitionArgs {
             guard,
             effect,
             doc,
+            tbd,
         })
     }
 }
@@ -313,6 +327,7 @@ fn expand_state_struct(args: TokenStream, mut item: ItemStruct) -> syn::Result<T
     let is_no_std = has_no_std_mode(&kv, &item.attrs);
     let rcfg = reflect_cfg(is_no_std);
     let doc = extract_doc(&item.attrs);
+    let tbd_tok = crate::tbd::tbd_vec_tokens(&item.attrs)?;
     let is_abstract = kv.has_flag("abstract");
     let sysml_name = extract_sysml_name_override(&item.attrs)?
         .or_else(|| kv.get_str("name"))
@@ -404,6 +419,7 @@ fn expand_state_struct(args: TokenStream, mut item: ItemStruct) -> syn::Result<T
                     exit_action: ::std::option::Option::None,
                     states: ::std::vec![],
                     transitions: ::std::vec![],
+                    tbd: #tbd_tok,
                 }
             }
         }
@@ -425,6 +441,7 @@ fn expand_state_enum(args: TokenStream, mut item: ItemEnum) -> syn::Result<Token
     let is_no_std = has_no_std_mode(&kv, &item.attrs);
     let rcfg = reflect_cfg(is_no_std);
     let doc = extract_doc(&item.attrs);
+    let tbd_tok = crate::tbd::tbd_vec_tokens(&item.attrs)?;
     let sysml_name = extract_sysml_name_override(&item.attrs)?
         .or_else(|| kv.get_str("name"))
         .unwrap_or_else(|| item.ident.to_string());
@@ -466,6 +483,7 @@ fn expand_state_enum(args: TokenStream, mut item: ItemEnum) -> syn::Result<Token
 
         let mut state_ty: Option<Path> = None;
         let mut variant_transitions = Vec::new();
+        let v_tbd_tok = crate::tbd::tbd_vec_tokens(&variant.attrs)?;
         if first_sysml_name.is_none() {
             first_sysml_name = Some(v_sysml_name.clone());
         }
@@ -499,6 +517,7 @@ fn expand_state_enum(args: TokenStream, mut item: ItemEnum) -> syn::Result<Token
                 exit_action: ::std::option::Option::None,
                 states: ::std::vec![],
                 transitions: ::std::vec![],
+                tbd: #v_tbd_tok,
             }
         });
 
@@ -514,6 +533,12 @@ fn expand_state_enum(args: TokenStream, mut item: ItemEnum) -> syn::Result<Token
             let trigger_tok = quote_opt_str(&trigger_str);
             let effect_tok = quote_opt_str(&t.effect);
             let tdoc_tok = quote_opt_str(&t.doc);
+            let t_tbd_tok = match &t.tbd {
+                Some((reason, span)) => crate::tbd::quote_marks(&[crate::tbd::mark_tokens(
+                    "Element", reason, None, None, *span,
+                )?]),
+                None => quote!(::std::vec![]),
+            };
 
             // Compile-time check 1: Target variant MUST exist on `Self`!
             compile_checks.push(quote! {
@@ -558,6 +583,7 @@ fn expand_state_enum(args: TokenStream, mut item: ItemEnum) -> syn::Result<Token
                     effect: #effect_tok,
                     target: ::std::string::String::from(#target_sysml),
                     doc: #tdoc_tok,
+                    tbd: #t_tbd_tok,
                 }
             });
 
@@ -853,6 +879,7 @@ fn expand_state_enum(args: TokenStream, mut item: ItemEnum) -> syn::Result<Token
                     exit_action: ::std::option::Option::None,
                     states: ::std::vec![#(#state_usage_tokens),*],
                     transitions: ::std::vec![#(#transition_tokens),*],
+                    tbd: #tbd_tok,
                 }
             }
         }

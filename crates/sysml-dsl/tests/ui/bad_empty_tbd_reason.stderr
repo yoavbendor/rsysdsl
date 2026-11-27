@@ -1,0 +1,6 @@
+error: `tbd_unit` needs a non-empty reason
+       help: say why it is open and where the answer will come from, e.g. `tbd_unit = "not stated in <source document>; ask <owner>"`
+ --> tests/ui/bad_empty_tbd_reason.rs:7:30
+  |
+7 |     #[sysml::attr(tbd_unit = "")]
+  |                              ^^

@@ -515,6 +515,7 @@ pub fn expand_part(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
                 let redefines_tok = quote_vec_str(&redefines);
                 let mult_tok = quote_opt_mult(&mult);
                 let def_tok = quote_opt_str(&default_val);
+                let field_tbd_tok = crate::tbd::tbd_vec_tokens(&field.attrs)?;
 
                 part_tokens.push(quote! {
                     ::sysml_dsl::ir::PartUsage {
@@ -536,6 +537,7 @@ pub fn expand_part(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
                         connections: ::std::vec![],
                         requirements: ::std::vec![],
                         portions: ::std::vec![],
+                        tbd: #field_tbd_tok,
                     }
                 });
             } else if is_port {
@@ -577,6 +579,7 @@ pub fn expand_part(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
                     }
                 }
                 let port_redefs_tok = quote_vec_str(&port_redefs);
+                let port_tbd_tok = crate::tbd::tbd_vec_tokens(&field.attrs)?;
                 let fty = &field.ty;
                 field_type_checks.push(quote! { ::sysml_dsl::core_contracts::assert_port_core::<#fty>(); });
                 port_tokens.push(quote! {
@@ -587,6 +590,7 @@ pub fn expand_part(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
                         multiplicity: #mult_tok,
                         redefines: #port_redefs_tok,
                         doc: #fdoc_tok,
+                        tbd: #port_tbd_tok,
                     }
                 });
             } else if is_item {
@@ -816,6 +820,7 @@ pub fn expand_part(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
                     from: ::std::option::Option::Some(::std::string::String::from(#from_str)),
                     to: ::std::option::Option::Some(::std::string::String::from(#to_str)),
                     doc: ::std::option::Option::None,
+                    tbd: ::std::vec![],
                 }
             });
             conn_checks.push(quote! {
@@ -836,6 +841,7 @@ pub fn expand_part(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
                     from: ::std::option::Option::Some(::std::string::String::from(#from_str)),
                     to: ::std::option::Option::Some(::std::string::String::from(#to_str)),
                     doc: ::std::option::Option::None,
+                    tbd: ::std::vec![],
                 }
             });
             conn_checks.push(quote! {
@@ -868,6 +874,7 @@ pub fn expand_part(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
                         exit_action: sd.exit_action,
                         states: sd.states,
                         transitions: sd.transitions,
+                        tbd: sd.tbd,
                     }
                 }
             });
@@ -883,6 +890,7 @@ pub fn expand_part(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
                     exit_action: ::std::option::Option::None,
                     states: ::std::vec![],
                     transitions: ::std::vec![],
+                    tbd: ::std::vec![],
                 }
             });
         }
@@ -961,6 +969,7 @@ pub fn expand_part(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
     });
     let has_field_expr = quote!(false #(|| #own_field_checks)* #(|| #parent_field_checks)*);
 
+    let def_tbd_tok = crate::tbd::tbd_vec_tokens(&item.attrs)?;
     item.attrs = strip_sysml_attrs(std::mem::take(&mut item.attrs));
     let doc_tok = quote_opt_str(&doc);
     let spec_tok = quote_vec_str(&spec_names);
@@ -1010,6 +1019,7 @@ pub fn expand_part(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
                     refinements: ::std::vec![#(#ref_tokens),*],
                     fmea: ::std::vec![#(#fmea_tokens),*],
                     asil_decompositions: ::std::vec![#(#asil_decomp_tokens),*],
+                    tbd: #def_tbd_tok,
                 }
             }
         }
@@ -1101,6 +1111,7 @@ pub fn expand_variation(args: TokenStream, mut item: syn::ItemEnum) -> syn::Resu
         }
     });
 
+    let def_tbd_tok = crate::tbd::tbd_vec_tokens(&item.attrs)?;
     item.attrs = strip_sysml_attrs(std::mem::take(&mut item.attrs));
 
     Ok(quote! {
@@ -1138,6 +1149,7 @@ pub fn expand_variation(args: TokenStream, mut item: syn::ItemEnum) -> syn::Resu
                     refinements: ::std::vec![],
                     fmea: ::std::vec![],
                     asil_decompositions: ::std::vec![],
+                    tbd: #def_tbd_tok,
                 }
             }
         }

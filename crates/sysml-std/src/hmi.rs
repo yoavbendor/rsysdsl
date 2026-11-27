@@ -52,7 +52,7 @@ pub mod sysml_std_hmi {
         pub mass: Quantity<f64>,
         #[sysml::attr(default = 2.0, unit = "W")]
         pub power_draw: Quantity<f64>,
-        #[sysml::attr(default = 65.0)]
+        #[sysml::attr(dimensionless, default = 65.0)]
         pub chime_level_db: f64,
         #[sysml::port]
         pub power_in: Conjugated<ElectricalPowerPort>,

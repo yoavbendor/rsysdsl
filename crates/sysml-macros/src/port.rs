@@ -48,6 +48,7 @@ pub fn expand_item(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
         }
     }
 
+    let def_tbd_tok = crate::tbd::tbd_vec_tokens(&item.attrs)?;
     item.attrs = strip_sysml_attrs(std::mem::take(&mut item.attrs));
     let ident = &item.ident;
     let doc_tok = quote_opt_str(&doc);
@@ -77,6 +78,7 @@ pub fn expand_item(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
                     doc: #doc_tok,
                     specializes: #spec_tok,
                     attributes: ::std::vec![#(#attr_tokens),*],
+                    tbd: #def_tbd_tok,
                 }
             }
         }
@@ -270,6 +272,7 @@ pub fn expand_port(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
 
     let is_symmetric = explicit_symmetric || (has_any_item && all_inout);
 
+    let def_tbd_tok = crate::tbd::tbd_vec_tokens(&item.attrs)?;
     item.attrs = strip_sysml_attrs(std::mem::take(&mut item.attrs));
     let ident = &item.ident;
     let doc_tok = quote_opt_str(&doc);
@@ -318,6 +321,7 @@ pub fn expand_port(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
                     is_symmetric: #is_symmetric,
                     items: ::std::vec![#(#item_tokens),*],
                     attributes: ::std::vec![#(#attr_tokens),*],
+                    tbd: #def_tbd_tok,
                 }
             }
         }
@@ -487,6 +491,7 @@ pub fn expand_interface(args: TokenStream, mut item: ItemStruct) -> syn::Result<
         ));
     };
 
+    let def_tbd_tok = crate::tbd::tbd_vec_tokens(&item.attrs)?;
     item.attrs = strip_sysml_attrs(std::mem::take(&mut item.attrs));
     let ident = &item.ident;
     let doc_tok = quote_opt_str(&doc);
@@ -537,6 +542,7 @@ pub fn expand_interface(args: TokenStream, mut item: ItemStruct) -> syn::Result<
                     specializes: #spec_tok,
                     attributes: ::std::vec![#(#attr_tokens),*],
                     ends: ::std::vec![#(#end_tokens),*],
+                    tbd: #def_tbd_tok,
                 }
             }
         }

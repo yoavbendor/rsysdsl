@@ -46,7 +46,7 @@ pub mod sysml_std_natural {
         pub orbital_radius: Quantity<f64>,
         #[sysml::attr(default = 3.15576e7, unit = "s")]
         pub orbital_period: Quantity<f64>,
-        #[sysml::attr(default = 0.30)]
+        #[sysml::attr(dimensionless, default = 0.30)]
         pub bond_albedo: f64,
         #[sysml::port]
         pub radiation_in: Conjugated<RadiativePort>,

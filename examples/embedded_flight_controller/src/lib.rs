@@ -40,7 +40,7 @@ pub mod flight_controller {
     #[sysml::item]
     #[derive(Debug, Clone, Copy, Default, PartialEq)]
     pub struct ValveCutoffCommand {
-        #[sysml::attr(default = 1.0)]
+        #[sysml::attr(dimensionless, default = 1.0)]
         pub close_valve: f64,
     }
 

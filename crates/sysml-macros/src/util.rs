@@ -378,6 +378,7 @@ pub fn strip_sysml_attrs(attrs: Vec<Attribute>) -> Vec<Attribute> {
         "independent",
         "asil_decompose",
         "no_std_reflect",
+        "tbd",
     ];
     attrs
         .into_iter()
@@ -451,13 +452,18 @@ pub fn build_attr_usage_tokens(
     let doc = extract_doc(attrs);
     let doc_tok = quote_opt_str(&doc);
     let mut kv = KvArgs::default();
+    let mut attr_span = syn::spanned::Spanned::span(field_ty);
     for attr in attrs {
         if is_sysml_attr(attr, "attr") {
+            attr_span = syn::spanned::Spanned::span(attr);
             if let Meta::List(_) = &attr.meta {
                 kv = attr.parse_args()?;
             }
         }
     }
+    crate::units_check::require_unit_decl(&kv, field_name_rust, field_ty, attr_span)?;
+    let tbd_marks = crate::tbd::attr_marks(&kv, attr_span)?;
+    let tbd_tok = crate::tbd::quote_marks(&tbd_marks);
     let name_override = extract_sysml_name_override(attrs)?.or_else(|| kv.get_str("name"));
     let mut redefines = kv.get_all_str("redefines");
     if redefines.is_empty() && kv.has_flag("redefines") {
@@ -538,6 +544,7 @@ pub fn build_attr_usage_tokens(
             is_keywordless: #is_keywordless,
             nested_attributes: ::std::vec![],
             is_evidence: #is_evidence,
+            tbd: #tbd_tok,
         }
     })
 }

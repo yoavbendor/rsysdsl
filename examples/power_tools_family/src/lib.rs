@@ -157,7 +157,7 @@ pub mod power_tools_family_model {
     pub struct MotorInverterStage {
         #[sysml::attr(redefines = "outputVoltage", default = 18.0, unit = "V")]
         pub output_voltage: Quantity<f64>,
-        #[sysml::attr(redefines = "efficiency", default = 0.96)]
+        #[sysml::attr(dimensionless, redefines = "efficiency", default = 0.96)]
         pub efficiency: f64,
         #[sysml::attr(redefines = "ratedPower", default = 1200.0, unit = "W")]
         pub rated_power: Quantity<f64>,
@@ -178,11 +178,11 @@ pub mod power_tools_family_model {
     pub struct PlanetaryGearbox {
         #[sysml::attr(redefines = "mass", default = 0.35, unit = "kg")]
         pub mass: Quantity<f64>,
-        #[sysml::attr(redefines = "gearRatio", default = 12.0)]
+        #[sysml::attr(dimensionless, redefines = "gearRatio", default = 12.0)]
         pub gear_ratio: f64,
-        #[sysml::attr(redefines = "efficiency", default = 0.92)]
+        #[sysml::attr(dimensionless, redefines = "efficiency", default = 0.92)]
         pub efficiency: f64,
-        #[sysml::attr(redefines = "noiseLevelDb", default = 74.0)]
+        #[sysml::attr(dimensionless, redefines = "noiseLevelDb", default = 74.0)]
         pub noise_level_db: f64,
         #[sysml::port(redefines)]
         pub mech_in: Conjugated<MechanicalPowerPort>,
@@ -197,9 +197,9 @@ pub mod power_tools_family_model {
         pub mass: Quantity<f64>,
         #[sysml::attr(redefines = "ratedPower", default = 600.0, unit = "W")]
         pub rated_power: Quantity<f64>,
-        #[sysml::attr(redefines = "efficiency", default = 0.89)]
+        #[sysml::attr(dimensionless, redefines = "efficiency", default = 0.89)]
         pub efficiency: f64,
-        #[sysml::attr(redefines = "noiseLevelDb", default = 72.0)]
+        #[sysml::attr(dimensionless, redefines = "noiseLevelDb", default = 72.0)]
         pub noise_level_db: f64,
         #[sysml::port(redefines)]
         pub power_in: Conjugated<ElectricalPowerPort>,
@@ -235,11 +235,11 @@ pub mod power_tools_family_model {
     #[sysml::specializes(PlanetaryGearbox)]
     #[derive(Debug, Clone, Copy)]
     pub struct DrillChuckGearbox {
-        #[sysml::attr(redefines = "gearRatio", default = 18.0)]
+        #[sysml::attr(dimensionless, redefines = "gearRatio", default = 18.0)]
         pub gear_ratio: f64,
-        #[sysml::attr(redefines = "efficiency", default = 0.92)]
+        #[sysml::attr(dimensionless, redefines = "efficiency", default = 0.92)]
         pub efficiency: f64,
-        #[sysml::attr(redefines = "noiseLevelDb", default = 78.0)]
+        #[sysml::attr(dimensionless, redefines = "noiseLevelDb", default = 78.0)]
         pub noise_level_db: f64,
         #[sysml::attr(default = 0.013, unit = "m")]
         pub chuck_capacity: Quantity<f64>,
@@ -254,11 +254,11 @@ pub mod power_tools_family_model {
     pub struct ImpactAnvilMechanism {
         #[sysml::attr(redefines = "mass", default = 0.42, unit = "kg")]
         pub mass: Quantity<f64>,
-        #[sysml::attr(redefines = "gearRatio", default = 9.0)]
+        #[sysml::attr(dimensionless, redefines = "gearRatio", default = 9.0)]
         pub gear_ratio: f64,
-        #[sysml::attr(redefines = "efficiency", default = 0.86)]
+        #[sysml::attr(dimensionless, redefines = "efficiency", default = 0.86)]
         pub efficiency: f64,
-        #[sysml::attr(redefines = "noiseLevelDb", default = 92.0)]
+        #[sysml::attr(dimensionless, redefines = "noiseLevelDb", default = 92.0)]
         pub noise_level_db: f64,
         #[sysml::attr(default = 55.0, unit = "Hz")]
         pub impact_rate: Quantity<f64>,
@@ -273,11 +273,11 @@ pub mod power_tools_family_model {
     pub struct CircularBladeArbor {
         #[sysml::attr(redefines = "mass", default = 0.48, unit = "kg")]
         pub mass: Quantity<f64>,
-        #[sysml::attr(redefines = "gearRatio", default = 3.2)]
+        #[sysml::attr(dimensionless, redefines = "gearRatio", default = 3.2)]
         pub gear_ratio: f64,
-        #[sysml::attr(redefines = "efficiency", default = 0.94)]
+        #[sysml::attr(dimensionless, redefines = "efficiency", default = 0.94)]
         pub efficiency: f64,
-        #[sysml::attr(redefines = "noiseLevelDb", default = 90.0)]
+        #[sysml::attr(dimensionless, redefines = "noiseLevelDb", default = 90.0)]
         pub noise_level_db: f64,
         #[sysml::attr(default = 0.165, unit = "m")]
         pub blade_diameter: Quantity<f64>,
@@ -307,7 +307,7 @@ pub mod power_tools_family_model {
         pub output_voltage: Quantity<f64>,
         #[sysml::attr(redefines = "ratedPower", default = 160.0, unit = "W")]
         pub rated_power: Quantity<f64>,
-        #[sysml::attr(redefines = "efficiency", default = 0.91)]
+        #[sysml::attr(dimensionless, redefines = "efficiency", default = 0.91)]
         pub efficiency: f64,
         #[sysml::attr(redefines = "maxChargeCurrent", default = 8.0, unit = "A")]
         pub max_charge_current: Quantity<f64>,
@@ -375,7 +375,7 @@ pub mod power_tools_family_model {
     #[sysml::item]
     #[derive(Debug, Clone, Copy, Default)]
     pub struct ToolSafetyTelemetry {
-        #[sysml::attr(default = 0.0)]
+        #[sysml::attr(dimensionless, default = 0.0)]
         pub trigger_demand: f64,
         #[sysml::attr(default = 298.15, unit = "K")]
         pub motor_temp: f64,
@@ -455,9 +455,9 @@ pub mod power_tools_family_model {
     #[sysml::require_constraint(measured_noise_db <= max_noise_db)]
     #[derive(Debug, Clone, Copy)]
     pub struct AcousticEmissionLimitRequirement {
-        #[sysml::attr(default = 95.0)]
+        #[sysml::attr(dimensionless, default = 95.0)]
         pub max_noise_db: f64,
-        #[sysml::attr(default = 92.0)]
+        #[sysml::attr(dimensionless, default = 92.0)]
         pub measured_noise_db: f64,
     }
 
@@ -490,7 +490,7 @@ pub mod power_tools_family_model {
     pub struct CordlessToolBase {
         #[sysml::attr(default = 500.0, unit = "W")]
         pub rated_power: Quantity<f64>,
-        #[sysml::attr(default = 85.0)]
+        #[sysml::attr(dimensionless, default = 85.0)]
         pub max_noise_db: f64,
         #[sysml::attr(default = 1.80, unit = "kg")]
         pub mass: Quantity<f64>,
@@ -524,7 +524,7 @@ pub mod power_tools_family_model {
     pub struct CordlessDrill {
         #[sysml::attr(redefines = "ratedPower", default = 550.0, unit = "W")]
         pub rated_power: Quantity<f64>,
-        #[sysml::attr(redefines = "maxNoiseDb", default = 79.0)]
+        #[sysml::attr(dimensionless, redefines = "maxNoiseDb", default = 79.0)]
         pub max_noise_db: f64,
         #[sysml::attr(redefines = "mass", default = 1.95, unit = "kg")]
         pub mass: Quantity<f64>,
@@ -552,7 +552,7 @@ pub mod power_tools_family_model {
     pub struct ImpactDriver {
         #[sysml::attr(redefines = "ratedPower", default = 650.0, unit = "W")]
         pub rated_power: Quantity<f64>,
-        #[sysml::attr(redefines = "maxNoiseDb", default = 92.0)]
+        #[sysml::attr(dimensionless, redefines = "maxNoiseDb", default = 92.0)]
         pub max_noise_db: f64,
         #[sysml::attr(redefines = "mass", default = 1.75, unit = "kg")]
         pub mass: Quantity<f64>,
@@ -581,7 +581,7 @@ pub mod power_tools_family_model {
     pub struct CircularSaw {
         #[sysml::attr(redefines = "ratedPower", default = 1100.0, unit = "W")]
         pub rated_power: Quantity<f64>,
-        #[sysml::attr(redefines = "maxNoiseDb", default = 90.0)]
+        #[sysml::attr(dimensionless, redefines = "maxNoiseDb", default = 90.0)]
         pub max_noise_db: f64,
         #[sysml::attr(redefines = "mass", default = 3.10, unit = "kg")]
         pub mass: Quantity<f64>,

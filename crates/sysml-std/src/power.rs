@@ -25,7 +25,7 @@ pub mod sysml_std_power {
         pub mass: Quantity<f64>,
         #[sysml::attr(default = 100.0, unit = "W")]
         pub rated_power: Quantity<f64>,
-        #[sysml::attr(default = 0.90)]
+        #[sysml::attr(dimensionless, default = 0.90)]
         pub efficiency: f64,
         #[sysml::attr(default = 10.0, unit = "W")]
         pub waste_heat: Quantity<f64>,
@@ -68,7 +68,7 @@ pub mod sysml_std_power {
         pub pack_voltage: Quantity<f64>,
         #[sysml::attr(default = 129600.0, unit = "J")]
         pub energy_capacity: Quantity<f64>,
-        #[sysml::attr(default = 1.0)]
+        #[sysml::attr(dimensionless, default = 1.0)]
         pub state_of_charge: f64,
         #[sysml::attr(default = 333.15, unit = "K")]
         pub max_cell_temp: Quantity<f64>,
@@ -120,7 +120,7 @@ pub mod sysml_std_power {
     pub struct HighVoltageTransformer {
         #[sysml::attr(redefines = "outputVoltage", default = 2100.0, unit = "V")]
         pub output_voltage: Quantity<f64>,
-        #[sysml::attr(default = 48.0)]
+        #[sysml::attr(dimensionless, default = 48.0)]
         pub hum_noise_db: f64,
         #[sysml::port]
         pub noise_out: AcousticPort,

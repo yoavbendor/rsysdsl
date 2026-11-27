@@ -34,7 +34,7 @@ pub mod microwave_model {
     #[sysml::item]
     #[derive(Debug, Clone, Copy, Default, PartialEq)]
     pub struct CookStartCommand {
-        #[sysml::attr(default = 0.0)]
+        #[sysml::attr(dimensionless, default = 0.0)]
         pub door_closed: f64,
         #[sysml::attr(default = 900.0, unit = "W")]
         pub requested_rf_power_w: f64,
@@ -44,9 +44,9 @@ pub mod microwave_model {
     #[sysml::item]
     #[derive(Debug, Clone, Copy, Default, PartialEq)]
     pub struct DoorInterlockEvent {
-        #[sysml::attr(default = 0.0)]
+        #[sysml::attr(dimensionless, default = 0.0)]
         pub door_open: f64,
-        #[sysml::attr(default = 1.0)]
+        #[sysml::attr(dimensionless, default = 1.0)]
         pub door_closed: f64,
     }
 
@@ -62,7 +62,7 @@ pub mod microwave_model {
     #[sysml::item]
     #[derive(Debug, Clone, Copy, Default, PartialEq)]
     pub struct CookStopEvent {
-        #[sysml::attr(default = 1.0)]
+        #[sysml::attr(dimensionless, default = 1.0)]
         pub cycle_done: f64,
     }
 
@@ -127,9 +127,9 @@ pub mod microwave_model {
     #[sysml::require_constraint(operating_noise_db <= max_noise_db)]
     #[derive(Debug, Clone, Copy)]
     pub struct AcousticNoiseLimitRequirement {
-        #[sysml::attr(default = 58.0)]
+        #[sysml::attr(dimensionless, default = 58.0)]
         pub max_noise_db: f64,
-        #[sysml::attr(default = 54.0, evidence)]
+        #[sysml::attr(dimensionless, default = 54.0, evidence)]
         pub operating_noise_db: f64,
     }
 
@@ -194,7 +194,7 @@ pub mod microwave_model {
         pub rated_power: Quantity<f64>,
         #[sysml::attr(redefines = "outputVoltage", default = 5.0, unit = "V")]
         pub output_voltage: Quantity<f64>,
-        #[sysml::attr(redefines = "efficiency", default = 0.85)]
+        #[sysml::attr(dimensionless, redefines = "efficiency", default = 0.85)]
         pub efficiency: f64,
         #[sysml::port(redefines)]
         pub power_in: Conjugated<ElectricalPowerPort>,
@@ -232,13 +232,13 @@ pub mod microwave_model {
         pub mass: Quantity<f64>,
         #[sysml::attr(redefines = "ratedPower", default = 1550.0, unit = "W")]
         pub rated_power: Quantity<f64>,
-        #[sysml::attr(redefines = "efficiency", default = 0.90)]
+        #[sysml::attr(dimensionless, redefines = "efficiency", default = 0.90)]
         pub efficiency: f64,
         #[sysml::attr(redefines = "wasteHeat", default = 140.0, unit = "W")]
         pub waste_heat: Quantity<f64>,
         #[sysml::attr(redefines = "outputVoltage", default = 2100.0, unit = "V")]
         pub output_voltage: Quantity<f64>,
-        #[sysml::attr(redefines = "humNoiseDb", default = 47.0)]
+        #[sysml::attr(dimensionless, redefines = "humNoiseDb", default = 47.0)]
         pub hum_noise_db: f64,
         #[sysml::port(redefines)]
         pub power_in: Conjugated<ElectricalPowerPort>,
@@ -282,7 +282,7 @@ pub mod microwave_model {
         pub mass: Quantity<f64>,
         #[sysml::attr(redefines = "ratedPower", default = 1400.0, unit = "W")]
         pub rated_power: Quantity<f64>,
-        #[sysml::attr(redefines = "efficiency", default = 0.642857)]
+        #[sysml::attr(dimensionless, redefines = "efficiency", default = 0.642857)]
         pub efficiency: f64,
         #[sysml::attr(redefines = "wasteHeat", default = 500.0, unit = "W")]
         pub waste_heat: Quantity<f64>,
@@ -305,7 +305,7 @@ pub mod microwave_model {
     pub struct Waveguide {
         #[sysml::attr(redefines = "mass", default = 0.25, unit = "kg")]
         pub mass: Quantity<f64>,
-        #[sysml::attr(redefines = "transmissionEfficiency", default = 0.98)]
+        #[sysml::attr(dimensionless, redefines = "transmissionEfficiency", default = 0.98)]
         pub transmission_efficiency: f64,
         #[sysml::port(redefines)]
         pub radiation_in: Conjugated<RadiativePort>,
@@ -323,11 +323,11 @@ pub mod microwave_model {
         pub mass: Quantity<f64>,
         #[sysml::attr(redefines = "heatDissipation", default = 45.0, unit = "W")]
         pub heat_dissipation: Quantity<f64>,
-        #[sysml::attr(redefines = "thermalConductanceWPerK", default = 1.5)]
+        #[sysml::attr(redefines = "thermalConductanceWPerK", default = 1.5, unit = "W/K")]
         pub thermal_conductance_w_per_k: f64,
-        #[sysml::attr(redefines = "acousticAttenuationDb", default = 14.0)]
+        #[sysml::attr(dimensionless, redefines = "acousticAttenuationDb", default = 14.0)]
         pub acoustic_attenuation_db: f64,
-        #[sysml::attr(default = 0.88)]
+        #[sysml::attr(dimensionless, default = 0.88)]
         pub rf_coupling_efficiency: f64,
         #[sysml::attr(default = 0.50, unit = "kg")]
         pub nominal_food_mass: Quantity<f64>,
@@ -348,11 +348,11 @@ pub mod microwave_model {
         pub mass: Quantity<f64>,
         #[sysml::attr(redefines = "ratedPower", default = 4.0, unit = "W")]
         pub rated_power: Quantity<f64>,
-        #[sysml::attr(redefines = "efficiency", default = 0.55)]
+        #[sysml::attr(dimensionless, redefines = "efficiency", default = 0.55)]
         pub efficiency: f64,
         #[sysml::attr(redefines = "ratedRotationFreq", default = 0.10, unit = "Hz")]
         pub rated_rotation_freq: Quantity<f64>,
-        #[sysml::attr(redefines = "noiseLevelDb", default = 34.0)]
+        #[sysml::attr(dimensionless, redefines = "noiseLevelDb", default = 34.0)]
         pub noise_level_db: f64,
         #[sysml::port(redefines)]
         pub power_in: Conjugated<ElectricalPowerPort>,
@@ -378,7 +378,7 @@ pub mod microwave_model {
         pub airflow_rate: Quantity<f64>,
         #[sysml::attr(redefines = "ratedPower", default = 18.0, unit = "W")]
         pub rated_power: Quantity<f64>,
-        #[sysml::attr(redefines = "noiseLevelDb", default = 52.0)]
+        #[sysml::attr(dimensionless, redefines = "noiseLevelDb", default = 52.0)]
         pub noise_level_db: f64,
         #[sysml::port(redefines)]
         pub power_in: Conjugated<ElectricalPowerPort>,
@@ -499,7 +499,7 @@ pub mod microwave_model {
         pub power_draw: Quantity<f64>,
         #[sysml::attr(default = 373.15, unit = "K")]
         pub max_safe_cavity_temp_k: Quantity<f64>,
-        #[sysml::attr(default = 0.5)]
+        #[sysml::attr(dimensionless, default = 0.5)]
         pub door_open_trip_factor: f64,
         #[sysml::port(redefines)]
         pub power_in: Conjugated<ElectricalPowerPort>,
@@ -550,9 +550,9 @@ pub mod microwave_model {
     pub struct MicrowaveKeypadDisplay {
         #[sysml::attr(redefines = "powerDraw", default = 2.5, unit = "W")]
         pub power_draw: Quantity<f64>,
-        #[sysml::attr(redefines = "chimeLevelDb", default = 68.0)]
+        #[sysml::attr(dimensionless, redefines = "chimeLevelDb", default = 68.0)]
         pub chime_level_db: f64,
-        #[sysml::attr(default = 12)]
+        #[sysml::attr(dimensionless, default = 12)]
         pub keypad_button_count: i64,
         #[sysml::attr(default = 2700.0, unit = "Hz")]
         pub buzzer_freq: Quantity<f64>,

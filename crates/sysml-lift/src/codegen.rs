@@ -1268,7 +1268,7 @@ fn emit_rust_analysis_params(params: &[AnalysisParam], out: &mut String) {
         if let Some(unit) = &p.unit {
             opts.push(format!("unit = \"{}\"", escape_rust_str(unit)));
             if !is_checked_si_unit(unit) {
-                opts.push("custom_unit".to_string());
+                opts.push(format!("custom_unit = \"{LIFTED_CUSTOM_UNIT_REASON}\""));
             }
         }
         let _ = writeln!(out, "        #[sysml::{attr_name}({})]", opts.join(", "));
@@ -1397,11 +1397,29 @@ fn emit_rust_attr_field(a: &AttributeUsage, used: &mut BTreeSet<String>, out: &m
             ValueKind::Bound => opts.push(format!("value = \"{}\"", escape_rust_str(val))),
         }
     }
+    let mark = |k: TbdKind| a.tbd.iter().find(|m| m.kind == k);
     if let Some(unit) = &a.unit {
         opts.push(format!("unit = \"{}\"", escape_rust_str(unit)));
         if !is_checked_si_unit(unit) {
-            opts.push("custom_unit".to_string());
+            let reason = mark(TbdKind::CustomUnit)
+                .map(|m| m.reason.as_str())
+                .unwrap_or(LIFTED_CUSTOM_UNIT_REASON);
+            opts.push(format!("custom_unit = \"{}\"", escape_rust_str(reason)));
         }
+    } else if let Some(m) = mark(TbdKind::Unit) {
+        opts.push(format!("tbd_unit = \"{}\"", escape_rust_str(&m.reason)));
+    } else if lifted_attr_needs_dimensionless(a) {
+        // SysML `Real` / `Integer` values without a unit are pure numbers.
+        opts.push("dimensionless".to_string());
+    }
+    if let Some(m) = mark(TbdKind::Value) {
+        opts.push(format!("tbd_value = \"{}\"", escape_rust_str(&m.reason)));
+    }
+    if let Some(m) = a.tbd.first() {
+        if let Some(o) = &m.owner {
+            opts.push(format!("tbd_owner = \"{}\"", escape_rust_str(o)));
+        }
+        opts.push(format!("tbd_resolve_by = \"{}\"", m.resolve_by.as_str()));
     }
     emit_doc_comments(&a.doc, "        ", out);
     if opts.is_empty() {
@@ -1444,6 +1462,24 @@ fn unique_ident(base: &str, used: &mut BTreeSet<String>) -> String {
             return cand;
         }
         i += 1;
+    }
+}
+
+/// Reason recorded on lifted attributes whose unit is outside the checked SI table.
+const LIFTED_CUSTOM_UNIT_REASON: &str = "unit defined in source corpus";
+
+/// A lifted numeric attribute without a unit (and without a SysML type or ISQ subsetting that
+/// carries one) must say `dimensionless` to satisfy the DSL's unit-declaration rule.
+fn lifted_attr_needs_dimensionless(a: &AttributeUsage) -> bool {
+    if a.subsets.iter().any(|s| s.contains("ISQ::")) {
+        return false;
+    }
+    match a.type_name.as_deref() {
+        None => true,
+        Some(t) => matches!(
+            t.rsplit("::").next().unwrap_or(t),
+            "Real" | "Integer" | "Natural" | "Rational" | "Number" | "Positive" | "NumericalValue"
+        ),
     }
 }
 

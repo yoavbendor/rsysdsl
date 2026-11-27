@@ -1,0 +1,10 @@
+error: numeric attribute `rated_power` declares no unit
+       help: add exactly one of:
+         unit = "<SI symbol>"        e.g. unit = "W", unit = "m/s"
+         dimensionless               counts, ratios, indices, flags
+         tbd_unit = "<reason>"       unit not in the source yet (emitted as @TBD, counted in the TBD ledger)
+         custom_unit = "<reason>"    with unit = "...": a unit defined in your model or another library
+ --> tests/ui/bad_missing_unit.rs:8:5
+  |
+8 |     #[sysml::attr(default = 1500.0)]
+  |     ^

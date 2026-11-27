@@ -1,0 +1,6 @@
+error: `custom_unit` on attribute `speed` needs a reason
+       help: write `custom_unit = "<why this unit is outside the SI table>"` (it is emitted as @TBD and counted in the TBD ledger)
+ --> tests/ui/bad_bare_custom_unit.rs:7:5
+  |
+7 |     #[sysml::attr(default = 3000.0, unit = "rpm", custom_unit)]
+  |     ^

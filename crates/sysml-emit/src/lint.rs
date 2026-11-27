@@ -442,7 +442,7 @@ fn collect_pkg<'a>(
     ports: &mut Vec<(String, bool, &'a PortDef)>,
 ) {
     *total_packages += 1;
-    let is_lib = pkg.is_library || pkg.name.starts_with("SysmlStd") || pkg.name == "ISO26262Metadata";
+    let is_lib = pkg.is_library || pkg.name.starts_with("SysmlStd") || pkg.name == "ISO26262Metadata" || pkg.name == sysml_ir::TBD_METADATA_PACKAGE;
     for m in &pkg.members {
         match m {
             PackageMember::Package(sub) => collect_pkg(sub, total_packages, parts, interfaces, ports),
@@ -455,7 +455,7 @@ fn collect_pkg<'a>(
 }
 
 fn collect_state_defs<'a>(pkg: &'a Package, out: &mut Vec<(String, &'a StateDef)>) {
-    if pkg.is_library || pkg.name.starts_with("SysmlStd") || pkg.name == "ISO26262Metadata" {
+    if pkg.is_library || pkg.name.starts_with("SysmlStd") || pkg.name == "ISO26262Metadata" || pkg.name == sysml_ir::TBD_METADATA_PACKAGE {
         return;
     }
     for m in &pkg.members {

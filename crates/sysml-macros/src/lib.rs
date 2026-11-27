@@ -20,6 +20,7 @@
 //! - `#[sysml::satisfy(...)]`
 //! - `#[sysml::verify(...)]`
 //! - `#[sysml::connect(...)]`
+//! - `#[sysml::tbd(reason = "...", owner = "...", resolve_by = "...")]` (S7 TBD marker)
 
 use proc_macro::TokenStream;
 use quote::quote;
@@ -33,6 +34,7 @@ mod package;
 mod part;
 mod port;
 mod requirement;
+mod tbd;
 mod units_check;
 mod util;
 
@@ -419,4 +421,22 @@ pub fn allocate(args: TokenStream, input: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn import(_args: TokenStream, input: TokenStream) -> TokenStream {
     input
+}
+
+/// `#[sysml::tbd(reason = "...", owner = "...", resolve_by = "concept|preliminary|detailed|release")]`:
+/// marks a part, port, item, interface, requirement or state as to-be-determined. Consumed by the
+/// primary `#[sysml::*]` macro (emitted as `@TbdMetadata::TBD`, listed by `rsysdsl tbd`).
+#[proc_macro_attribute]
+pub fn tbd(args: TokenStream, input: TokenStream) -> TokenStream {
+    let args2: proc_macro2::TokenStream = args.into();
+    let mut item = parse_macro_input!(input as Item);
+    if let Some(reordered) = reorder_below_primary("tbd", args2, &mut item) {
+        return reordered.into();
+    }
+    syn::Error::new_spanned(
+        item,
+        "#[sysml::tbd] must be attached to a #[sysml::part], #[sysml::port], #[sysml::item], #[sysml::interface], #[sysml::requirement] or #[sysml::state] item",
+    )
+    .to_compile_error()
+    .into()
 }

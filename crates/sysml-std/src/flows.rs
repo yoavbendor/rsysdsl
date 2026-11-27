@@ -235,7 +235,7 @@ pub mod sysml_std_flows {
     #[sysml::interface]
     #[derive(Debug, Clone, Copy)]
     pub struct ElectricalLink {
-        #[sysml::attr(default = 0.98)]
+        #[sysml::attr(dimensionless, default = 0.98)]
         pub transmission_efficiency: f64,
         #[sysml::end]
         pub supply: ElectricalPowerPort,
@@ -247,7 +247,7 @@ pub mod sysml_std_flows {
     #[sysml::interface]
     #[derive(Debug, Clone, Copy)]
     pub struct MechanicalLink {
-        #[sysml::attr(default = 0.95)]
+        #[sysml::attr(dimensionless, default = 0.95)]
         pub transmission_efficiency: f64,
         #[sysml::end]
         pub driver: MechanicalPowerPort,

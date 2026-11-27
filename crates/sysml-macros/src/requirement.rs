@@ -193,6 +193,7 @@ pub fn expand_requirement(args: TokenStream, mut item: ItemStruct) -> syn::Resul
         quote!()
     };
 
+    let def_tbd_tok = crate::tbd::tbd_vec_tokens(&item.attrs)?;
     item.attrs = strip_sysml_attrs(std::mem::take(&mut item.attrs));
     let short_tok = quote_opt_str(&short_name);
     let doc_tok = quote_opt_str(&doc);
@@ -236,6 +237,7 @@ pub fn expand_requirement(args: TokenStream, mut item: ItemStruct) -> syn::Resul
                     require_constraints: #req_c_tok,
                     assume_constraints: #ass_c_tok,
                     refinements: ::std::vec![#(#ref_tokens),*],
+                    tbd: #def_tbd_tok,
                 }
             }
         }

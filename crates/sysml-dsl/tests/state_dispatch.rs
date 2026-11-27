@@ -20,7 +20,7 @@ pub mod dispatch_demo {
     #[sysml::item]
     #[derive(Debug, Clone, Copy, Default)]
     pub struct ResetCommand {
-        #[sysml::attr(default = 0.0)]
+        #[sysml::attr(dimensionless, default = 0.0)]
         pub code: f64,
     }
 

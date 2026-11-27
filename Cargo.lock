@@ -586,6 +586,7 @@ dependencies = [
  "sysml-core",
  "sysml-emit",
  "sysml-ir",
+ "sysml-lift",
  "sysml-macros",
  "trybuild",
 ]

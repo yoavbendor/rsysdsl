@@ -19,19 +19,30 @@ use crate::util::{is_sysml_attr, KvArgs};
 // 1. Unit symbol validation
 // ---------------------------------------------------------------------------------------------
 
-/// The unit to use for dimensional analysis: `""` (= unknown, checks skipped) when the attribute
-/// has no unit or opts out with `custom_unit` (a unit defined by the model or another library).
+/// `true` when the attribute opts out of the closed SI table with `custom_unit = "reason"`
+/// (or the legacy bare `custom_unit` flag, still accepted on analysis parameters).
+pub fn has_custom_unit(kv: &KvArgs) -> bool {
+    kv.has_flag("custom_unit") || kv.get_str("custom_unit").is_some()
+}
+
+/// The unit to use for dimensional analysis: `"1"` for `dimensionless`, `""` (= unknown, checks
+/// skipped) when the attribute has no unit, a `tbd_unit`, or a `custom_unit` (a unit defined by
+/// the model or another library).
 pub fn checked_unit(kv: &KvArgs) -> String {
-    if kv.has_flag("custom_unit") {
+    if has_custom_unit(kv) || kv.get_str("tbd_unit").is_some() {
         return String::new();
+    }
+    if kv.has_flag("dimensionless") {
+        return "1".to_string();
     }
     kv.get_str("unit").unwrap_or_default()
 }
 
 /// Validate the `unit = "..."` entry of a parsed `#[sysml::attr(...)]` (if present).
-/// `#[sysml::attr(unit = "...", custom_unit)]` opts out (model-defined / foreign library unit).
+/// `#[sysml::attr(unit = "...", custom_unit = "reason")]` opts out (model-defined / foreign
+/// library unit).
 pub fn validate_unit_kv(kv: &KvArgs) -> syn::Result<()> {
-    if kv.has_flag("custom_unit") {
+    if has_custom_unit(kv) {
         return Ok(());
     }
     let Some(unit) = kv.get_str("unit") else {
@@ -39,6 +50,133 @@ pub fn validate_unit_kv(kv: &KvArgs) -> syn::Result<()> {
     };
     let span = kv.get_str_span("unit").unwrap_or_else(Span::call_site);
     validate_unit_str(&unit, span)
+}
+
+/// Rust types that make an attribute numeric (and therefore subject to the unit declaration rule).
+fn is_numeric_rust_type(ty: &syn::Type) -> bool {
+    const NUMERIC: &[&str] = &[
+        "Quantity", "f64", "f32", "i8", "i16", "i32", "i64", "i128", "isize", "u8", "u16", "u32",
+        "u64", "u128", "usize",
+    ];
+    match ty {
+        syn::Type::Path(tp) => tp
+            .path
+            .segments
+            .last()
+            .is_some_and(|seg| NUMERIC.iter().any(|n| seg.ident == n)),
+        syn::Type::Paren(p) => is_numeric_rust_type(&p.elem),
+        syn::Type::Group(g) => is_numeric_rust_type(&g.elem),
+        _ => false,
+    }
+}
+
+/// SysML scalar types whose explicit `ty = "..."` keeps the unit rule in force (any other
+/// explicit type, e.g. `ty = "ISQ::MassValue"` or a model attribute def, carries its own unit).
+fn is_scalar_sysml_type(ty: &str) -> bool {
+    let simple = ty.rsplit("::").next().unwrap_or(ty);
+    matches!(
+        simple,
+        "Real" | "Integer" | "Natural" | "Rational" | "Number" | "Positive" | "NumericalValue"
+    )
+}
+
+/// A non-empty reason string for `key = "..."`, or an error naming the key.
+pub fn non_empty_reason(kv: &KvArgs, key: &str, fallback: Span) -> syn::Result<Option<String>> {
+    let Some(r) = kv.get_str(key) else {
+        return Ok(None);
+    };
+    if r.trim().is_empty() {
+        let span = kv.get_str_span(key).unwrap_or(fallback);
+        return Err(syn::Error::new(
+            span,
+            format!(
+                "`{key}` needs a non-empty reason\n\
+                 help: say why it is open and where the answer will come from, e.g. \
+                 `{key} = \"not stated in <source document>; ask <owner>\"`"
+            ),
+        ));
+    }
+    Ok(Some(r))
+}
+
+/// S7.1: every numeric attribute declares exactly one of `unit = "..."`, `dimensionless`,
+/// `tbd_unit = "reason"` or `unit = "...", custom_unit = "reason"`. Omitting all of them used to
+/// skip the dimension checks silently.
+pub fn require_unit_decl(
+    kv: &KvArgs,
+    field_name: &str,
+    field_ty: &syn::Type,
+    span: Span,
+) -> syn::Result<()> {
+    if kv.has_flag("custom_unit") {
+        return Err(syn::Error::new(
+            span,
+            format!(
+                "`custom_unit` on attribute `{field_name}` needs a reason\n\
+                 help: write `custom_unit = \"<why this unit is outside the SI table>\"` (it is emitted as @TBD and counted in the TBD ledger)"
+            ),
+        ));
+    }
+    let tbd_unit = non_empty_reason(kv, "tbd_unit", span)?;
+    let custom = non_empty_reason(kv, "custom_unit", span)?;
+    let has_unit = kv.get_str("unit").is_some();
+    let dimensionless = kv.has_flag("dimensionless");
+    if custom.is_some() && !has_unit {
+        return Err(syn::Error::new(
+            span,
+            format!(
+                "`custom_unit` on attribute `{field_name}` needs the unit symbol itself\n\
+                 help: write `unit = \"<symbol>\", custom_unit = \"<reason>\"`"
+            ),
+        ));
+    }
+    let declared: Vec<&str> = [
+        (has_unit && custom.is_none(), "unit"),
+        (dimensionless, "dimensionless"),
+        (tbd_unit.is_some(), "tbd_unit"),
+        (custom.is_some(), "custom_unit"),
+    ]
+    .into_iter()
+    .filter(|(on, _)| *on)
+    .map(|(_, n)| n)
+    .collect();
+    if declared.len() > 1 {
+        return Err(syn::Error::new(
+            span,
+            format!(
+                "attribute `{field_name}` declares more than one unit option ({})\n\
+                 help: keep exactly one of `unit = \"...\"`, `dimensionless`, `tbd_unit = \"reason\"`, `custom_unit = \"reason\"`",
+                declared.join(", ")
+            ),
+        ));
+    }
+    if !declared.is_empty() || !is_numeric_rust_type(field_ty) {
+        return Ok(());
+    }
+    // The dimension comes from SysML itself: an explicit quantity / attribute-def type
+    // (`ty = "ISQ::MassValue"`), a subsetted ISQ quantity (`subsets = "ISQ::mass"`), or a
+    // derived SysML expression (`expr = "dryMass + propellantMass"`).
+    if let Some(t) = kv.get_str("ty").or_else(|| kv.get_str("type")) {
+        if !t.is_empty() && !is_scalar_sysml_type(&t) {
+            return Ok(());
+        }
+    }
+    if kv.get_all_str("subsets").iter().any(|s| s.starts_with("ISQ::"))
+        || kv.get_str("expr").is_some()
+    {
+        return Ok(());
+    }
+    Err(syn::Error::new(
+        span,
+        format!(
+            "numeric attribute `{field_name}` declares no unit\n\
+             help: add exactly one of:\n\
+             \x20 unit = \"<SI symbol>\"        e.g. unit = \"W\", unit = \"m/s\"\n\
+             \x20 dimensionless               counts, ratios, indices, flags\n\
+             \x20 tbd_unit = \"<reason>\"       unit not in the source yet (emitted as @TBD, counted in the TBD ledger)\n\
+             \x20 custom_unit = \"<reason>\"    with unit = \"...\": a unit defined in your model or another library"
+        ),
+    ))
 }
 
 pub fn validate_unit_str(unit: &str, span: Span) -> syn::Result<()> {
@@ -86,7 +224,7 @@ pub fn validate_unit_str(unit: &str, span: Span) -> syn::Result<()> {
             "unknown unit symbol `{unit}` in #[sysml::attr(unit = ...)]{hint}\n\
              help: use an SI symbol from the closed table in `sysml_core::units::UNITS` \
              (e.g. \"m\", \"kg\", \"s\", \"A\", \"K\", \"N\", \"Pa\", \"J\", \"W\", \"V\", \"Hz\"), \
-             optionally combined with `*`, `/`, `^` (e.g. \"m/s^2\", \"N*m\", \"m^3/s\"); for a unit defined in your own model or another library add the `custom_unit` flag"
+             optionally combined with `*`, `/`, `^` (e.g. \"m/s^2\", \"N*m\", \"m^3/s\"); for a unit defined in your own model or another library add `custom_unit = \"<reason>\"`"
         ),
     ))
 }

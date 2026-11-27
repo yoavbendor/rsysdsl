@@ -9,6 +9,7 @@ pub mod evidence;
 pub mod lint;
 pub mod resolve;
 pub mod safety_report;
+pub mod tbd;
 pub mod trace;
 #[cfg(feature = "validate")]
 pub mod validate;
@@ -20,7 +21,10 @@ pub use audit::{
     AuditReport,
 };
 pub use emit_cli::{emit_model_split_std, is_sysml_std_package};
-pub use emit::{emit_model, emit_package, escape_sysml_name, iso26262_metadata_package};
+pub use emit::{
+    emit_model, emit_package, escape_sysml_name, iso26262_metadata_package, tbd_metadata_package,
+};
+pub use tbd::{collect_tbd_ledger, count_by_kind, model_has_tbd, overdue_at, TbdEntry};
 pub use resolve::qualify_requirement_refs;
 pub use lint::{
     lint_model, render_lint_markdown, LintFinding, LintReport, LintSeverity, LintSummary,

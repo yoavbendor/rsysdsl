@@ -10,6 +10,7 @@
 //! - Unknown fields in `#[sysml::require_constraint(...)]` or `#[sysml::transition(..., guard = ...)]` fail `rustc`.
 //! - Calling an opaque unmodeled Rust function inside `#[sysml::calc]` fails `rustc`.
 //! - Unknown or OMG-unresolvable `#[sysml::attr(unit = ...)]` symbols fail `rustc`.
+//! - Numeric attributes without a unit declaration, empty TBD reasons and a bare `custom_unit` fail `rustc` (S7.1).
 //! - Dimensionally inconsistent constraints and transition guards (e.g. `K` vs `W`) fail `rustc`.
 
 #[test]
@@ -41,6 +42,10 @@ fn gate1_compile_time_safety() {
     t.compile_fail("tests/ui/bad_variation_member.rs");
     // S1: compile-time unit & dimension safety
     t.compile_fail("tests/ui/bad_unit_symbol.rs");
+    // S7.1: every numeric attribute declares its unit; every escape hatch has a reason
+    t.compile_fail("tests/ui/bad_missing_unit.rs");
+    t.compile_fail("tests/ui/bad_empty_tbd_reason.rs");
+    t.compile_fail("tests/ui/bad_bare_custom_unit.rs");
     t.compile_fail("tests/ui/bad_unit_not_in_omg.rs");
     t.compile_fail("tests/ui/bad_constraint_dimension.rs");
     t.compile_fail("tests/ui/bad_guard_dimension.rs");
