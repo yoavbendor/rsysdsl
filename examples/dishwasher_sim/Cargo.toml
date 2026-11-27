@@ -1,0 +1,15 @@
+[package]
+name = "dishwasher-sim"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Hybrid thermal/fluidic & door-interlock simulation runner for the dishwasher model on sysml-sim"
+
+[dependencies]
+dishwasher = { workspace = true }
+sysml-dsl = { workspace = true }
+sysml-ir = { workspace = true }
+sysml-sim = { workspace = true }
+sysml-std = { workspace = true }
+serde_json = { workspace = true }

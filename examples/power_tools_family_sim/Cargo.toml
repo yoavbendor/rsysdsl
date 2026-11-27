@@ -1,0 +1,15 @@
+[package]
+name = "power-tools-family-sim"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Battery discharge & thermal-cutoff simulation runner for the power-tools-family model on sysml-sim"
+
+[dependencies]
+power-tools-family = { workspace = true }
+sysml-dsl = { workspace = true }
+sysml-ir = { workspace = true }
+sysml-sim = { workspace = true }
+sysml-std = { workspace = true }
+serde_json = { workspace = true }

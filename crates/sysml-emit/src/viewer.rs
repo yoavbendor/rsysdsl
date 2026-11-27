@@ -86,6 +86,8 @@ pub struct ViewerOptions {
     pub title: String,
     pub initial_view: ViewerView,
     pub theme: ViewerTheme,
+    /// Optional serialized `sysml_sim::RunResult` JSON for interactive trace playback.
+    pub trace_json: Option<String>,
 }
 
 impl Default for ViewerOptions {
@@ -94,6 +96,7 @@ impl Default for ViewerOptions {
             title: "SysML v2 Model Viewer".to_string(),
             initial_view: ViewerView::General,
             theme: ViewerTheme::Dark,
+            trace_json: None,
         }
     }
 }
@@ -1613,15 +1616,163 @@ pub fn render_standalone_html(model: &Model, options: &ViewerOptions) -> String 
   }
 
   window.dispatchEvent(new MessageEvent('message', { data: SNAPSHOT }));
-})();
-</script>
-</body>
-</html>
 "#,
     );
 
+    if let Some(raw_trace) = &options.trace_json {
+        let safe_trace_json = escape_script_tag(raw_trace);
+        html.push_str("\n  const SIM_TRACE = ");
+        html.push_str(&safe_trace_json);
+        html.push_str(";\n  window.__RSYSDSL_TRACE__ = SIM_TRACE;\n");
+        html.push_str(SIM_TRACE_PLAYBACK_JS);
+    }
+
+    html.push_str("})();\n</script>\n</body>\n</html>\n");
     html
 }
+
+#[cfg(feature = "viewer")]
+const SIM_TRACE_PLAYBACK_JS: &str = r##"
+  (function mountTraceDrawer(run) {
+    if (!run || !run.trace || !Array.isArray(run.trace.time_s) || run.trace.time_s.length === 0) return;
+    const style = document.createElement('style');
+    style.textContent = `
+      #rsysdsl-trace-drawer { position: fixed; left: 12px; right: 12px; bottom: 12px; z-index: 9999;
+        background: rgba(18, 22, 30, 0.96); color: #e6edf3; border: 1px solid #30363d; border-radius: 10px;
+        font-family: ui-sans-serif, system-ui, -apple-system, sans-serif; font-size: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.45); }
+      [data-theme="light"] #rsysdsl-trace-drawer { background: rgba(255,255,255,0.97); color: #1f2328; border-color: #d0d7de; }
+      #rsysdsl-trace-header { display: flex; align-items: center; gap: 10px; padding: 8px 12px; cursor: pointer; user-select: none; border-bottom: 1px solid rgba(128,128,128,0.25); flex-wrap: wrap; }
+      .rst-badge { padding: 2px 7px; border-radius: 999px; font-weight: 600; font-size: 11px; }
+      .rst-pass { background: #1f6f3d; color: #fff; }
+      .rst-fail { background: #b62324; color: #fff; }
+      .rst-mode { background: #1f6feb; color: #fff; }
+      #rsysdsl-trace-body { padding: 10px 12px; max-height: 360px; overflow-y: auto; }
+      #rsysdsl-trace-drawer.collapsed #rsysdsl-trace-body { display: none; }
+      #rsysdsl-trace-controls { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+      #rsysdsl-trace-controls button { padding: 4px 10px; border-radius: 6px; border: 1px solid #484f58; background: #21262d; color: #e6edf3; cursor: pointer; }
+      [data-theme="light"] #rsysdsl-trace-controls button { background: #f6f8fa; color: #1f2328; border-color: #d0d7de; }
+      #rsysdsl-trace-scrubber { flex: 1; }
+      #rsysdsl-trace-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }
+      .rst-card { border: 1px solid rgba(128,128,128,0.25); border-radius: 8px; padding: 6px 8px; background: rgba(128,128,128,0.06); }
+      .rst-card-hdr { display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 4px; font-family: ui-monospace, monospace; }
+      .rst-verdicts { display: flex; gap: 6px; flex-wrap: wrap; margin-left: auto; }
+    `;
+    document.head.appendChild(style);
+
+    const times = run.trace.time_s;
+    const signals = run.trace.signals || [];
+    const events = run.trace.events || [];
+    const n = times.length;
+    const tMax = times[n - 1] || 1;
+    let idx = 0;
+    let timer = null;
+
+    const drawer = document.createElement('div');
+    drawer.id = 'rsysdsl-trace-drawer';
+    const verdictsHtml = (run.verdicts || []).map(v => {
+      const cls = v.pass ? 'rst-pass' : 'rst-fail';
+      const title = (v.message || '') + (v.min_margin != null ? ' | min_margin=' + Number(v.min_margin).toFixed(3) : '');
+      return '<span class="rst-badge ' + cls + '" title="' + title.replace(/"/g, '&quot;') + '">' + v.requirement_id + (v.pass ? ' PASS' : ' FAIL') + '</span>';
+    }).join('');
+
+    drawer.innerHTML =
+      '<div id="rsysdsl-trace-header">' +
+      '  <strong>Sim Trace: ' + (run.scenario || 'scenario') + '</strong>' +
+      '  <span class="rst-badge ' + (run.pass ? 'rst-pass' : 'rst-fail') + '">' + (run.pass ? 'PASS' : 'FAIL') + '</span>' +
+      '  <span id="rst-mode-pill" class="rst-badge rst-mode">mode</span>' +
+      '  <div class="rst-verdicts">' + verdictsHtml + '</div>' +
+      '  <span id="rst-toggle-lbl" style="opacity:0.75;margin-left:8px;">[hide]</span>' +
+      '</div>' +
+      '<div id="rsysdsl-trace-body">' +
+      '  <div id="rsysdsl-trace-controls">' +
+      '    <button id="rst-play" type="button">Play</button>' +
+      '    <input id="rsysdsl-trace-scrubber" type="range" min="0" max="' + (n - 1) + '" value="0" />' +
+      '    <span id="rst-time-lbl" style="min-width:95px;text-align:right;font-family:ui-monospace,monospace;">t = 0.00 s</span>' +
+      '  </div>' +
+      '  <div id="rsysdsl-trace-grid"></div>' +
+      '</div>';
+    document.body.appendChild(drawer);
+
+    const header = drawer.querySelector('#rsysdsl-trace-header');
+    const toggleLbl = drawer.querySelector('#rst-toggle-lbl');
+    header.addEventListener('click', function() {
+      drawer.classList.toggle('collapsed');
+      toggleLbl.textContent = drawer.classList.contains('collapsed') ? '[show]' : '[hide]';
+    });
+
+    const grid = drawer.querySelector('#rsysdsl-trace-grid');
+    const W = 250, H = 64, PAD = 4;
+    const stride = Math.max(1, Math.floor(n / 400));
+    const cards = signals.map(sig => {
+      const vals = sig.values || [];
+      let minV = Infinity, maxV = -Infinity;
+      for (let i = 0; i < vals.length; i++) {
+        if (vals[i] < minV) minV = vals[i];
+        if (vals[i] > maxV) maxV = vals[i];
+      }
+      if (!isFinite(minV)) { minV = 0; maxV = 1; }
+      const span = (maxV - minV) || 1;
+      const pts = [];
+      for (let i = 0; i < vals.length; i += stride) {
+        const x = PAD + (times[i] / (tMax || 1)) * (W - 2 * PAD);
+        const y = H - PAD - ((vals[i] - minV) / span) * (H - 2 * PAD);
+        pts.push(x.toFixed(1) + ',' + y.toFixed(1));
+      }
+      const evLines = events.map(e => {
+        const x = PAD + (e.t_s / (tMax || 1)) * (W - 2 * PAD);
+        const color = e.kind === 'fault' ? '#f0883e' : '#58a6ff';
+        return '<line x1="' + x.toFixed(1) + '" y1="0" x2="' + x.toFixed(1) + '" y2="' + H + '" stroke="' + color + '" stroke-dasharray="2,2" stroke-opacity="0.7"><title>' + e.kind + ': ' + e.name + ' @ ' + e.t_s.toFixed(3) + 's</title></line>';
+      }).join('');
+      const card = document.createElement('div');
+      card.className = 'rst-card';
+      card.innerHTML =
+        '<div class="rst-card-hdr"><span>' + sig.name + '</span><span class="rst-val">0</span></div>' +
+        '<svg viewBox="0 0 ' + W + ' ' + H + '" width="100%" height="' + H + '">' +
+        evLines +
+        '<polyline fill="none" stroke="#3fb950" stroke-width="1.6" points="' + pts.join(' ') + '" />' +
+        '<line class="rst-cursor" x1="0" y1="0" x2="0" y2="' + H + '" stroke="#ff7b72" stroke-width="1.5" />' +
+        '</svg>';
+      grid.appendChild(card);
+      return { sig, valEl: card.querySelector('.rst-val'), cursorEl: card.querySelector('.rst-cursor') };
+    });
+
+    const scrubber = drawer.querySelector('#rsysdsl-trace-scrubber');
+    const timeLbl = drawer.querySelector('#rst-time-lbl');
+    const modePill = drawer.querySelector('#rst-mode-pill');
+    const playBtn = drawer.querySelector('#rst-play');
+
+    function renderAt(i) {
+      idx = Math.max(0, Math.min(n - 1, i));
+      const t = times[idx];
+      scrubber.value = String(idx);
+      timeLbl.textContent = 't = ' + t.toFixed(2) + ' s';
+      let curMode = '—';
+      for (let j = 0; j < events.length; j++) {
+        if (events[j].kind === 'mode' && events[j].t_s <= t + 1e-9) curMode = events[j].name;
+      }
+      modePill.textContent = curMode;
+      const x = PAD + (t / (tMax || 1)) * (W - 2 * PAD);
+      for (const c of cards) {
+        const v = c.sig.values[idx];
+        c.valEl.textContent = v != null ? Number(v).toFixed(2) : '—';
+        c.cursorEl.setAttribute('x1', x.toFixed(1));
+        c.cursorEl.setAttribute('x2', x.toFixed(1));
+      }
+    }
+
+    scrubber.addEventListener('input', () => renderAt(Number(scrubber.value)));
+    playBtn.addEventListener('click', () => {
+      if (timer) { clearInterval(timer); timer = null; playBtn.textContent = 'Play'; return; }
+      playBtn.textContent = 'Pause';
+      const step = Math.max(1, Math.floor(n / 120));
+      timer = setInterval(() => {
+        if (idx + step >= n) { renderAt(n - 1); clearInterval(timer); timer = null; playBtn.textContent = 'Play'; }
+        else renderAt(idx + step);
+      }, 40);
+    });
+    renderAt(0);
+  })(SIM_TRACE);
+"##;
 
 #[cfg(test)]
 mod tests {
@@ -1792,6 +1943,7 @@ mod tests {
                 title: "Demo </script> Model".into(),
                 initial_view: ViewerView::General,
                 theme: ViewerTheme::Light,
+                trace_json: None,
             },
         );
         assert!(html.starts_with("<!DOCTYPE html>"));
