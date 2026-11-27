@@ -46,3 +46,46 @@ In all three trials, the model code compiled on the first build. Failures came f
 7. Install the CLI as `rsysdsl` (`[[bin]] name = "rsysdsl"` is already set; document `cargo install --path crates/sysml-cli`).
 
 Re-run the same three specs after S1, S4 and S6 to measure improvement against this baseline (8 / 17 / 24 invocations).
+
+---
+
+# Trial 2 (after S4 + S6)
+
+**Setup:** same 3 specs, prompt, and 15-invocation soft cap as the baseline; agents followed the current `AGENTS.md` (so they had the `rsysdsl new` scaffold and installed CLI — this trial measures **S4 + S6 together**, not S6 alone). 3 runs per spec, standalone crates outside the repo, shared build cache. Count = cargo/`rsysdsl` invocations, excluding `--help` and the `rsysdsl new` scaffold call (same rule as the baseline).
+
+## Results
+
+| Spec | Runs (invocations) | Median | Baseline (n=1) | Invocations that failed |
+| --- | --- | --- | --- | --- |
+| Greenhouse | 15, 5, 5 | **5** | 8 | 2, 0, 0 |
+| E-bike | 10, 9, — | **9.5** (n=2) | 17 | 2, 0 |
+| Water heater | 6, 10, 5 | **6** | 24 | 0, 0, 0 |
+
+- All 8 completed runs reached clean `cargo test`, `audit --stdlib --strict` (0/0/0, no orphans, no hollow requirements) and `lint --strict` (CLEAN). E-bike run 3 was cut off by an account usage limit mid-run and is excluded.
+- **Failures nearly disappeared:** 4 failing invocations across 8 runs (baseline: most of 49). The only failures were Rust scoping in a test module (e-bike r1) and a test that assumed `step_with` returns `Ok` for an ignored event (greenhouse r1). No audit or lint failure in any run.
+- The high counts (15, 10, 10) come from **voluntary repeat verify rounds** after adding phase-3 content, not from fixing errors. Invocation count now measures diligence more than friction; future trials should also report failing invocations and verify rounds.
+- Every run kept measured values as `evidence` with no default; trace-matrix reported 3/3 satisfied, 0/3 verified in all runs. No invented thresholds.
+
+## Caveats (why the improvement is real but overstated)
+
+1. **Simpler models.** 6 of 8 runs avoided specializing sysml-std (to avoid its spec-less defaults — 50 Hz, 48 MHz, 18 V, 20 Hz…). The baseline water heater spent ~10 invocations on a sysml-std redesign. Only water heater r3 used std bases fully. Less reuse means less friction, and less structure.
+2. **Contamination.** Greenhouse r2 read this file (`docs/HAIKU_TRIAL.md`) and avoided sysml-std *because of the baseline findings*. Greenhouse r3 avoided std independently after reading its sources, so the effect is not only contamination. Future trials must tell agents not to read trial reports.
+3. **Confounded:** S4 (scaffold) and S6 land together here; n = 2–3 per spec.
+
+## New findings (all 8 runs)
+
+| # | Finding | Runs | Proposed fix |
+| --- | --- | --- | --- |
+| N1 | Scaffold layer order `Types → Subsystems → Requirements → Context` makes `satisfy` on realizing parts impossible under the scaffold's own "use only packages above" rule | **8/8** (6 reordered, 2 moved satisfy to Context) | Scaffold `Types → Requirements → Subsystems → Context` |
+| N2 | Scaffold placeholder requirement invents a 1.0 s limit (violates Golden Rule 3) | flagged by 2, all removed it | Placeholder with no number (S7 `tbd_value`) |
+| N3 | `--no-workspace` scaffold: no sysml-std dep, absolute path deps, `cargo test -p` next-steps | 5 | Add std dep; document; `--manifest-path` steps |
+| N4 | No way to leave an inherited std default "not specified" → authors avoid std or keep spec-less numbers | 6 | S7 `tbd_value` |
+| N5 | Trace label "evidence is a model placeholder" shown even when the evidence attr has no default | 4 | Distinct label "no evidence supplied" |
+| N6 | `step_with` returns `Err` for an ignored event (a normal SysML no-op) | 1 failure | Return an explicit `Ignored` outcome, or document prominently |
+| N7 | PATTERNS: cross-package `satisfy` still needs a Rust `use`; bool fields / `!` in guards and field-less event items undocumented | 4 | PATTERNS update |
+| N8 | Dead-end / unreachable states and overlapping guards are not flagged | 3 | Lint rules `unreachable_state`, `overlapping_guards` |
+| N9 | No n-ary bus: one shared CAN bus had to be modelled as point-to-point segments | 1 | Bus connection with >2 ends |
+| N10 | Guards cannot reference requirement limits, so limits are duplicated into part attributes (drift risk) | 1 | Allow guards to reference requirement attrs, or lint duplicated literals |
+| N11 | Connecting to an inherited port needs a redeclared `#[sysml::port(redefines)]` field | 1 | Document in PATTERNS |
+
+N1–N3, N5–N7 and N11 are small (scaffold + docs); N4 is S7; N8–N10 are new features. Proposed as S6b before S7 so T3 is not dominated by N1.

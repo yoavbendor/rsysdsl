@@ -116,6 +116,12 @@ one or more self-contained commits on the work branch, gated by
 - Same 3 specs, same instructions and cap as the baseline; **2–3 runs per spec**, report medians.
 - Metric: invocations to clean audit + lint, compared with baseline (8 / 17 / 24, single runs).
 - Kept separate from S7 so friction reduction is not confounded with TBD behavior.
+- **Status: done (8 of 9 runs; e-bike r3 cut off by a usage limit).** Medians 5 / 9.5 / 6 vs baseline 8 / 17 / 24; only 4 failing invocations in 8 runs. Measures S4 + S6 together; 6/8 runs avoided sysml-std. New findings N1–N11 in [`HAIKU_TRIAL.md`](HAIKU_TRIAL.md#trial-2-after-s4--s6).
+
+### S6b — Scaffold and doc fixes from trial 2 (before S7)
+- N1 scaffold layer order `Types → Requirements → Subsystems → Context`; N2 no invented number in the scaffold placeholder; N3 standalone scaffold adds sysml-std and correct next steps; N5 distinct "no evidence supplied" trace label; N6 `step_with` ignored-event outcome; N7/N11 PATTERNS updates.
+- Lint `unreachable_state` / `overlapping_guards` (N8) if small; N9 n-ary bus and N10 guard→requirement references go to the backlog.
+- Trial hygiene: trial prompts must forbid reading `docs/HAIKU_TRIAL.md`.
 
 ### S7 — TBD / technical-debt suite (controlled escape hatches)
 Goal: support gradual, cyclical design without silent holes. Every escape hatch costs a written reason, is visible in the emitted SysML, is counted, and must shrink as maturity rises.
