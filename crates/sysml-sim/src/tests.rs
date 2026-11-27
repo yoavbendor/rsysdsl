@@ -269,3 +269,78 @@ fn registry_finds_by_name_and_alias() {
     assert!(s.meets_expectation(&(s.run)()));
     assert!(reg.find("nope").is_none());
 }
+
+#[test]
+fn evidence_at_violation_and_substep_event_time_are_recorded() {
+    struct TransientSpike {
+        x: f64,
+        mode: &'static str,
+        cross: ZeroCrossing,
+        last_event_t: Option<f64>,
+    }
+
+    impl Scenario for TransientSpike {
+        fn name(&self) -> &str {
+            "transient_spike"
+        }
+        fn dt(&self) -> f64 {
+            0.1
+        }
+        fn duration(&self) -> f64 {
+            1.0
+        }
+        fn step(&mut self, t: f64, dt: f64) {
+            self.last_event_t = None;
+            let t_next = t + dt;
+            // Linearly rises through 0.5 at t = 0.25, peaks at 0.5, then drops back to 0.0
+            self.x = if t_next <= 0.5 {
+                2.0 * t_next
+            } else {
+                2.0 * (1.0 - t_next)
+            };
+            if let Some(tc) = self.cross.update(t_next, self.x - 0.5) {
+                self.mode = "over_limit";
+                self.last_event_t = Some(tc);
+            }
+        }
+        fn mode(&self) -> Option<&str> {
+            Some(self.mode)
+        }
+        fn event_time(&self) -> Option<f64> {
+            self.last_event_t
+        }
+        fn monitors(&self) -> Vec<Monitor<Self>> {
+            vec![Monitor::new("LIM-1", |s: &Self| s.x <= 0.5)
+                .evidence_at_violation()
+                .with_evidence(|s: &Self| serde_json::json!({ "x": s.x }))]
+        }
+    }
+
+    let mut s = TransientSpike {
+        x: 0.0,
+        mode: "normal",
+        cross: ZeroCrossing::new(Crossing::Rising),
+        last_event_t: None,
+    };
+    let res = run(&mut s);
+    let v = res.verdict("LIM-1").unwrap();
+    assert!(!v.pass);
+    // At end of run x is 0.0, but evidence_at_violation captured the first failing sample (x = 0.6 at t = 0.3)
+    let captured_x = v.evidence["x"].as_f64().unwrap();
+    assert!(
+        (captured_x - 0.6).abs() < 1e-9,
+        "expected violation-time x=0.6, got {captured_x}"
+    );
+    // Mode change to "over_limit" recorded at interpolated zero-crossing time t = 0.25, not step end 0.3
+    let mode_ev = res
+        .trace
+        .events
+        .iter()
+        .find(|e| e.kind == EventKind::Mode && e.name == "over_limit")
+        .expect("mode event");
+    assert!(
+        (mode_ev.t_s - 0.25).abs() < 1e-9,
+        "expected sub-step t=0.25, got {}",
+        mode_ev.t_s
+    );
+}

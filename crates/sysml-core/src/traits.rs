@@ -93,6 +93,12 @@ pub trait SysmlRequirementCore: 'static {
 /// Works identically in `#![no_std]` bare-metal firmware and host simulation runners!
 pub trait EvaluableRequirement: SysmlRequirementCore {
     fn evaluate(&self) -> bool;
+
+    /// Returns `true` when every `#[sysml::attr(..., evidence)]` field has been
+    /// populated with a finite value (i.e. not left as the `NaN` default).
+    fn evidence_populated(&self) -> bool {
+        true
+    }
 }
 
 /// Zero-alloc compile-time marker trait for modeled `#[sysml::calc]` functions.

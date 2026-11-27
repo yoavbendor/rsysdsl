@@ -38,9 +38,12 @@ pub fn expand_requirement(args: TokenStream, mut item: ItemStruct) -> syn::Resul
     let mut field_map: BTreeMap<String, String> = BTreeMap::new();
     // Rust field name -> declared `unit` (for compile-time dimensional analysis of constraints)
     let mut unit_map: BTreeMap<String, String> = BTreeMap::new();
+    // Rust field idents marked `#[sysml::attr(..., evidence)]`
+    let mut evidence_field_idents: Vec<syn::Ident> = Vec::new();
     if let Fields::Named(fields) = &item.fields {
         for field in &fields.named {
-            let fname_rust = field.ident.as_ref().unwrap().to_string();
+            let fname_ident = field.ident.as_ref().unwrap();
+            let fname_rust = fname_ident.to_string();
             let mut fkv = KvArgs::default();
             for a in &field.attrs {
                 if is_sysml_attr(a, "attr") {
@@ -48,6 +51,9 @@ pub fn expand_requirement(args: TokenStream, mut item: ItemStruct) -> syn::Resul
                         fkv = a.parse_args()?;
                     }
                 }
+            }
+            if fkv.has_flag("evidence") {
+                evidence_field_idents.push(fname_ident.clone());
             }
             let fname_sysml = extract_sysml_name_override(&field.attrs)?
                 .or_else(|| fkv.get_str("name"))
@@ -181,11 +187,24 @@ pub fn expand_requirement(args: TokenStream, mut item: ItemStruct) -> syn::Resul
         }
     });
 
+    let evidence_checks: Vec<TokenStream> = evidence_field_idents
+        .iter()
+        .map(|fid| {
+            quote! {
+                ::sysml_dsl::core_contracts::ToScalar::to_scalar(self.#fid).is_finite()
+            }
+        })
+        .collect();
+
     let eval_impl = if !require_eval_exprs.is_empty() {
         quote! {
             impl ::sysml_dsl::core_contracts::EvaluableRequirement for #ident {
                 fn evaluate(&self) -> bool {
                     true #(&& (#require_eval_exprs))*
+                }
+
+                fn evidence_populated(&self) -> bool {
+                    true #(&& (#evidence_checks))*
                 }
             }
         }

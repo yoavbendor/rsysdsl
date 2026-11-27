@@ -81,6 +81,11 @@ pub trait Scenario: Sized + 'static {
     fn mode(&self) -> Option<&str> {
         None
     }
+    /// Optional sub-step timestamp (e.g. from [`ZeroCrossing::update`]) for a mode change
+    /// that occurred during the most recent step. Defaults to the step-end time `t`.
+    fn event_time(&self) -> Option<f64> {
+        None
+    }
     /// Requirement monitors.
     fn monitors(&self) -> Vec<Monitor<Self>>;
     /// Time-triggered fault schedule.
@@ -270,10 +275,11 @@ pub fn run<S: Scenario>(scenario: &mut S) -> RunResult {
                 } else {
                     m.fail_message.clone()
                 },
-                evidence: m
-                    .evidence
-                    .as_ref()
-                    .map_or(serde_json::Value::Null, |e| e(scenario)),
+                evidence: st.first_violation_evidence.take().unwrap_or_else(|| {
+                    m.evidence
+                        .as_ref()
+                        .map_or(serde_json::Value::Null, |e| e(scenario))
+                }),
             }
         })
         .collect();
@@ -295,7 +301,7 @@ fn note_mode<S: Scenario>(s: &S, t: f64, last: &mut Option<String>, trace: &mut 
     if let Some(mode) = s.mode() {
         if last.as_deref() != Some(mode) {
             trace.events.push(TraceEvent {
-                t_s: t,
+                t_s: s.event_time().unwrap_or(t),
                 kind: EventKind::Mode,
                 name: mode.to_string(),
             });

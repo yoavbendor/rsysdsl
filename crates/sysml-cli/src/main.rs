@@ -279,6 +279,10 @@ enum Commands {
         #[arg(long)]
         serve: bool,
 
+        /// Optional simulation trace JSON (`rsysdsl verify --trace <path>`) to embed for interactive playback.
+        #[arg(long)]
+        trace: Option<PathBuf>,
+
         /// TCP port for `--serve`.
         #[arg(long, default_value_t = 8080)]
         port: u16,
@@ -519,6 +523,7 @@ fn main() -> ExitCode {
             title,
             json_snapshot,
             serve,
+            trace,
             port,
         } => cmd_view(
             &files,
@@ -529,6 +534,7 @@ fn main() -> ExitCode {
             title,
             json_snapshot,
             serve,
+            trace,
             port,
             cli.pretty,
         ),
@@ -550,6 +556,7 @@ fn cmd_view(
     title_override: Option<String>,
     json_snapshot: bool,
     serve: bool,
+    trace_path: Option<PathBuf>,
     port: u16,
     pretty: bool,
 ) -> ExitCode {
@@ -608,12 +615,24 @@ fn cmd_view(
         return ExitCode::SUCCESS;
     }
 
+    let trace_json = match trace_path {
+        Some(p) => match fs::read_to_string(&p) {
+            Ok(s) => Some(s),
+            Err(e) => {
+                eprintln!("error: failed to read trace '{}': {e}", p.display());
+                return ExitCode::FAILURE;
+            }
+        },
+        None => None,
+    };
+
     let html = render_standalone_html(
         &model,
         &ViewerOptions {
             title: title.clone(),
             initial_view: view,
             theme,
+            trace_json,
         },
     );
 
@@ -715,8 +734,10 @@ fn resolve_builtin_model(model_name: &str) -> Result<sysml_ir::Model, String> {
             embedded_flight_controller::flight_controller::sysml_package(),
         ])),
         "microwave" => Ok(microwave::build_model()),
+        "dishwasher" => Ok(dishwasher::build_model()),
+        "power-tools-family" => Ok(power_tools_family::build_model()),
         other => Err(format!(
-            "unknown model '{other}' (available: apollo11-model, embedded-flight-controller, microwave)"
+            "unknown model '{other}' (available: apollo11-model, embedded-flight-controller, microwave, dishwasher, power-tools-family)"
         )),
     }
 }
@@ -726,8 +747,10 @@ fn builtin_verification(model_name: &str) -> Result<sysml_ir::VerificationReport
     match model_name {
         "apollo11-model" => Ok(apollo11_sim::run_nominal_verification()),
         "microwave" => Ok(microwave_sim::verification_report()),
+        "dishwasher" => Ok(dishwasher_sim::verification_report()),
+        "power-tools-family" => Ok(power_tools_family_sim::verification_report()),
         other => Err(format!(
-            "`--verify` has no simulation runner for model '{other}' (available: apollo11-model, microwave)"
+            "`--verify` has no simulation runner for model '{other}' (available: apollo11-model, microwave, dishwasher, power-tools-family)"
         )),
     }
 }
@@ -1375,6 +1398,8 @@ fn verify_registry() -> sysml_sim::Registry {
     let mut registry = sysml_sim::Registry::new();
     registry.extend(apollo11_sim::scenarios());
     registry.extend(microwave_sim::scenarios());
+    registry.extend(dishwasher_sim::scenarios());
+    registry.extend(power_tools_family_sim::scenarios());
     registry
 }
 

@@ -33,6 +33,7 @@ pub struct Monitor<S> {
     pub(crate) check: Check<S>,
     pub(crate) margin: Option<Margin<S>>,
     pub(crate) evidence: Option<Evidence<S>>,
+    pub(crate) evidence_at_violation: bool,
 }
 
 impl<S: 'static> Monitor<S> {
@@ -49,13 +50,18 @@ impl<S: 'static> Monitor<S> {
             check: Box::new(check),
             margin: None,
             evidence: None,
+            evidence_at_violation: false,
         }
     }
 
     /// Monitor that instantiates a model requirement from the current state and calls
     /// its generated `evaluate()`. ID and name come from `R::REQ_ID` / `R::SYSML_NAME`.
+    /// Also requires `R::evidence_populated()` so unpopulated `NaN` evidence fields fail.
     pub fn requirement<R: EvaluableRequirement>(build: impl Fn(&S) -> R + 'static) -> Self {
-        let mut m = Self::new(R::REQ_ID, move |s| build(s).evaluate());
+        let mut m = Self::new(R::REQ_ID, move |s| {
+            let r = build(s);
+            r.evidence_populated() && r.evaluate()
+        });
         m.requirement_name = R::SYSML_NAME.to_string();
         m
     }
@@ -72,9 +78,17 @@ impl<S: 'static> Monitor<S> {
         self
     }
 
-    /// Evidence JSON, captured from the state at the end of the run.
+    /// Evidence JSON, captured at the end of the run (or at the first failing sample if
+    /// [`Monitor::evidence_at_violation`] is also set).
     pub fn with_evidence(mut self, evidence: impl Fn(&S) -> Value + 'static) -> Self {
         self.evidence = Some(Box::new(evidence));
+        self
+    }
+
+    /// Capture [`Monitor::with_evidence`] at the first failing sample instead of at the end
+    /// of the run (useful for `EveryStep` invariants whose state recovers or changes later).
+    pub fn evidence_at_violation(mut self) -> Self {
+        self.evidence_at_violation = true;
         self
     }
 
@@ -101,6 +115,7 @@ pub(crate) struct MonitorState {
     pub samples: usize,
     pub pass: bool,
     pub first_violation_s: Option<f64>,
+    pub first_violation_evidence: Option<Value>,
     pub min_margin: Option<f64>,
 }
 
@@ -110,6 +125,7 @@ impl MonitorState {
             samples: 0,
             pass: true,
             first_violation_s: None,
+            first_violation_evidence: None,
             min_margin: None,
         }
     }
@@ -118,7 +134,14 @@ impl MonitorState {
         self.samples += 1;
         if !(m.check)(s) {
             self.pass = false;
-            self.first_violation_s.get_or_insert(t);
+            if self.first_violation_s.is_none() {
+                self.first_violation_s = Some(t);
+                if m.evidence_at_violation {
+                    if let Some(ev) = &m.evidence {
+                        self.first_violation_evidence = Some(ev(s));
+                    }
+                }
+            }
         }
         if let Some(margin) = &m.margin {
             let v = margin(s);

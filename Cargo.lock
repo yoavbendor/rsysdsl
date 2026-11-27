@@ -161,6 +161,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "dishwasher-sim"
+version = "0.1.0"
+dependencies = [
+ "dishwasher",
+ "serde_json",
+ "sysml-dsl",
+ "sysml-ir",
+ "sysml-sim",
+ "sysml-std",
+]
+
+[[package]]
 name = "earth-water-cycle"
 version = "0.1.0"
 dependencies = [
@@ -400,6 +412,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "power-tools-family-sim"
+version = "0.1.0"
+dependencies = [
+ "power-tools-family",
+ "serde_json",
+ "sysml-dsl",
+ "sysml-ir",
+ "sysml-sim",
+ "sysml-std",
+]
+
+[[package]]
 name = "proc-macro2"
 version = "1.0.107"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -558,9 +582,13 @@ dependencies = [
  "apollo11-model",
  "apollo11-sim",
  "clap",
+ "dishwasher",
+ "dishwasher-sim",
  "embedded-flight-controller",
  "microwave",
  "microwave-sim",
+ "power-tools-family",
+ "power-tools-family-sim",
  "serde",
  "serde_json",
  "sysml-emit",
