@@ -1,5 +1,7 @@
 # `rsysdsl` Development Work Plan
 
+> **Continuing this work?** Start with [`HANDOFF.md`](HANDOFF.md) (current state, ordered next steps, open decisions).
+
 Derived from the November 2026 review of the MVP (commit `7be3f0c`). Each stage is
 one or more self-contained commits on the work branch, gated by
 `cargo test --workspace` plus the strict audit loop in [`AGENTS.md`](../AGENTS.md).
