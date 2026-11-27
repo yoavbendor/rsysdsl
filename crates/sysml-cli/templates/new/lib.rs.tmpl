@@ -89,31 +89,32 @@ pub mod types {
 
 /// Layer 2: requirements with explicit document provenance.
 #[sysml::package(name = "{{PASCAL}}Requirements")]
-#[sysml::import("ScalarValues::*")]
-#[sysml::import("SI::*")]
 #[sysml::import("ModelingMetadata::*")]
 pub mod requirements {
     use super::*;
 
     // TODO(requirements): add one `#[sysml::requirement(id = "...")]` per requirement in
     // your source document HERE, each with `#[sysml::rationale("Source: <doc>, <section>")]`.
-    // Never invent thresholds: omit `require_constraint` until the document gives a value.
+    // Never invent thresholds: add a `require_constraint` only when the document gives the
+    // limit. Once it does, the shape is (add `#[sysml::import("ScalarValues::*")]` and
+    // `#[sysml::import("SI::*")]` to this package):
+    //
+    //     #[sysml::require_constraint(measured_x <= max_x)]
+    //     pub struct ... {
+    //         /// LIMIT, copied from the source document (cite it in the rationale).
+    //         #[sysml::attr(default = <value from the document>, unit = "s")]
+    //         pub max_x: Quantity<f64>,
+    //         /// EVIDENCE: no default; a test / verification case supplies it.
+    //         #[sysml::attr(unit = "s", evidence)]
+    //         pub measured_x: Quantity<f64>,
+    //     }
 
-    /// PLACEHOLDER requirement: replace or delete it.
-    ///
-    /// The 1.0 s limit below is NOT taken from any source document; it only shows the
-    /// `require_constraint` syntax. Replace it with the value from your specification.
+    /// PLACEHOLDER requirement: replace this text with the "shall" sentence from your
+    /// source document (it is emitted as the requirement's `doc`), or delete it.
     #[sysml::requirement(id = "SYS-REQ-001")]
     #[sysml::rationale("Source: TODO — replace with document reference")]
-    #[sysml::require_constraint(measured_response_time <= max_response_time)]
-    #[derive(Debug, Clone, Copy)]
-    pub struct PlaceholderResponseTime {
-        /// PLACEHOLDER limit (not from a source document).
-        #[sysml::attr(default = 1.0, unit = "s")]
-        pub max_response_time: Quantity<f64>,
-        #[sysml::attr(default = 0.0, unit = "s")]
-        pub measured_response_time: Quantity<f64>,
-    }
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct PlaceholderRequirement {}
 }
 
 /// Layer 3: reusable subsystem blueprints (`part def`), typed by layer-1 ports and satisfying
@@ -133,7 +134,7 @@ pub mod subsystems {
 
     /// Placeholder controlling subsystem (rename to match your diagram).
     #[sysml::part]
-    #[sysml::satisfy(req = PlaceholderResponseTime, id = "SYS-REQ-001")]
+    #[sysml::satisfy(req = PlaceholderRequirement, id = "SYS-REQ-001")]
     #[derive(Debug, Clone, Copy)]
     pub struct Controller {
         #[sysml::port]
@@ -225,11 +226,9 @@ mod tests {
     }
 
     #[test]
-    fn placeholder_requirement_constraint_executes() {
-        let nominal = requirements::PlaceholderResponseTime {
-            max_response_time: Quantity::new(1.0, "s"),
-            measured_response_time: Quantity::new(0.5, "s"),
-        };
-        assert!(nominal.evaluate());
+    fn placeholder_requirement_is_satisfied_by_a_subsystem() {
+        let sysml = emit_model(&build_model());
+        assert!(sysml.contains("requirement def <'SYS-REQ-001'> PlaceholderRequirement"));
+        assert!(sysml.contains("satisfy requirement"));
     }
 }
