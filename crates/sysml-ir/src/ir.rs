@@ -545,6 +545,9 @@ pub struct StateDef {
     pub specializes: Vec<String>,
     #[serde(default)]
     pub subject_type: Option<String>,
+    /// Name of the initial sub-state (`#[sysml::initial]`), emitted as `entry; then <state>;`.
+    #[serde(default)]
+    pub initial_state: Option<String>,
     pub entry_action: Option<ActionUsage>,
     pub do_action: Option<ActionUsage>,
     pub exit_action: Option<ActionUsage>,

@@ -16,13 +16,20 @@
 //! - `inherited_std_default` (info): a model definition specializing a `sysml-std` element
 //!   inherits numeric library defaults (e.g. mains `frequency = 50 Hz`) without redefining
 //!   them. Library defaults are generic placeholders, not source-document values.
+//! - `unreachable_state` (warning): a sub-state of a `state def` that no chain of transitions
+//!   reaches from the initial state (`entry; then <initial>;`). Skipped when the initial state
+//!   is unknown (state defs emitted before S6b carry no `entry; then`).
+//! - `dead_end_state` (info): a sub-state with no transition to another state. Legitimate for
+//!   latched faults / final states, so it never fails `--strict`.
+//! - `overlapping_guards` (info): 2+ transitions leave the same state on the same trigger and
+//!   at least one is guarded (disjointness cannot be proven) or more than one is unguarded.
 //! - `unused_abstract_base`: an `abstract` part/interface/port with zero specializing
 //!   subtypes in the model (useful during refactoring; skipped for library packages).
 
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
-use sysml_ir::{InterfaceDef, Model, Package, PackageMember, PartDef, PortDef};
+use sysml_ir::{InterfaceDef, Model, Package, PackageMember, PartDef, PortDef, StateDef};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -60,6 +67,11 @@ pub struct LintSummary {
     /// (`inherited_std_default` findings; informational, never fails `--strict`).
     #[serde(default)]
     pub inherited_std_default_count: usize,
+    /// State-machine review items (`dead_end_state`, `overlapping_guards`): informational,
+    /// counted apart from `info_count` because they are often intended (latched faults,
+    /// prioritized guards) and never fail `--strict`.
+    #[serde(default)]
+    pub state_review_count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -337,11 +349,25 @@ pub fn lint_model(model_name: impl Into<String>, model: &Model) -> LintReport {
     // 5. Numeric sysml-std defaults inherited without a redefinition.
     findings.extend(inherited_std_defaults(model));
 
+    // 6. State machine smells (unreachable / dead-end states, overlapping guards).
+    let mut state_defs: Vec<(String, &StateDef)> = Vec::new();
+    for pkg in &model.packages {
+        collect_state_defs(pkg, &mut state_defs);
+    }
+    for (pkg_name, sd) in &state_defs {
+        findings.extend(state_machine_findings(pkg_name, sd));
+    }
+
     for f in &findings {
         match f.severity {
             LintSeverity::Warning => summary.warning_count += 1,
             LintSeverity::Info if f.code == "inherited_std_default" => {
                 summary.inherited_std_default_count += 1
+            }
+            LintSeverity::Info
+                if matches!(f.code.as_str(), "dead_end_state" | "overlapping_guards") =>
+            {
+                summary.state_review_count += 1
             }
             LintSeverity::Info => summary.info_count += 1,
         }
@@ -377,10 +403,11 @@ pub fn render_lint_markdown(report: &LintReport) -> String {
     );
     let _ = writeln!(
         out,
-        "- **Findings:** {} warning(s), {} info(s), {} definition(s) inheriting sysml-std library defaults\n",
+        "- **Findings:** {} warning(s), {} info(s), {} definition(s) inheriting sysml-std library defaults, {} state-machine review item(s)\n",
         report.summary.warning_count,
         report.summary.info_count,
-        report.summary.inherited_std_default_count
+        report.summary.inherited_std_default_count,
+        report.summary.state_review_count
     );
 
     if report.findings.is_empty() {
@@ -425,6 +452,116 @@ fn collect_pkg<'a>(
             _ => {}
         }
     }
+}
+
+fn collect_state_defs<'a>(pkg: &'a Package, out: &mut Vec<(String, &'a StateDef)>) {
+    if pkg.is_library || pkg.name.starts_with("SysmlStd") || pkg.name == "ISO26262Metadata" {
+        return;
+    }
+    for m in &pkg.members {
+        match m {
+            PackageMember::Package(sub) => collect_state_defs(sub, out),
+            PackageMember::StateDef(sd) => out.push((pkg.name.clone(), sd)),
+            _ => {}
+        }
+    }
+}
+
+/// `unreachable_state`, `dead_end_state` and `overlapping_guards` for one `state def`.
+fn state_machine_findings(pkg_name: &str, sd: &StateDef) -> Vec<LintFinding> {
+    let mut out = Vec::new();
+    if sd.states.is_empty() {
+        return out;
+    }
+    let element = |state: &str| format!("{}.{}", sd.name, state);
+
+    // Reachability from the initial state (only when it is known).
+    if let Some(initial) = sd
+        .initial_state
+        .as_deref()
+        .filter(|i| sd.states.iter().any(|s| s.name == *i))
+    {
+        let mut reached: BTreeSet<&str> = BTreeSet::from([initial]);
+        let mut frontier = vec![initial];
+        while let Some(cur) = frontier.pop() {
+            for t in sd.transitions.iter().filter(|t| t.source == cur) {
+                if reached.insert(t.target.as_str()) {
+                    frontier.push(t.target.as_str());
+                }
+            }
+        }
+        for st in sd.states.iter().filter(|s| !reached.contains(s.name.as_str())) {
+            out.push(LintFinding {
+                code: "unreachable_state".to_string(),
+                severity: LintSeverity::Warning,
+                package: pkg_name.to_string(),
+                element: element(&st.name),
+                message: format!(
+                    "State `{}` of `{}` is not reachable from the initial state `{initial}` by any transition.",
+                    st.name, sd.name
+                ),
+                suggestion: "Add the transition your source document describes into this state (`#[sysml::transition(on = Evt, to = ThisState)]` on a source variant), or delete the state if the source has no such mode. Do not invent a trigger to silence this.".to_string(),
+            });
+        }
+    }
+
+    for st in &sd.states {
+        let leaves = sd
+            .transitions
+            .iter()
+            .any(|t| t.source == st.name && t.target != st.name);
+        if !leaves {
+            out.push(LintFinding {
+                code: "dead_end_state".to_string(),
+                severity: LintSeverity::Info,
+                package: pkg_name.to_string(),
+                element: element(&st.name),
+                message: format!(
+                    "State `{}` of `{}` has no transition to another state (once entered, the machine stays there).",
+                    st.name, sd.name
+                ),
+                suggestion: "Fine for a latched fault or final state (say so in its `///` doc). Otherwise add the exit transition from your source document (e.g. a reset or recovery event).".to_string(),
+            });
+        }
+    }
+
+    // Transitions sharing source state and trigger: the first matching one wins.
+    let mut groups: BTreeMap<(&str, &str), Vec<&sysml_ir::Transition>> = BTreeMap::new();
+    for t in &sd.transitions {
+        let trig = t.trigger.as_deref().unwrap_or("<completion>");
+        groups.entry((t.source.as_str(), trig)).or_default().push(t);
+    }
+    for ((source, trig), ts) in groups {
+        if ts.len() < 2 {
+            continue;
+        }
+        let guarded = ts.iter().filter(|t| t.guard.is_some()).count();
+        let unguarded = ts.len() - guarded;
+        if guarded == 0 && unguarded < 2 {
+            continue;
+        }
+        let guards: Vec<String> = ts
+            .iter()
+            .map(|t| match &t.guard {
+                Some(g) => format!("`{g}` -> {}", t.target),
+                None => format!("(no guard) -> {}", t.target),
+            })
+            .collect();
+        out.push(LintFinding {
+            code: "overlapping_guards".to_string(),
+            severity: LintSeverity::Info,
+            package: pkg_name.to_string(),
+            element: element(source),
+            message: format!(
+                "{} transitions leave `{}` on `{trig}` and may be enabled together: {}.",
+                ts.len(),
+                source,
+                guards.join("; ")
+            ),
+            suggestion: "Check the guards are mutually exclusive (e.g. `x > limit` vs `x <= limit`); the first transition declared wins when several are enabled. An unguarded transition shadows every later one on the same trigger.".to_string(),
+        });
+    }
+    out
 }
 
 struct DefInfo<'a> {
@@ -593,6 +730,84 @@ fn is_dimensionless_name(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lint_flags_state_machine_smells() {
+        use sysml_ir::{StateUsage, Transition};
+        let st = |n: &str| StateUsage {
+            name: n.into(),
+            ..Default::default()
+        };
+        let tr = |s: &str, trig: &str, guard: Option<&str>, t: &str| Transition {
+            source: s.into(),
+            trigger: Some(trig.into()),
+            guard: guard.map(Into::into),
+            target: t.into(),
+            ..Default::default()
+        };
+        let model = |sd: StateDef| {
+            Model::new(vec![Package {
+                name: "M".into(),
+                members: vec![PackageMember::StateDef(sd)],
+                ..Default::default()
+            }])
+        };
+        let sd = StateDef {
+            name: "Mode".into(),
+            initial_state: Some("idle".into()),
+            states: vec![st("idle"), st("running"), st("fault"), st("orphan")],
+            transitions: vec![
+                tr("idle", "Go", Some("e.x > 1"), "running"),
+                tr("idle", "Go", Some("e.x > 2"), "fault"),
+                tr("running", "Stop", None, "idle"),
+                tr("orphan", "Go", None, "idle"),
+            ],
+            ..Default::default()
+        };
+        let rep = lint_model("m", &model(sd.clone()));
+        let codes = |code: &str| -> Vec<String> {
+            rep.findings
+                .iter()
+                .filter(|f| f.code == code)
+                .map(|f| f.element.clone())
+                .collect()
+        };
+        assert_eq!(codes("unreachable_state"), vec!["Mode.orphan"]);
+        assert_eq!(codes("dead_end_state"), vec!["Mode.fault"]);
+        assert_eq!(codes("overlapping_guards"), vec!["Mode.idle"]);
+        assert!(!rep.clean, "unreachable_state is a warning");
+        assert_eq!(rep.summary.state_review_count, 2);
+        assert_eq!(rep.summary.info_count, 0, "state review items are counted apart");
+
+        // Unknown initial state: no reachability verdict; info findings never fail --strict.
+        let rep = lint_model(
+            "m",
+            &model(StateDef {
+                initial_state: None,
+                ..sd.clone()
+            }),
+        );
+        assert!(rep.findings.iter().all(|f| f.code != "unreachable_state"));
+        assert!(rep.clean);
+
+        // One guarded + one unguarded transition on the same trigger also overlaps; a single
+        // transition per trigger does not.
+        let rep = lint_model(
+            "m",
+            &model(StateDef {
+                transitions: vec![
+                    tr("idle", "Go", None, "running"),
+                    tr("idle", "Go", Some("e.x > 2"), "fault"),
+                    tr("running", "Stop", None, "idle"),
+                ],
+                ..sd
+            }),
+        );
+        assert_eq!(
+            rep.findings.iter().filter(|f| f.code == "overlapping_guards").count(),
+            1
+        );
+    }
     use sysml_ir::{AttributeUsage, Model, Package, PackageMember, PartDef, PortUsage};
 
     #[test]

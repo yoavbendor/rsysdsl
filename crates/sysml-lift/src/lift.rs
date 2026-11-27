@@ -614,6 +614,15 @@ impl LifterCtx {
                 };
                 if let Some(body) = &def.body {
                     for m in body {
+                        // `entry; then <state>;` names the initial sub-state.
+                        if let ast::MemberKind::Usage(u) = &m.kind {
+                            if u.kind == ast::UsageKind::Succession {
+                                if let ast::UsageDetail::Succession { target, .. } = &u.detail {
+                                    sd.initial_state = Some(target_ref_to_string(&target.target));
+                                    continue;
+                                }
+                            }
+                        }
                         self.lift_state_member(
                             file,
                             pkg_name,

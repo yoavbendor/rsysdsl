@@ -1157,8 +1157,18 @@ fn emit_state_def(s: &StateDef, level: usize, out: &mut String) {
             format_qualified(subj_ty)
         );
     }
+    // The initial sub-state: `entry; then <state>;` (only when that state is declared here).
+    let initial = s
+        .initial_state
+        .as_ref()
+        .filter(|i| s.states.iter().any(|st| &st.name == *i));
     if let Some(e) = &s.entry_action {
         emit_action_usage(e, "entry ", level + 1, out);
+    } else if initial.is_some() {
+        let _ = writeln!(out, "{}entry;", indent(level + 1));
+    }
+    if let Some(i) = initial {
+        let _ = writeln!(out, "{}then {};", indent(level + 1), escape_sysml_name(i));
     }
     if let Some(d) = &s.do_action {
         emit_action_usage(d, "do ", level + 1, out);

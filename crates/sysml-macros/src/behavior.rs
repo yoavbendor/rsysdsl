@@ -398,6 +398,7 @@ fn expand_state_struct(args: TokenStream, mut item: ItemStruct) -> syn::Result<T
                     doc: #doc_tok,
                     specializes: #spec_tok,
                     subject_type: ::std::option::Option::None,
+                    initial_state: ::std::option::Option::None,
                     entry_action: ::std::option::Option::None,
                     do_action: #do_action_tok,
                     exit_action: ::std::option::Option::None,
@@ -449,6 +450,8 @@ fn expand_state_enum(args: TokenStream, mut item: ItemEnum) -> syn::Result<Token
     let mut allowed_match_arms = Vec::new();
     let mut name_match_arms = Vec::new();
     let mut initial_variant: Option<Ident> = None;
+    let mut initial_sysml_name: Option<String> = None;
+    let mut first_sysml_name: Option<String> = None;
 
     if let Some(subj) = &subject_ty {
         compile_checks.push(quote! { ::sysml_dsl::core_contracts::assert_part_core::<#subj>(); });
@@ -463,10 +466,14 @@ fn expand_state_enum(args: TokenStream, mut item: ItemEnum) -> syn::Result<Token
 
         let mut state_ty: Option<Path> = None;
         let mut variant_transitions = Vec::new();
+        if first_sysml_name.is_none() {
+            first_sysml_name = Some(v_sysml_name.clone());
+        }
 
         for attr in &variant.attrs {
             if is_sysml_attr(attr, "initial") {
                 initial_variant = Some(v_ident.clone());
+                initial_sysml_name = Some(v_sysml_name.clone());
             } else if is_sysml_attr(attr, "transition") {
                 let t: TransitionArgs = attr.parse_args()?;
                 variant_transitions.push(t);
@@ -804,6 +811,8 @@ fn expand_state_enum(args: TokenStream, mut item: ItemEnum) -> syn::Result<Token
     item.attrs = strip_sysml_attrs(std::mem::take(&mut item.attrs));
     let doc_tok = quote_opt_str(&doc);
     let spec_tok = quote_vec_str(&spec_names);
+    // Same rule as `initial_state()`: the `#[sysml::initial]` variant, else the first one.
+    let initial_state_tok = quote_opt_str(&initial_sysml_name.or(first_sysml_name));
     let subject_type_str = subject_ty.as_ref().map(path_to_sysml_string);
     let subject_type_tok = quote_opt_str(&subject_type_str);
 
@@ -838,6 +847,7 @@ fn expand_state_enum(args: TokenStream, mut item: ItemEnum) -> syn::Result<Token
                     doc: #doc_tok,
                     specializes: #spec_tok,
                     subject_type: #subject_type_tok,
+                    initial_state: #initial_state_tok,
                     entry_action: ::std::option::Option::None,
                     do_action: ::std::option::Option::None,
                     exit_action: ::std::option::Option::None,
