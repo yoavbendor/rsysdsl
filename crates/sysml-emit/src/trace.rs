@@ -30,7 +30,8 @@ pub struct TraceRow {
     #[serde(default)]
     pub evidence_attributes: Vec<String>,
     /// Where the requirement's evidence comes from: `verification` (a verdict exists),
-    /// `model default (placeholder)` (evidence attributes only hold model values),
+    /// `no evidence supplied` (evidence attributes have no value and no verdict exists),
+    /// `model default (placeholder)` (an evidence attribute holds a model value),
     /// `unmarked` (constrained, but no attribute is marked `evidence`), or `n/a`.
     #[serde(default)]
     pub evidence_source: String,
@@ -55,7 +56,9 @@ pub struct TraceMatrixSummary {
     pub total_perform_allocations: usize,
     pub total_calcs: usize,
     pub total_state_defs: usize,
-    /// Constrained requirements with no verdict whose evidence is only a model value.
+    /// Constrained requirements with no verdict whose evidence is only a model value (no
+    /// attribute marked `evidence`, or an evidence attribute with a default). Evidence left
+    /// without a value (`no evidence supplied`) is not counted: it claims nothing.
     #[serde(default)]
     pub placeholder_evidence: usize,
     /// Requirements with at least one hollow comparison (see [`TraceRow::hollow_comparisons`]).
@@ -204,6 +207,8 @@ pub fn build_trace_matrix(
         } else if ev.evidence_attributes.is_empty() {
             placeholder_evidence += 1;
             "unmarked"
+        } else if ev.evidence_with_model_value.is_empty() {
+            "no evidence supplied"
         } else {
             placeholder_evidence += 1;
             "model default (placeholder)"
@@ -341,7 +346,8 @@ pub fn render_trace_matrix_markdown(matrix: &TraceMatrix) -> String {
             _ => String::new(),
         };
         match row.evidence_source.as_str() {
-            "model default (placeholder)" => scenario.push_str(" — evidence is a model placeholder"),
+            "model default (placeholder)" => scenario.push_str(" — evidence is a model default (placeholder)"),
+            "no evidence supplied" => scenario.push_str(" — no evidence supplied yet"),
             "unmarked" => scenario.push_str(" — no `evidence` attribute"),
             _ => {}
         }

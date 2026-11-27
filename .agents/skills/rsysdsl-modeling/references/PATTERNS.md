@@ -139,7 +139,8 @@ pub mod requirements {
 // let r = MinimumPowerOutput { delivered_power_w: Quantity::new(measured_w, "W"), ..Default::default() };
 // assert!(r.evaluate());
 // Only a `VerificationReport` verdict (e.g. from sysml-sim monitors, see examples/microwave_sim)
-// counts as verified in `trace-matrix`; model values show as "evidence is a model placeholder".
+// counts as verified in `trace-matrix`. Without a verdict it shows "no evidence supplied yet" (evidence
+// attribute has no default: honest) or "evidence is a model default (placeholder)" (it has one).
 
 // Satisfy on the realizing part (compile-time checked ID!).
 // Cross-package works as-is: if the requirement lives in another package, the emitter writes

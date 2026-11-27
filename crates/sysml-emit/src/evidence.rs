@@ -14,6 +14,9 @@ use sysml_ir::RequirementDef;
 pub struct RequirementEvidence {
     /// Attributes marked `evidence`.
     pub evidence_attributes: Vec<String>,
+    /// The subset of [`Self::evidence_attributes`] that carry a model value (a default):
+    /// placeholders, as opposed to evidence attributes left without a value.
+    pub evidence_with_model_value: Vec<String>,
     /// Comparisons `a op b` whose two attribute operands carry the same model value.
     pub hollow_comparisons: Vec<String>,
 }
@@ -42,6 +45,12 @@ pub fn analyze_requirement(r: &RequirementDef) -> RequirementEvidence {
         .filter(|a| a.is_evidence)
         .filter_map(|a| a.name.clone())
         .collect();
+    let evidence_with_model_value: Vec<String> = r
+        .attributes
+        .iter()
+        .filter(|a| a.is_evidence && a.value.as_deref().is_some_and(|v| !v.trim().is_empty()))
+        .filter_map(|a| a.name.clone())
+        .collect();
     let mut hollow = Vec::new();
     for c in &r.require_constraints {
         for clause in c.split(&['&', '|', ';'][..]).flat_map(|s| s.split(" and ")) {
@@ -64,6 +73,7 @@ pub fn analyze_requirement(r: &RequirementDef) -> RequirementEvidence {
     }
     RequirementEvidence {
         evidence_attributes,
+        evidence_with_model_value,
         hollow_comparisons: hollow,
     }
 }

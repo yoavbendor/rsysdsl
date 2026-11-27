@@ -35,9 +35,21 @@ pub mod evidence_demo {
         pub actual_temp_k: Quantity<f64>,
     }
 
+    /// EV-003: evidence attribute WITH a model default (a placeholder, not evidence).
+    #[sysml::requirement(id = "EV-003")]
+    #[sysml::require_constraint(measured_flow <= max_flow)]
+    #[derive(Debug, Clone, Copy)]
+    pub struct FlowLimit {
+        #[sysml::attr(default = 0.002, unit = "m^3/s")]
+        pub max_flow: Quantity<f64>,
+        #[sysml::attr(default = 0.001, unit = "m^3/s", evidence)]
+        pub measured_flow: Quantity<f64>,
+    }
+
     #[sysml::part]
     #[sysml::satisfy(req = HeaterPowerLimit, id = "EV-001")]
     #[sysml::satisfy(req = HollowTempLimit, id = "EV-002")]
+    #[sysml::satisfy(req = FlowLimit, id = "EV-003")]
     #[derive(Debug, Clone, Copy)]
     pub struct Heater {
         #[sysml::attr(default = 1200.0, unit = "W")]
@@ -75,10 +87,19 @@ fn evidence_is_emitted_audited_and_traced_as_placeholder_until_verified() {
 
     let tm = sysml_emit::build_trace_matrix("evidence", &model, None);
     let row = |id: &str| tm.rows.iter().find(|r| r.req_id == id).unwrap().clone();
-    assert_eq!(row("EV-001").evidence_source, "model default (placeholder)");
+    // Evidence attribute without a value: nothing is claimed yet.
+    assert_eq!(row("EV-001").evidence_source, "no evidence supplied");
     assert_eq!(row("EV-001").evidence_attributes, vec!["measuredPowerW".to_string()]);
     assert_eq!(row("EV-002").evidence_source, "unmarked");
+    // Evidence attribute with a default: a model placeholder.
+    assert_eq!(row("EV-003").evidence_source, "model default (placeholder)");
     assert_eq!(tm.summary.hollow_requirements, 1);
+    assert_eq!(tm.summary.placeholder_evidence, 2, "EV-002 + EV-003, not EV-001");
+    let md = sysml_emit::render_trace_matrix_markdown(&tm);
+    let line = |id: &str| md.lines().find(|l| l.contains(id)).unwrap().to_string();
+    assert!(line("EV-001").contains("no evidence supplied yet"), "{md}");
+    assert!(line("EV-003").contains("evidence is a model default (placeholder)"), "{md}");
+    assert!(!line("EV-001").contains("placeholder"), "{md}");
 
     let report = VerificationReport::from_verdicts(
         "evidence",
