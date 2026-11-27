@@ -1,0 +1,12 @@
+{
+  "model": "target/tbd-check/dishwasher.sysml",
+  "tbd_count": 0,
+  "by_kind": {
+    "channel": 0,
+    "custom_unit": 0,
+    "element": 0,
+    "unit": 0,
+    "value": 0
+  },
+  "entries": []
+}

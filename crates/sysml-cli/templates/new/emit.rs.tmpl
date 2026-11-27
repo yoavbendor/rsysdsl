@@ -1,0 +1,8 @@
+//! Emit `{{KEBAB}}` to `.sysml` (stdout or `-o <path>`) for VS Code SysML v2 / `sysml-reactflow`.
+//!
+//! Usage: `emit [-o <out.sysml>] [--omit-std] [--std-out <std.sysml>]`. `--omit-std` leaves the
+//! sysml-std library packages out of the file; `rsysdsl audit|lint|trace-matrix|view` load them.
+
+fn main() -> std::process::ExitCode {
+    sysml_emit::emit_cli::main(&{{SNAKE}}::build_model())
+}

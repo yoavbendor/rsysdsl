@@ -1,0 +1,6 @@
+error: unit symbol `kN` (kilonewton) is not defined in the OMG SysML v2 `SI` library; the strict audit would report an unresolved reference
+       help: use `N` instead and convert the value accordingly
+ --> tests/ui/bad_unit_not_in_omg.rs:8:42
+  |
+8 |     #[sysml::attr(default = 45.0, unit = "kN")]
+  |                                          ^^^^

@@ -113,6 +113,115 @@ pub enum PackageMember {
     MetadataDef(MetadataDef),
 }
 
+/// Name of the auto-included SysML library package that defines the `TBD` metadata.
+pub const TBD_METADATA_PACKAGE: &str = "TbdMetadata";
+/// Name of the `metadata def` inside [`TBD_METADATA_PACKAGE`] (`@TbdMetadata::TBD { ... }`).
+pub const TBD_METADATA_DEF: &str = "TBD";
+/// Name of the auto-included SysML library package that declares non-SI `custom_unit` symbols.
+pub const CUSTOM_UNIT_METADATA_PACKAGE: &str = "CustomUnitMetadata";
+
+/// Design phase by which a TBD must be resolved (`resolve_by`). Ordered:
+/// `Concept < Preliminary < Detailed < Release`.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum TbdPhase {
+    Concept,
+    Preliminary,
+    #[default]
+    Detailed,
+    Release,
+}
+
+impl TbdPhase {
+    pub const ALL: [TbdPhase; 4] = [
+        TbdPhase::Concept,
+        TbdPhase::Preliminary,
+        TbdPhase::Detailed,
+        TbdPhase::Release,
+    ];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            TbdPhase::Concept => "concept",
+            TbdPhase::Preliminary => "preliminary",
+            TbdPhase::Detailed => "detailed",
+            TbdPhase::Release => "release",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<TbdPhase> {
+        TbdPhase::ALL.into_iter().find(|p| p.as_str() == s.trim())
+    }
+}
+
+/// What a TBD marker leaves open.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum TbdKind {
+    /// `#[sysml::attr(tbd_unit = "...")]`: the attribute's unit is not in the source yet.
+    Unit,
+    /// `#[sysml::attr(tbd_value = "...")]`: the parameter exists but its value is not in the source.
+    Value,
+    /// `#[sysml::tbd(...)]` on a definition, requirement, state, transition or connection.
+    #[default]
+    Element,
+    /// `#[sysml::connect(tbd = "...")]`: an untyped placeholder connection (protocol TBD).
+    Channel,
+    /// `#[sysml::attr(unit = "...", custom_unit = "...")]`: a unit outside the checked SI table.
+    CustomUnit,
+}
+
+impl TbdKind {
+    pub const ALL: [TbdKind; 5] = [
+        TbdKind::Unit,
+        TbdKind::Value,
+        TbdKind::Element,
+        TbdKind::Channel,
+        TbdKind::CustomUnit,
+    ];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            TbdKind::Unit => "unit",
+            TbdKind::Value => "value",
+            TbdKind::Element => "element",
+            TbdKind::Channel => "channel",
+            TbdKind::CustomUnit => "custom_unit",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<TbdKind> {
+        TbdKind::ALL.into_iter().find(|k| k.as_str() == s.trim())
+    }
+}
+
+/// One escape hatch: emitted as `@TbdMetadata::TBD { category; reason; owner; resolveBy; }`
+/// on the element it annotates, and listed in the TBD ledger (`rsysdsl tbd`).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TbdMark {
+    pub kind: TbdKind,
+    pub reason: String,
+    #[serde(default)]
+    pub owner: Option<String>,
+    #[serde(default)]
+    pub resolve_by: TbdPhase,
+}
+
+impl TbdMark {
+    pub fn new(kind: TbdKind, reason: impl Into<String>) -> Self {
+        Self {
+            kind,
+            reason: reason.into(),
+            owner: None,
+            resolve_by: TbdPhase::default(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct MetadataDef {
     pub name: String,
@@ -203,6 +312,10 @@ pub struct AttributeDef {
     pub attributes: Vec<AttributeUsage>,
 }
 
+/// Doc-comment prefix that marks an evidence attribute in emitted SysML (lifted back into
+/// [`AttributeUsage::is_evidence`]).
+pub const EVIDENCE_DOC_TAG: &str = "[evidence]";
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct AttributeUsage {
     #[serde(default)]
@@ -227,6 +340,14 @@ pub struct AttributeUsage {
     pub is_keywordless: bool,
     #[serde(default)]
     pub nested_attributes: Vec<AttributeUsage>,
+    /// `#[sysml::attr(..., evidence)]`: a measured / achieved value inside a requirement,
+    /// supplied by a verification case (e.g. a sysml-sim monitor), as opposed to a spec limit.
+    /// Its model value, if any, is a placeholder and never counts as verification.
+    #[serde(default)]
+    pub is_evidence: bool,
+    /// TBD markers on this element (see [`TbdMark`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tbd: Vec<TbdMark>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -275,6 +396,9 @@ pub struct PartDef {
     pub fmea: Vec<FmeaEntry>,
     #[serde(default)]
     pub asil_decompositions: Vec<AsilDecompositionMeta>,
+    /// TBD markers on this element (see [`TbdMark`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tbd: Vec<TbdMark>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -300,6 +424,9 @@ pub struct PartUsage {
     pub requirements: Vec<RequirementUsage>,
     #[serde(default)]
     pub portions: Vec<PortionUsage>,
+    /// TBD markers on this element (see [`TbdMark`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tbd: Vec<TbdMark>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -342,6 +469,9 @@ pub struct PortDef {
     pub is_symmetric: bool,
     pub items: Vec<DirectedItem>,
     pub attributes: Vec<AttributeUsage>,
+    /// TBD markers on this element (see [`TbdMark`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tbd: Vec<TbdMark>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -353,6 +483,9 @@ pub struct PortUsage {
     #[serde(default)]
     pub redefines: Vec<String>,
     pub doc: Option<String>,
+    /// TBD markers on this element (see [`TbdMark`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tbd: Vec<TbdMark>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -363,6 +496,10 @@ pub struct DirectedItem {
     pub multiplicity: Option<Multiplicity>,
     #[serde(default)]
     pub subsets: Vec<String>,
+    /// Inherited item features this one redefines (`:>>`), e.g. when a port specializing a
+    /// library port narrows the type of an inherited `out item`.
+    #[serde(default)]
+    pub redefines: Vec<String>,
     #[serde(default)]
     pub doc: Option<String>,
 }
@@ -374,6 +511,9 @@ pub struct ItemDef {
     pub doc: Option<String>,
     pub specializes: Vec<String>,
     pub attributes: Vec<AttributeUsage>,
+    /// TBD markers on this element (see [`TbdMark`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tbd: Vec<TbdMark>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -401,6 +541,9 @@ pub struct InterfaceDef {
     #[serde(default)]
     pub attributes: Vec<AttributeUsage>,
     pub ends: Vec<InterfaceEnd>,
+    /// TBD markers on this element (see [`TbdMark`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tbd: Vec<TbdMark>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -442,6 +585,9 @@ pub struct ConnectionUsage {
     pub from: Option<String>,
     pub to: Option<String>,
     pub doc: Option<String>,
+    /// TBD markers on this element (see [`TbdMark`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tbd: Vec<TbdMark>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -509,6 +655,9 @@ pub struct Transition {
     pub effect: Option<String>,
     pub target: String,
     pub doc: Option<String>,
+    /// TBD markers on this element (see [`TbdMark`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tbd: Vec<TbdMark>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -522,6 +671,9 @@ pub struct StateUsage {
     pub exit_action: Option<ActionUsage>,
     pub states: Vec<StateUsage>,
     pub transitions: Vec<Transition>,
+    /// TBD markers on this element (see [`TbdMark`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tbd: Vec<TbdMark>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -532,11 +684,17 @@ pub struct StateDef {
     pub specializes: Vec<String>,
     #[serde(default)]
     pub subject_type: Option<String>,
+    /// Name of the initial sub-state (`#[sysml::initial]`), emitted as `entry; then <state>;`.
+    #[serde(default)]
+    pub initial_state: Option<String>,
     pub entry_action: Option<ActionUsage>,
     pub do_action: Option<ActionUsage>,
     pub exit_action: Option<ActionUsage>,
     pub states: Vec<StateUsage>,
     pub transitions: Vec<Transition>,
+    /// TBD markers on this element (see [`TbdMark`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tbd: Vec<TbdMark>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -560,6 +718,9 @@ pub struct RequirementDef {
     pub require_constraints: Vec<String>,
     pub assume_constraints: Vec<String>,
     pub refinements: Vec<RefinementDependency>,
+    /// TBD markers on this element (see [`TbdMark`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tbd: Vec<TbdMark>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

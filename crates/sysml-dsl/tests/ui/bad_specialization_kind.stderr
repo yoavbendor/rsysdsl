@@ -1,14 +1,3 @@
-error[E0599]: no associated function or constant named `__sysml_has_field` found for struct `UmbilicalPort` in the current scope
-  --> tests/ui/bad_specialization_kind.rs:15:1
-   |
- 9 | pub struct UmbilicalPort {
-   | ------------------------ associated function or constant `__sysml_has_field` not found for this struct
-...
-15 | #[sysml::part]
-   | ^^^^^^^^^^^^^^ associated function or constant not found in `UmbilicalPort`
-   |
-   = note: this error originates in the attribute macro `sysml::part` (in Nightly builds, run with -Z macro-backtrace for more info)
-
 error[E0277]: the trait bound `UmbilicalPort: SysmlPartCore` is not satisfied
   --> tests/ui/bad_specialization_kind.rs:16:22
    |

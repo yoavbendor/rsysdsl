@@ -7,6 +7,7 @@ repository.workspace = true
 description = "SysML v2 -> Rust DSL lifter, code generator, and semantic round-trip AST comparator"
 
 [dependencies]
+sysml-core = { workspace = true }
 sysml-ir = { workspace = true }
 sysmlv2-syntax = { workspace = true }
 serde = { workspace = true }

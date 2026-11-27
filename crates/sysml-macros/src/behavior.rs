@@ -98,6 +98,8 @@ struct TransitionArgs {
     guard: Option<GuardSpec>,
     effect: Option<String>,
     doc: Option<String>,
+    /// `tbd = "reason"`: the transition is a placeholder (emitted as @TBD).
+    tbd: Option<(String, proc_macro2::Span)>,
 }
 
 impl Parse for TransitionArgs {
@@ -107,6 +109,7 @@ impl Parse for TransitionArgs {
         let mut guard = None;
         let mut effect = None;
         let mut doc = None;
+        let mut tbd = None;
         while !input.is_empty() {
             let key: Ident = input.parse()?;
             let _eq: Token![=] = input.parse()?;
@@ -136,6 +139,16 @@ impl Parse for TransitionArgs {
                     let s: LitStr = input.parse()?;
                     doc = Some(s.value());
                 }
+                "tbd" => {
+                    let s: LitStr = input.parse()?;
+                    if s.value().trim().is_empty() {
+                        return Err(syn::Error::new(
+                            s.span(),
+                            "`tbd` needs a non-empty reason\nhelp: say why the transition is a placeholder, e.g. `tbd = \"trigger not specified in <source>\"`",
+                        ));
+                    }
+                    tbd = Some((s.value(), s.span()));
+                }
                 other => {
                     return Err(syn::Error::new(
                         key.span(),
@@ -155,6 +168,7 @@ impl Parse for TransitionArgs {
             guard,
             effect,
             doc,
+            tbd,
         })
     }
 }
@@ -256,6 +270,7 @@ pub fn expand_action(args: TokenStream, mut item: ItemStruct) -> syn::Result<Tok
         }
     });
 
+    crate::tbd::reject_tbd(&item.attrs, "action")?;
     item.attrs = strip_sysml_attrs(std::mem::take(&mut item.attrs));
     let doc_tok = quote_opt_str(&doc);
     let spec_tok = quote_vec_str(&spec_names);
@@ -313,6 +328,7 @@ fn expand_state_struct(args: TokenStream, mut item: ItemStruct) -> syn::Result<T
     let is_no_std = has_no_std_mode(&kv, &item.attrs);
     let rcfg = reflect_cfg(is_no_std);
     let doc = extract_doc(&item.attrs);
+    let tbd_tok = crate::tbd::tbd_vec_tokens(&item.attrs)?;
     let is_abstract = kv.has_flag("abstract");
     let sysml_name = extract_sysml_name_override(&item.attrs)?
         .or_else(|| kv.get_str("name"))
@@ -398,11 +414,13 @@ fn expand_state_struct(args: TokenStream, mut item: ItemStruct) -> syn::Result<T
                     doc: #doc_tok,
                     specializes: #spec_tok,
                     subject_type: ::std::option::Option::None,
+                    initial_state: ::std::option::Option::None,
                     entry_action: ::std::option::Option::None,
                     do_action: #do_action_tok,
                     exit_action: ::std::option::Option::None,
                     states: ::std::vec![],
                     transitions: ::std::vec![],
+                    tbd: #tbd_tok,
                 }
             }
         }
@@ -424,6 +442,7 @@ fn expand_state_enum(args: TokenStream, mut item: ItemEnum) -> syn::Result<Token
     let is_no_std = has_no_std_mode(&kv, &item.attrs);
     let rcfg = reflect_cfg(is_no_std);
     let doc = extract_doc(&item.attrs);
+    let tbd_tok = crate::tbd::tbd_vec_tokens(&item.attrs)?;
     let sysml_name = extract_sysml_name_override(&item.attrs)?
         .or_else(|| kv.get_str("name"))
         .unwrap_or_else(|| item.ident.to_string());
@@ -445,9 +464,12 @@ fn expand_state_enum(args: TokenStream, mut item: ItemEnum) -> syn::Result<Token
     let mut compile_checks = Vec::new();
     let mut step_match_arms = Vec::new();
     let mut guarded_event_checks = Vec::new();
+    let mut dim_checks: Vec<TokenStream> = Vec::new();
     let mut allowed_match_arms = Vec::new();
     let mut name_match_arms = Vec::new();
     let mut initial_variant: Option<Ident> = None;
+    let mut initial_sysml_name: Option<String> = None;
+    let mut first_sysml_name: Option<String> = None;
 
     if let Some(subj) = &subject_ty {
         compile_checks.push(quote! { ::sysml_dsl::core_contracts::assert_part_core::<#subj>(); });
@@ -462,10 +484,15 @@ fn expand_state_enum(args: TokenStream, mut item: ItemEnum) -> syn::Result<Token
 
         let mut state_ty: Option<Path> = None;
         let mut variant_transitions = Vec::new();
+        let v_tbd_tok = crate::tbd::tbd_vec_tokens(&variant.attrs)?;
+        if first_sysml_name.is_none() {
+            first_sysml_name = Some(v_sysml_name.clone());
+        }
 
         for attr in &variant.attrs {
             if is_sysml_attr(attr, "initial") {
                 initial_variant = Some(v_ident.clone());
+                initial_sysml_name = Some(v_sysml_name.clone());
             } else if is_sysml_attr(attr, "transition") {
                 let t: TransitionArgs = attr.parse_args()?;
                 variant_transitions.push(t);
@@ -491,6 +518,7 @@ fn expand_state_enum(args: TokenStream, mut item: ItemEnum) -> syn::Result<Token
                 exit_action: ::std::option::Option::None,
                 states: ::std::vec![],
                 transitions: ::std::vec![],
+                tbd: #v_tbd_tok,
             }
         });
 
@@ -506,6 +534,12 @@ fn expand_state_enum(args: TokenStream, mut item: ItemEnum) -> syn::Result<Token
             let trigger_tok = quote_opt_str(&trigger_str);
             let effect_tok = quote_opt_str(&t.effect);
             let tdoc_tok = quote_opt_str(&t.doc);
+            let t_tbd_tok = match &t.tbd {
+                Some((reason, span)) => crate::tbd::quote_marks(&[crate::tbd::mark_tokens(
+                    "Element", reason, None, None, *span,
+                )?]),
+                None => quote!(::std::vec![]),
+            };
 
             // Compile-time check 1: Target variant MUST exist on `Self`!
             compile_checks.push(quote! {
@@ -524,6 +558,11 @@ fn expand_state_enum(args: TokenStream, mut item: ItemEnum) -> syn::Result<Token
                 Some(GuardSpec::NativeExpr(expr)) => {
                     let ctx = ExprContext::TransitionGuard { has_subject };
                     let transpiled = transpile_expr(expr, &ctx)?;
+                    dim_checks.push(crate::units_check::guard_dim_asserts(
+                        expr,
+                        t.trigger.as_ref(),
+                        subject_ty.as_ref(),
+                    )?);
                     (Some(transpiled.sysml), Some(transpiled.rust))
                 }
             };
@@ -545,6 +584,7 @@ fn expand_state_enum(args: TokenStream, mut item: ItemEnum) -> syn::Result<Token
                     effect: #effect_tok,
                     target: ::std::string::String::from(#target_sysml),
                     doc: #tdoc_tok,
+                    tbd: #t_tbd_tok,
                 }
             });
 
@@ -652,6 +692,19 @@ fn expand_state_enum(args: TokenStream, mut item: ItemEnum) -> syn::Result<Token
                         event: <E as ::sysml_dsl::core_contracts::SysmlItemCore>::SYSML_NAME,
                     })
                 }
+
+                /// Like `step_with`, but an event that matches no transition (wrong trigger, or
+                /// every guard false) is the normal SysML no-op `StepOutcome::Ignored`, not an error.
+                pub fn dispatch_with<E: ::sysml_dsl::core_contracts::SysmlItemCore + 'static>(
+                    &mut self,
+                    event: &E,
+                    subject: &#subj,
+                ) -> ::sysml_dsl::core_contracts::StepOutcome<Self> {
+                    match self.step_with(event, subject) {
+                        ::core::result::Result::Ok(s) => ::sysml_dsl::core_contracts::StepOutcome::Moved(s),
+                        ::core::result::Result::Err(_) => ::sysml_dsl::core_contracts::StepOutcome::Ignored,
+                    }
+                }
             }
         } else {
             quote! {
@@ -666,6 +719,18 @@ fn expand_state_enum(args: TokenStream, mut item: ItemEnum) -> syn::Result<Token
                         from: self.sysml_state_name(),
                         event: <E as ::sysml_dsl::core_contracts::SysmlItemCore>::SYSML_NAME,
                     })
+                }
+
+                /// Like `step_event`, but an event that matches no transition (wrong trigger, or
+                /// every guard false) is the normal SysML no-op `StepOutcome::Ignored`, not an error.
+                pub fn dispatch_event<E: ::sysml_dsl::core_contracts::SysmlItemCore + 'static>(
+                    &mut self,
+                    event: &E,
+                ) -> ::sysml_dsl::core_contracts::StepOutcome<Self> {
+                    match self.step_event(event) {
+                        ::core::result::Result::Ok(s) => ::sysml_dsl::core_contracts::StepOutcome::Moved(s),
+                        ::core::result::Result::Err(_) => ::sysml_dsl::core_contracts::StepOutcome::Ignored,
+                    }
                 }
             }
         };
@@ -716,6 +781,19 @@ fn expand_state_enum(args: TokenStream, mut item: ItemEnum) -> syn::Result<Token
                         allowed_triggers: self.allowed_triggers(),
                     })
                 }
+
+                /// Like `step_with`, but an event that matches no transition (wrong trigger, or
+                /// every guard false) is the normal SysML no-op `StepOutcome::Ignored`, not an error.
+                pub fn dispatch_with<E: ::sysml_dsl::core_contracts::SysmlItemCore + 'static>(
+                    &mut self,
+                    event: &E,
+                    subject: &#subj,
+                ) -> ::sysml_dsl::core_contracts::StepOutcome<Self> {
+                    match self.step_with(event, subject) {
+                        ::std::result::Result::Ok(s) => ::sysml_dsl::core_contracts::StepOutcome::Moved(s),
+                        ::std::result::Result::Err(_) => ::sysml_dsl::core_contracts::StepOutcome::Ignored,
+                    }
+                }
             }
         } else {
             quote! {
@@ -733,6 +811,18 @@ fn expand_state_enum(args: TokenStream, mut item: ItemEnum) -> syn::Result<Token
                         allowed_triggers: self.allowed_triggers(),
                     })
                 }
+
+                /// Like `step_event`, but an event that matches no transition (wrong trigger, or
+                /// every guard false) is the normal SysML no-op `StepOutcome::Ignored`, not an error.
+                pub fn dispatch_event<E: ::sysml_dsl::core_contracts::SysmlItemCore + 'static>(
+                    &mut self,
+                    event: &E,
+                ) -> ::sysml_dsl::core_contracts::StepOutcome<Self> {
+                    match self.step_event(event) {
+                        ::std::result::Result::Ok(s) => ::sysml_dsl::core_contracts::StepOutcome::Moved(s),
+                        ::std::result::Result::Err(_) => ::sysml_dsl::core_contracts::StepOutcome::Ignored,
+                    }
+                }
             }
         };
         (step_methods, typed_step_fn)
@@ -748,6 +838,8 @@ fn expand_state_enum(args: TokenStream, mut item: ItemEnum) -> syn::Result<Token
     item.attrs = strip_sysml_attrs(std::mem::take(&mut item.attrs));
     let doc_tok = quote_opt_str(&doc);
     let spec_tok = quote_vec_str(&spec_names);
+    // Same rule as `initial_state()`: the `#[sysml::initial]` variant, else the first one.
+    let initial_state_tok = quote_opt_str(&initial_sysml_name.or(first_sysml_name));
     let subject_type_str = subject_ty.as_ref().map(path_to_sysml_string);
     let subject_type_tok = quote_opt_str(&subject_type_str);
 
@@ -782,11 +874,13 @@ fn expand_state_enum(args: TokenStream, mut item: ItemEnum) -> syn::Result<Token
                     doc: #doc_tok,
                     specializes: #spec_tok,
                     subject_type: #subject_type_tok,
+                    initial_state: #initial_state_tok,
                     entry_action: ::std::option::Option::None,
                     do_action: ::std::option::Option::None,
                     exit_action: ::std::option::Option::None,
                     states: ::std::vec![#(#state_usage_tokens),*],
                     transitions: ::std::vec![#(#transition_tokens),*],
+                    tbd: #tbd_tok,
                 }
             }
         }
@@ -794,6 +888,8 @@ fn expand_state_enum(args: TokenStream, mut item: ItemEnum) -> syn::Result<Token
         const _: fn() = || {
             #(#compile_checks)*
         };
+
+        #(#dim_checks)*
 
         #(#spec_impls)*
     })

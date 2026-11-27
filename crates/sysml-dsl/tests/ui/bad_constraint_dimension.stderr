@@ -1,0 +1,5 @@
+error: dimension mismatch in `<=`: `temp_k` [K] has dimension K, but `power_w` [W] has dimension kg*m^2*s^-3 (both sides of comparisons, `+` and `-` must have the same dimension)
+ --> tests/ui/bad_constraint_dimension.rs:5:29
+  |
+5 | #[sysml::require_constraint(temp_k <= power_w)]
+  |                             ^^^^^^^^^^^^^^^^^

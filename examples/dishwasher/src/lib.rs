@@ -25,7 +25,7 @@ pub mod dishwasher_model {
     pub struct CycleStartTrigger {
         #[sysml::attr(default = 333.15, unit = "K")]
         pub target_temp_k: f64,
-        #[sysml::attr(default = 1.0)]
+        #[sysml::attr(dimensionless, default = 1.0)]
         pub start_pressed_flag: f64,
     }
 
@@ -33,9 +33,9 @@ pub mod dishwasher_model {
     #[sysml::item]
     #[derive(Debug, Clone, Copy, Default, PartialEq)]
     pub struct WaterLevelTrigger {
-        #[sysml::attr(default = 1.0)]
+        #[sysml::attr(dimensionless, default = 1.0)]
         pub fill_complete_flag: f64,
-        #[sysml::attr(default = 0.0)]
+        #[sysml::attr(dimensionless, default = 0.0)]
         pub flood_detected_flag: f64,
     }
 
@@ -45,7 +45,7 @@ pub mod dishwasher_model {
     pub struct WashThermalTrigger {
         #[sysml::attr(default = 333.15, unit = "K")]
         pub water_temp_k: f64,
-        #[sysml::attr(default = 0.0)]
+        #[sysml::attr(dimensionless, default = 0.0)]
         pub wash_timer_done_flag: f64,
     }
 
@@ -53,9 +53,9 @@ pub mod dishwasher_model {
     #[sysml::item]
     #[derive(Debug, Clone, Copy, Default, PartialEq)]
     pub struct StageProgressTrigger {
-        #[sysml::attr(default = 0.0)]
+        #[sysml::attr(dimensionless, default = 0.0)]
         pub stage_complete_flag: f64,
-        #[sysml::attr(default = 0.0)]
+        #[sysml::attr(dimensionless, default = 0.0)]
         pub flood_detected_flag: f64,
     }
 
@@ -63,7 +63,7 @@ pub mod dishwasher_model {
     #[sysml::item]
     #[derive(Debug, Clone, Copy, Default, PartialEq)]
     pub struct DoorLatchTrigger {
-        #[sysml::attr(default = 1.0)]
+        #[sysml::attr(dimensionless, default = 1.0)]
         pub door_closed_flag: f64,
     }
 
@@ -105,9 +105,9 @@ pub mod dishwasher_model {
     #[sysml::require_constraint(emitted_noise_db <= max_noise_db)]
     #[derive(Debug, Clone, Copy)]
     pub struct QuietOperationNoiseReq {
-        #[sysml::attr(default = 46.0)]
+        #[sysml::attr(dimensionless, default = 46.0)]
         pub max_noise_db: f64,
-        #[sysml::attr(default = 44.0)]
+        #[sysml::attr(dimensionless, default = 44.0)]
         pub emitted_noise_db: f64,
     }
 
@@ -179,7 +179,7 @@ pub mod dishwasher_model {
         pub rated_power: Quantity<f64>,
         #[sysml::attr(redefines = "outputVoltage", default = 12.0, unit = "V")]
         pub output_voltage: Quantity<f64>,
-        #[sysml::attr(redefines = "efficiency", default = 0.88)]
+        #[sysml::attr(dimensionless, redefines = "efficiency", default = 0.88)]
         pub efficiency: f64,
         #[sysml::attr(default = 5.0, unit = "V")]
         pub mcu_rail_voltage: Quantity<f64>,
@@ -216,7 +216,7 @@ pub mod dishwasher_model {
     pub struct WashHeater {
         #[sysml::attr(redefines = "ratedPower", default = 1800.0, unit = "W")]
         pub rated_power: Quantity<f64>,
-        #[sysml::attr(redefines = "efficiency", default = 0.96)]
+        #[sysml::attr(dimensionless, redefines = "efficiency", default = 0.96)]
         pub efficiency: f64,
         #[sysml::attr(default = 338.15, unit = "K")]
         pub max_operating_temp: Quantity<f64>,
@@ -304,7 +304,7 @@ pub mod dishwasher_model {
         pub flow_rate: Quantity<f64>,
         #[sysml::attr(redefines = "ratedPower", default = 95.0, unit = "W")]
         pub rated_power: Quantity<f64>,
-        #[sysml::attr(redefines = "noiseLevelDb", default = 43.0)]
+        #[sysml::attr(dimensionless, redefines = "noiseLevelDb", default = 43.0)]
         pub noise_level_db: f64,
         #[sysml::port(redefines)]
         pub power_in: Conjugated<ElectricalPowerPort>,
@@ -327,7 +327,7 @@ pub mod dishwasher_model {
         pub flow_rate: Quantity<f64>,
         #[sysml::attr(redefines = "ratedPower", default = 35.0, unit = "W")]
         pub rated_power: Quantity<f64>,
-        #[sysml::attr(redefines = "noiseLevelDb", default = 45.0)]
+        #[sysml::attr(dimensionless, redefines = "noiseLevelDb", default = 45.0)]
         pub noise_level_db: f64,
         #[sysml::port(redefines)]
         pub power_in: Conjugated<ElectricalPowerPort>,
@@ -346,7 +346,7 @@ pub mod dishwasher_model {
     #[sysml::specializes(FluidDistributor)]
     #[derive(Debug, Clone, Copy)]
     pub struct SprayArmAssembly {
-        #[sysml::attr(redefines = "noiseLevelDb", default = 42.0)]
+        #[sysml::attr(dimensionless, redefines = "noiseLevelDb", default = 42.0)]
         pub noise_level_db: f64,
         #[sysml::port(redefines)]
         pub fluid_in: Conjugated<FluidPort>,
@@ -360,11 +360,11 @@ pub mod dishwasher_model {
     #[sysml::satisfy(req = QuietOperationNoiseReq, id = "DW-002")]
     #[derive(Debug, Clone, Copy)]
     pub struct WashTub {
-        #[sysml::attr(redefines = "noiseLevelDb", default = 44.0)]
+        #[sysml::attr(dimensionless, redefines = "noiseLevelDb", default = 44.0)]
         pub noise_level_db: f64,
-        #[sysml::attr(redefines = "thermalConductanceWPerK", default = 1.8)]
+        #[sysml::attr(redefines = "thermalConductanceWPerK", default = 1.8, unit = "W/K")]
         pub thermal_conductance_w_per_k: f64,
-        #[sysml::attr(redefines = "acousticAttenuationDb", default = 14.0)]
+        #[sysml::attr(dimensionless, redefines = "acousticAttenuationDb", default = 14.0)]
         pub acoustic_attenuation_db: f64,
         #[sysml::attr(default = 4.5, unit = "L")]
         pub water_volume: Quantity<f64>,
@@ -456,9 +456,9 @@ pub mod dishwasher_model {
         pub power_draw: Quantity<f64>,
         #[sysml::attr(default = 333.15, unit = "K")]
         pub target_wash_temp_k: Quantity<f64>,
-        #[sysml::attr(default = 0.5)]
+        #[sysml::attr(dimensionless, default = 0.5)]
         pub door_closed_factor: f64,
-        #[sysml::attr(default = 0.5)]
+        #[sysml::attr(dimensionless, default = 0.5)]
         pub flood_trip_factor: f64,
         #[sysml::port(redefines)]
         pub power_in: Conjugated<ElectricalPowerPort>,
@@ -496,7 +496,7 @@ pub mod dishwasher_model {
     #[sysml::specializes(FluidSensor)]
     #[derive(Debug, Clone, Copy)]
     pub struct TurbidityLevelSensor {
-        #[sysml::attr(default = 1.0)]
+        #[sysml::attr(dimensionless, default = 1.0)]
         pub optical_gain_factor: f64,
         #[sysml::port(redefines)]
         pub power_in: Conjugated<ElectricalPowerPort>,
@@ -685,7 +685,7 @@ pub mod dishwasher_model {
     #[sysml::specializes(HmiPanel)]
     #[derive(Debug, Clone, Copy)]
     pub struct DishwasherControlPanel {
-        #[sysml::attr(redefines = "chimeLevelDb", default = 58.0)]
+        #[sysml::attr(dimensionless, redefines = "chimeLevelDb", default = 58.0)]
         pub chime_level_db: f64,
         #[sysml::attr(default = 5400.0, unit = "s")]
         pub nominal_cycle_duration: Quantity<f64>,

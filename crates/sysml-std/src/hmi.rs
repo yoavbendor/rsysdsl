@@ -2,6 +2,9 @@
 
 use sysml_dsl::prelude::*;
 
+/// sysml-std library package. Abstract HMI bases declare units with no placeholder defaults;
+/// concrete `HumanOperator` carries reference human defaults (`rsysdsl lint` reports inherited
+/// ones as `inherited_std_default`).
 #[sysml::package(library, name = "SysmlStdHmi")]
 #[sysml::import("ScalarValues::*")]
 #[sysml::import("SI::*")]
@@ -44,11 +47,11 @@ pub mod sysml_std_hmi {
     #[sysml::part(abstract)]
     #[derive(Debug, Clone, Copy)]
     pub struct HmiPanel {
-        #[sysml::attr(default = 0.2, unit = "kg")]
+        #[sysml::attr(unit = "kg")]
         pub mass: Quantity<f64>,
-        #[sysml::attr(default = 2.0, unit = "W")]
+        #[sysml::attr(unit = "W")]
         pub power_draw: Quantity<f64>,
-        #[sysml::attr(default = 65.0)]
+        #[sysml::attr(dimensionless)]
         pub chime_level_db: f64,
         #[sysml::port]
         pub power_in: Conjugated<ElectricalPowerPort>,

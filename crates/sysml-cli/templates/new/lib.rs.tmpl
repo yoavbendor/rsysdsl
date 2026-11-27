@@ -1,0 +1,258 @@
+//! `{{PASCAL}}` system model, scaffolded by `rsysdsl new`.
+//!
+//! Layered structure (keep it this way as the model grows):
+//! 1. `{{PASCAL}}Types`        - payload items, ports, interfaces (the "arrows").
+//! 2. `{{PASCAL}}Requirements` - requirements with document provenance.
+//! 3. `{{PASCAL}}Subsystems`   - reusable part definitions (the "boxes"); each realizing part
+//!    carries `#[sysml::satisfy(...)]` for the requirements it meets.
+//! 4. `{{PASCAL}}Context`      - ONE top-level context part composing subsystems with `#[sysml::connect]`.
+//!
+//! A package may only use elements from packages listed above it. Using types (ports, items)
+//! needs `#[sysml::import("<Package>::*")]` (SysML side) AND `use super::<module>::*;` (Rust side);
+//! `#[sysml::satisfy]` of a requirement in another package needs only the Rust `use`.
+//!
+//! Verify after every change (`rsysdsl` = `cargo install --path crates/sysml-cli` in the rsysdsl
+//! repo, or run it there as `cargo run -q -p sysml-cli -- ...`):
+//! ```text
+//! {{TEST_CMD}}
+//! {{EMIT_CMD}}
+//! rsysdsl audit --files target/{{SNAKE}}.sysml --stdlib --strict --pretty
+//! rsysdsl lint --files target/{{SNAKE}}.sysml --strict --format markdown
+//! rsysdsl tbd --files target/{{SNAKE}}.sysml --format markdown
+//! ```
+//!
+//! Gaps in the source are TBDs, never invented values: `tbd_value = "reason"` (value not
+//! given), `tbd_unit = "reason"` (unit not given), `#[sysml::tbd(reason = "...")]` (element
+//! open), `#[sysml::connect(tbd = "reason", ...)]` (link whose protocol is open). Each is
+//! emitted as `@TBD`, listed by `rsysdsl tbd`, and must be resolved by its `resolve_by` phase
+//! (`rsysdsl audit --maturity <phase> --strict`).
+
+use sysml_dsl::prelude::*;
+
+/// Layer 1: payloads, ports and interfaces shared by every subsystem.
+#[sysml::package(name = "{{PASCAL}}Types")]
+#[sysml::import("ScalarValues::*")]
+#[sysml::import("SI::*")]
+pub mod types {
+    use super::*;
+
+    // TODO(types): add every payload (`#[sysml::item]`), port (`#[sysml::port]`) and
+    // interface (`#[sysml::interface]`) HERE, never in the subsystem or context layers.
+    // With 3+ interfaces, give them an abstract parent to keep `rsysdsl lint --strict` clean:
+    // `#[sysml::interface(abstract)] pub struct {{PASCAL}}Channel {}` (no ends needed) plus
+    // `#[sysml::specializes({{PASCAL}}Channel)]` on each interface. Never drop `interface = ...`
+    // from a connect to silence the lint (that triggers `untyped_connections`).
+
+    /// Placeholder command payload (rename to match your diagram's arrow label).
+    #[sysml::item]
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct CommandSignal {
+        #[sysml::attr(default = 0.0, unit = "W")]
+        pub setpoint: Quantity<f64>,
+    }
+
+    /// Placeholder status payload (rename to match your diagram's arrow label).
+    #[sysml::item]
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct StatusSignal {
+        #[sysml::attr(default = 0.0, unit = "W")]
+        pub measured: Quantity<f64>,
+    }
+
+    /// Directed command output port (connect to `Conjugated<CommandPort>`).
+    #[sysml::port]
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct CommandPort {
+        #[sysml::out_item]
+        pub command: CommandSignal,
+    }
+
+    /// Directed status output port (connect to `Conjugated<StatusPort>`).
+    #[sysml::port]
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct StatusPort {
+        #[sysml::out_item]
+        pub status: StatusSignal,
+    }
+
+    /// Typed interface carrying commands.
+    #[sysml::interface]
+    pub struct CommandLink {
+        #[sysml::end]
+        pub source: CommandPort,
+        #[sysml::end]
+        pub sink: Conjugated<CommandPort>,
+    }
+
+    /// Typed interface carrying status feedback.
+    #[sysml::interface]
+    pub struct StatusLink {
+        #[sysml::end]
+        pub source: StatusPort,
+        #[sysml::end]
+        pub sink: Conjugated<StatusPort>,
+    }
+}
+
+/// Layer 2: requirements with explicit document provenance.
+#[sysml::package(name = "{{PASCAL}}Requirements")]
+#[sysml::import("ModelingMetadata::*")]
+#[sysml::import("ScalarValues::*")]
+#[sysml::import("SI::*")]
+pub mod requirements {
+    use super::*;
+
+    // TODO(requirements): add one `#[sysml::requirement(id = "...")]` per requirement in
+    // your source document HERE, each with `#[sysml::rationale("Source: <doc>, <section>")]`.
+    // Never invent thresholds. A limit the document gives is `default = <value>`; a limit it
+    // does not give (yet) is `tbd_value = "reason"` (no number, counted TBD). The measured
+    // side is `evidence` without a default (a test / verification case supplies it).
+
+    /// PLACEHOLDER requirement: replace this text with the "shall" sentence from your
+    /// source document (it is emitted as the requirement's `doc`), or delete it.
+    #[sysml::requirement(id = "SYS-REQ-001")]
+    #[sysml::rationale("Source: TODO — replace with document reference")]
+    #[sysml::tbd(
+        reason = "scaffold placeholder: replace with a requirement from the source document",
+        resolve_by = "preliminary"
+    )]
+    #[sysml::require_constraint(measured_response_time <= max_response_time)]
+    #[derive(Debug, Clone, Copy)]
+    pub struct PlaceholderRequirement {
+        /// LIMIT: not in any source yet, so no number (`default = <value>` once it is).
+        #[sysml::attr(unit = "s", tbd_value = "limit not stated yet: copy it from the source document")]
+        pub max_response_time: Quantity<f64>,
+        /// EVIDENCE: no default; a test / verification case supplies it.
+        #[sysml::attr(unit = "s", evidence)]
+        pub measured_response_time: Quantity<f64>,
+    }
+}
+
+/// Layer 3: reusable subsystem blueprints (`part def`), typed by layer-1 ports and satisfying
+/// layer-2 requirements.
+#[sysml::package(name = "{{PASCAL}}Subsystems")]
+#[sysml::import("{{PASCAL}}Types::*")]
+pub mod subsystems {
+    use super::requirements::*;
+    use super::types::*;
+    use super::*;
+
+    // TODO(subsystems): add one `#[sysml::part]` per diagram box HERE. Parts that share
+    // features get an `#[sysml::part(abstract)]` parent + `#[sysml::specializes(...)]`.
+    // Add `#[sysml::import("SI::*")]` to this package when you add `unit = "..."` attributes.
+    // Put `#[sysml::satisfy(req = ..., id = "...")]` on the part that realizes each requirement
+    // (system-level requirements with no single realizing subsystem go on the context part).
+
+    /// Placeholder controlling subsystem (rename to match your diagram).
+    #[sysml::part]
+    #[sysml::satisfy(req = PlaceholderRequirement, id = "SYS-REQ-001")]
+    #[derive(Debug, Clone, Copy)]
+    pub struct Controller {
+        #[sysml::port]
+        pub cmd_out: CommandPort,
+        #[sysml::port]
+        pub status_in: Conjugated<StatusPort>,
+    }
+
+    /// Placeholder controlled subsystem (rename to match your diagram).
+    #[sysml::part]
+    #[derive(Debug, Clone, Copy)]
+    pub struct Actuator {
+        #[sysml::port]
+        pub cmd_in: Conjugated<CommandPort>,
+        #[sysml::port]
+        pub status_out: StatusPort,
+    }
+}
+
+/// Layer 4: the single top-level context that composes and wires the subsystems.
+#[sysml::package(name = "{{PASCAL}}Context")]
+#[sysml::import("{{PASCAL}}Types::*")]
+#[sysml::import("{{PASCAL}}Subsystems::*")]
+pub mod context {
+    use super::subsystems::*;
+    use super::types::*;
+    use super::*;
+
+    // TODO(context): add each subsystem as a `#[sysml::part]` field and each diagram arrow
+    // as a `#[sysml::connect(...)]` HERE. Keep exactly one top-level context part; with
+    // more than 10 children, group them into intermediate subsystem parts in layer 2.
+
+    /// Top-level system context: composes all subsystems and their connections.
+    #[sysml::part]
+    #[sysml::connect(
+        interface = CommandLink,
+        name = "controllerToActuator",
+        from = controller.cmd_out,
+        to = actuator.cmd_in
+    )]
+    #[sysml::connect(
+        interface = StatusLink,
+        name = "actuatorToController",
+        from = actuator.status_out,
+        to = controller.status_in
+    )]
+    #[derive(Debug, Clone, Copy)]
+    pub struct {{PASCAL}}System {
+        #[sysml::part]
+        pub controller: Controller,
+        #[sysml::part]
+        pub actuator: Actuator,
+    }
+}
+
+/// Assemble the sysml-std library packages plus all `#[sysml::package]` modules (in layer
+/// order) into one `sysml_ir::Model`. Specialize sysml-std bases (`use sysml_std::prelude::*;`
+/// and `#[sysml::import("SysmlStdPower::*")]` etc.) instead of reinventing them; emit with
+/// `--omit-std` to keep the library packages out of the `.sysml` file.
+pub fn build_model() -> Model {
+    let mut packages = sysml_std::std_packages();
+    packages.extend([
+        types::sysml_package(),
+        requirements::sysml_package(),
+        subsystems::sysml_package(),
+        context::sysml_package(),
+    ]);
+    Model::new(packages)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sysml_emit::{audit_model_with_stdlib, emit_model, lint_model};
+
+    #[test]
+    fn model_emits_and_audits_zero_errors_zero_warnings() {
+        let model = build_model();
+        let sysml = emit_model(&model);
+        assert!(sysml.contains("package {{PASCAL}}Context"));
+
+        let audit = audit_model_with_stdlib("{{SNAKE}}", &model, None, None, true);
+        assert!(audit.stdlib_loaded, "OMG sysml.library must be loaded");
+        assert!(
+            audit.ok && audit.validation_errors == 0 && audit.validation_warnings == 0,
+            "{{SNAKE}} audit failed: {audit:#?}\n--- SYSML ---\n{sysml}"
+        );
+    }
+
+    #[test]
+    fn model_is_lint_clean() {
+        let report = lint_model("{{SNAKE}}", &build_model());
+        assert!(report.clean, "lint findings: {:#?}", report.findings);
+    }
+
+    #[test]
+    fn placeholder_requirement_is_satisfied_by_a_subsystem() {
+        let sysml = emit_model(&build_model());
+        assert!(sysml.contains("requirement def <'SYS-REQ-001'> PlaceholderRequirement"));
+        assert!(sysml.contains("satisfy requirement"));
+    }
+
+    #[test]
+    fn placeholder_gaps_are_tbds_not_numbers() {
+        // No limit, no evidence: the placeholder requirement cannot pass.
+        assert!(!requirements::PlaceholderRequirement::default().evaluate());
+        let tbds = sysml_emit::collect_tbd_ledger(&build_model());
+        assert_eq!(tbds.len(), 2, "{tbds:#?}");
+    }
+}

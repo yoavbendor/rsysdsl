@@ -47,6 +47,20 @@ pub trait SysmlInterfaceCore: 'static {
     type EndA: SysmlPortCore;
     type EndB: SysmlPortCore;
     const SYSML_NAME: &'static str;
+    /// `false` for an abstract classification interface that declares no `end` ports
+    /// (its `EndA`/`EndB` are [`NoInterfaceEnds`]). Concrete specializations must declare ends.
+    const HAS_ENDS: bool = true;
+}
+
+/// Placeholder end type of an abstract `#[sysml::interface(abstract)]` that declares no `end`
+/// fields (a pure taxonomy base). It connects to nothing, so such an interface can only be
+/// used through a specialization that declares its own two `#[sysml::end]` ports.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct NoInterfaceEnds;
+
+impl SysmlPortCore for NoInterfaceEnds {
+    type Conjugate = NoInterfaceEnds;
+    const SYSML_NAME: &'static str = "NoInterfaceEnds";
 }
 
 /// Zero-alloc compile-time marker trait for SysML `item def` types.
@@ -113,6 +127,33 @@ impl fmt::Display for NoStdTransitionError {
             "illegal transition in `{}` from `{}` on event `{}`",
             self.state_machine, self.from, self.event
         )
+    }
+}
+
+/// Outcome of dispatching an event to a state machine with `dispatch_with` / `dispatch_event`.
+///
+/// In SysML v2 an event that matches no transition from the current state (wrong trigger, or
+/// every guard false) is simply not consumed: the machine stays where it is. That is a normal
+/// outcome, so it is `Ignored` here rather than an error. (`step_with` / `step_event` keep
+/// returning `Err` for it, for callers that treat an unmatched event as a test failure.)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StepOutcome<S> {
+    /// A transition fired; the payload is the new current state (may equal the old one for a
+    /// self-transition).
+    Moved(S),
+    /// No transition matched; the state is unchanged.
+    Ignored,
+}
+
+impl<S> StepOutcome<S> {
+    /// `true` if a transition fired.
+    pub fn moved(&self) -> bool {
+        matches!(self, StepOutcome::Moved(_))
+    }
+
+    /// `true` if no transition matched.
+    pub fn is_ignored(&self) -> bool {
+        matches!(self, StepOutcome::Ignored)
     }
 }
 

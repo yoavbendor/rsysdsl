@@ -171,13 +171,13 @@ pub mod requirements_package {
     )]
     #[derive(Debug, Clone)]
     pub struct DPSThrottlingRange {
-        #[sysml::attr(ty = "Real", value = "10")]
+        #[sysml::attr(dimensionless, ty = "Real", value = "10")]
         pub actual_min_throttle_percentage: Quantity<f64>,
-        #[sysml::attr(ty = "Real", value = "10")]
+        #[sysml::attr(dimensionless, ty = "Real", value = "10")]
         pub min_required_throttle_percentage: Quantity<f64>,
-        #[sysml::attr(ty = "Real", value = "100")]
+        #[sysml::attr(dimensionless, ty = "Real", value = "100")]
         pub actual_max_throttle_percentage: Quantity<f64>,
-        #[sysml::attr(ty = "Real", value = "100")]
+        #[sysml::attr(dimensionless, ty = "Real", value = "100")]
         pub max_required_throttle_percentage: Quantity<f64>,
     }
 
@@ -389,9 +389,9 @@ pub mod technical_components_package {
         pub power_load: Quantity<f64>,
         #[sysml::attr(redefines = "failureRate", value = "3.0E-6", unit = "1/h")]
         pub failure_rate: Quantity<f64>,
-        #[sysml::attr(ty = "Real", value = "10")]
+        #[sysml::attr(dimensionless, ty = "Real", value = "10")]
         pub min_throttle_percent: Quantity<f64>,
-        #[sysml::attr(ty = "Real", value = "100")]
+        #[sysml::attr(dimensionless, ty = "Real", value = "100")]
         pub max_throttle_percent: Quantity<f64>,
         #[sysml::attr(subsets = "ISQ::speed", value = "3.05", unit = "m/s")]
         pub max_touchdown_vertical_velocity: Quantity<f64>,

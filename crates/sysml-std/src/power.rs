@@ -2,6 +2,10 @@
 
 use sysml_dsl::prelude::*;
 
+/// sysml-std library package. Abstract power bases declare units with no placeholder defaults;
+/// concrete standard supplies/stages carry generic library defaults that specializing models
+/// should redefine when their source specifies values (`rsysdsl lint` reports inherited ones
+/// as `inherited_std_default`).
 #[sysml::package(library, name = "SysmlStdPower")]
 #[sysml::import("ScalarValues::*")]
 #[sysml::import("SI::*")]
@@ -17,13 +21,13 @@ pub mod sysml_std_power {
     #[sysml::part(abstract)]
     #[derive(Debug, Clone, Copy)]
     pub struct PowerElement {
-        #[sysml::attr(default = 0.5, unit = "kg")]
+        #[sysml::attr(unit = "kg")]
         pub mass: Quantity<f64>,
-        #[sysml::attr(default = 100.0, unit = "W")]
+        #[sysml::attr(unit = "W")]
         pub rated_power: Quantity<f64>,
-        #[sysml::attr(default = 0.90)]
+        #[sysml::attr(dimensionless)]
         pub efficiency: f64,
-        #[sysml::attr(default = 10.0, unit = "W")]
+        #[sysml::attr(unit = "W")]
         pub waste_heat: Quantity<f64>,
         #[sysml::port]
         pub heat_out: ThermalPort,
@@ -34,9 +38,9 @@ pub mod sysml_std_power {
     #[sysml::specializes(PowerElement)]
     #[derive(Debug, Clone, Copy)]
     pub struct PowerSource {
-        #[sysml::attr(default = 12.0, unit = "V")]
+        #[sysml::attr(unit = "V")]
         pub nominal_voltage: Quantity<f64>,
-        #[sysml::attr(default = 10.0, unit = "A")]
+        #[sysml::attr(unit = "A")]
         pub max_current: Quantity<f64>,
         #[sysml::port]
         pub power_out: ElectricalPowerPort,
@@ -56,17 +60,16 @@ pub mod sysml_std_power {
     }
 
     /// Abstract rechargeable battery pack with charge input, BMS bus/telemetry, and thermal limits.
+    /// Inherits `nominal_voltage` and `max_current` from [`PowerSource`].
     #[sysml::part(abstract)]
     #[sysml::specializes(PowerSource)]
     #[derive(Debug, Clone, Copy)]
     pub struct BatteryPack {
-        #[sysml::attr(default = 18.0, unit = "V")]
-        pub pack_voltage: Quantity<f64>,
-        #[sysml::attr(default = 129600.0, unit = "J")]
+        #[sysml::attr(unit = "J")]
         pub energy_capacity: Quantity<f64>,
-        #[sysml::attr(default = 1.0)]
+        #[sysml::attr(dimensionless)]
         pub state_of_charge: f64,
-        #[sysml::attr(default = 333.15, unit = "K")]
+        #[sysml::attr(unit = "K")]
         pub max_cell_temp: Quantity<f64>,
         #[sysml::port]
         pub charge_in: Conjugated<ElectricalPowerPort>,
@@ -81,7 +84,7 @@ pub mod sysml_std_power {
     #[sysml::specializes(PowerElement)]
     #[derive(Debug, Clone, Copy)]
     pub struct PowerConverter {
-        #[sysml::attr(default = 12.0, unit = "V")]
+        #[sysml::attr(unit = "V")]
         pub output_voltage: Quantity<f64>,
         #[sysml::port]
         pub power_in: Conjugated<ElectricalPowerPort>,
@@ -116,7 +119,7 @@ pub mod sysml_std_power {
     pub struct HighVoltageTransformer {
         #[sysml::attr(redefines = "outputVoltage", default = 2100.0, unit = "V")]
         pub output_voltage: Quantity<f64>,
-        #[sysml::attr(default = 48.0)]
+        #[sysml::attr(dimensionless, default = 48.0)]
         pub hum_noise_db: f64,
         #[sysml::port]
         pub noise_out: AcousticPort,
@@ -167,9 +170,9 @@ pub mod sysml_std_power {
     #[sysml::specializes(ElectricalLoad)]
     #[derive(Debug, Clone, Copy)]
     pub struct RadiativeEmitterLoad {
-        #[sysml::attr(default = 2.45e9, unit = "Hz")]
+        #[sysml::attr(unit = "Hz")]
         pub emission_frequency: Quantity<f64>,
-        #[sysml::attr(default = 900.0, unit = "W")]
+        #[sysml::attr(unit = "W")]
         pub radiative_output_power: Quantity<f64>,
         #[sysml::port]
         pub radiation_out: RadiativePort,

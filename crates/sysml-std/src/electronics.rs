@@ -2,6 +2,10 @@
 
 use sysml_dsl::prelude::*;
 
+/// sysml-std library package. Abstract electronics bases declare units with no placeholder
+/// defaults; concrete sensor types carry generic library defaults that specializing models
+/// should redefine when their source specifies values (`rsysdsl lint` reports inherited ones
+/// as `inherited_std_default`).
 #[sysml::package(library, name = "SysmlStdElectronics")]
 #[sysml::import("ScalarValues::*")]
 #[sysml::import("SI::*")]
@@ -16,11 +20,11 @@ pub mod sysml_std_electronics {
     #[sysml::part(abstract)]
     #[derive(Debug, Clone, Copy)]
     pub struct ElectronicUnit {
-        #[sysml::attr(default = 0.05, unit = "kg")]
+        #[sysml::attr(unit = "kg")]
         pub mass: Quantity<f64>,
-        #[sysml::attr(default = 5.0, unit = "V")]
+        #[sysml::attr(unit = "V")]
         pub supply_voltage: Quantity<f64>,
-        #[sysml::attr(default = 1.0, unit = "W")]
+        #[sysml::attr(unit = "W")]
         pub power_draw: Quantity<f64>,
         #[sysml::port]
         pub power_in: Conjugated<ElectricalPowerPort>,
@@ -33,7 +37,7 @@ pub mod sysml_std_electronics {
     #[sysml::specializes(ElectronicUnit)]
     #[derive(Debug, Clone, Copy)]
     pub struct Microcontroller {
-        #[sysml::attr(default = 48000000.0, unit = "Hz")]
+        #[sysml::attr(unit = "Hz")]
         pub clock_freq: Quantity<f64>,
         #[sysml::port]
         pub sensor_in: Conjugated<TelemetryPort>,
@@ -48,7 +52,7 @@ pub mod sysml_std_electronics {
     #[sysml::specializes(ElectronicUnit)]
     #[derive(Debug, Clone, Copy)]
     pub struct SensorBase {
-        #[sysml::attr(default = 20.0, unit = "Hz")]
+        #[sysml::attr(unit = "Hz")]
         pub sample_rate: Quantity<f64>,
         #[sysml::port]
         pub reading_out: TelemetryPort,

@@ -15,37 +15,53 @@ You are authoring a **System as Code** model in **`rsysdsl`** — a strongly typ
    - Use `#[sysml::transition(on = Event, guard = expr, to = State)]` for guarded transitions.
    - Use `#[sysml::calc] pub fn ...` for pure calculations.
    - Put physics loops, test harnesses, or fault injectors in a separate `<system>_sim` crate (or `#[cfg(test)]`).
-3. **Never invent requirements, thresholds, or limits** that are not in the user's diagram or documents. If a value is unknown, mark it clearly in `///` doc or omit the constraint until the source document specifies it.
+3. **Never invent requirements, thresholds, limits or units** that are not in the user's diagram or documents. A gap is a **TBD with a written reason**, not a comment or a guess: `tbd_value = "reason"` (value not given, no `default`), `tbd_unit = "reason"` (unit not given), `#[sysml::tbd(reason = "...")]` (element open), `#[sysml::connect(tbd = "reason", ...)]` (link whose protocol is open). This includes numbers inherited from concrete `sysml-std` parents (such as 50 Hz / 230 V on `AcMainsSupply`; abstract `sysml-std` bases and flow items carry units only, with no numeric defaults): redefine those your source specifies, blank the ones it leaves open with `redefines = "...", tbd_value = "reason"`; `rsysdsl lint` lists the rest as `inherited_std_default`. Every TBD is emitted as `@TBD`, listed by `rsysdsl tbd`, and must be resolved by its `resolve_by` phase (`concept < preliminary < detailed < release`, default `detailed`): `rsysdsl audit --strict --maturity <phase>` fails on any TBD due at or before that phase (`release` = zero TBDs). Never add a TBD where the source gives the value, and never raise a `tbd-baseline.json` except deliberately, in the same commit as the new TBD.
 4. **Never finish without running the verification loop** (`cargo test` -> emit `.sysml` -> `rsysdsl audit --files ... --stdlib --strict`).
 
 ---
 
 ## 2. Quickstart: Creating & Verifying a New System Model
 
-Copy the minimal template crate [`examples/starter_model/`](examples/starter_model/) to start any new system:
+Scaffold every new system with `rsysdsl new`. It generates a compiling crate with the layered package structure (`<Name>Types` -> `<Name>Requirements` -> `<Name>Subsystems` -> `<Name>Context`; `#[sysml::satisfy]` goes on the realizing subsystem part), an emit binary and audit/lint tests, and registers it in the root `Cargo.toml`:
 
 ```bash
-# 1. Copy starter template (e.g., to examples/my_system) and add "examples/my_system" to root Cargo.toml
-cp -r examples/starter_model examples/my_system
-# Rename package name in examples/my_system/Cargo.toml and crate name in src/bin/emit.rs
+# 0. Install the CLI once as `rsysdsl` (from the repo root; re-run after pulling changes).
+#    Without installing, `cargo run -q -p sysml-cli -- <cmd>` from the repo root is equivalent.
+cargo install --path crates/sysml-cli
+
+# 1. Scaffold examples/my_system (package `my-system`); refuses to overwrite an existing directory.
+#    WARNING: without --dir this writes INTO THIS REPO's examples/ and edits the root Cargo.toml.
+#    Options: --dir <path>, --no-workspace (standalone crate, not added to root Cargo.toml members)
+rsysdsl new my_system
+# Standalone model outside the repo: `rsysdsl new my_system --no-workspace --dir ../my_system`.
+#   Its Cargo.toml has its own [workspace] and ABSOLUTE path deps (sysml-dsl, sysml-std, sysml-emit)
+#   on this checkout (update them if the checkout moves). It is not a workspace member, so `-p`
+#   does not work: run steps 2-3 inside the crate (`cd ../my_system && cargo test`) or with
+#   `--manifest-path ../my_system/Cargo.toml`; the JSON printed by `rsysdsl new` lists the exact commands.
+# Alternative: copy the single-package starter template (examples/starter_model/), add
+# "examples/my_system" to root Cargo.toml members, and rename the package in Cargo.toml + src/bin/emit.rs
 
 # 2. Fast compile + unit tests (catches port, connection, specialization, and constraint bugs)
 cargo test -p my-system
 
 # 3. Emit OMG-valid .sysml for VS Code SysML v2 / sysml-reactflow
-cargo run -q -p my-system --bin emit -- -o target/my_system.sysml
+#    (--omit-std keeps the sysml-std library packages out of the file; audit/lint/view load them)
+cargo run -q -p my-system --bin emit -- -o target/my_system.sysml --omit-std
 
 # 4. Strict 0-error / 0-warning OMG Standard Library audit + orphan requirement check
-cargo run -q -p sysml-cli -- audit --files target/my_system.sysml --stdlib --strict --pretty
+rsysdsl audit --files target/my_system.sysml --stdlib --strict --pretty
 
 # 5. Export ASPICE bidirectional traceability matrix (Markdown or CSV)
-cargo run -q -p sysml-cli -- trace-matrix --files target/my_system.sysml --format markdown
+rsysdsl trace-matrix --files target/my_system.sysml --format markdown
 
 # 6. Check architecture & hierarchy smells (duplicate parts, unclassified interfaces, flat assemblies)
-cargo run -q -p sysml-cli -- lint --files target/my_system.sysml --strict --format markdown
+rsysdsl lint --files target/my_system.sysml --strict --format markdown
+
+# 6b. List open TBDs (gaps in the source); gate them by phase with `audit --maturity <phase>`
+rsysdsl tbd --files target/my_system.sysml --format markdown
 
 # 7. Generate a standalone interactive offline HTML viewer (opens directly in Chrome/Edge; 0 VS Code extensions or internet)
-cargo run -q -p sysml-cli -- view target/my_system.sysml --view interconnection -o target/my_system.html
+rsysdsl view target/my_system.sysml --view interconnection -o target/my_system.html
 ```
 
 ---
@@ -65,9 +81,10 @@ You do **NOT** need to write raw SysML v2 textual syntax. Prefer specializing fr
 | **Logical -> Physical Allocation** | `#[sysml::allocate(name = "fnToHw", from = logical, to = hw)]` | Placed on parent assembly; `rustc` checks both dotted paths. |
 | **Arrow Payload** (signal/fluid/power) | `#[sysml::item] pub struct TempReading { ... }` | Derive `Debug, Clone, Copy, Default`. Prefer `SysmlStdFlows::*`. |
 | **Arrow Endpoint** (Port) | `#[sysml::port]` with `#[sysml::out_item]` / `#[sysml::in_item]` / `#[sysml::inout_item]` | Directed ports MUST connect `Port` <-> `Conjugated<Port>`. Use `#[sysml::port(symmetric)]` for bidirectional buses (CAN/I2C/Ethernet). |
-| **Arrow Between Boxes** | `#[sysml::interface]` + `#[sysml::connect(interface = Bus, name = "...", from = a.p_out, to = b.p_in)]` | Placed on the parent assembly struct; `rustc` checks field names and port compatibility! |
-| **Parameter / Property** | `#[sysml::attr(default = 50.0, unit = "W")] pub power: Quantity<f64>` | Use base SI units (`s`, `m`, `kg`, `N`, `W`, `V`, `A`, `K`, `Hz`, `Pa`, `J`, `m/s`, `kg/s`). |
-| **Requirement + Provenance** | `#[sysml::requirement(id = "REQ-001")]` + `#[sysml::rationale("Source: Doc §3.2")]` + `#[sysml::require_constraint(...)]` | Link every requirement via `#[sysml::satisfy(req = MyReq, id = "REQ-001")]` on a part (0 orphans!). |
+| **Arrow Between Boxes** | `#[sysml::interface]` + `#[sysml::connect(interface = Bus, name = "...", from = a.p_out, to = b.p_in)]` | Placed on the parent assembly struct; `rustc` checks field names and port compatibility! Protocol not in the source: `#[sysml::connect(tbd = "reason", name = "...", from = ..., to = ...)]` (TBD channel, ports unchecked). |
+| **Parameter / Property** | `#[sysml::attr(default = 50.0, unit = "W")] pub power: Quantity<f64>` | Every numeric attribute declares exactly one of `unit = "..."`, `dimensionless` (counts, ratios, flags), `tbd_unit = "reason"`, `custom_unit = "reason"` (with `unit`). Use base SI units (`s`, `m`, `kg`, `N`, `W`, `V`, `A`, `K`, `Hz`, `Pa`, `J`); composites in ASCII (`m/s`, `m^3/s`, `N*m`, `J/(kg*K)`). Unknown / non-OMG units (`kN`, `ms`, `%`) and dimension-mismatched constraints/guards are compile errors. |
+| **Gap in the source (TBD)** | `#[sysml::attr(unit = "W", tbd_value = "reason")]`, `#[sysml::tbd(reason = "...", owner = "...", resolve_by = "preliminary")]` | Counted debt, never a hidden guess: `rsysdsl tbd --files ...` lists it, `audit --maturity` gates it, `tbd --baseline ... --check` ratchets it. See PATTERNS Pattern 8. |
+| **Requirement + Provenance** | `#[sysml::requirement(id = "REQ-001")]` + `#[sysml::rationale("Source: Doc §3.2")]` + `#[sysml::require_constraint(...)]` | Link every requirement via `#[sysml::satisfy(req = MyReq, id = "REQ-001")]` on a part (0 orphans!), also across packages. Limits get `default = <spec value>`; measured values get `#[sysml::attr(unit = "...", evidence)]` with **no default** (never copy the limit). |
 | **Function / Behavior** | `#[sysml::action]` + `#[sysml::perform(name: ActionTy)]` on a part | Allocates functions to logical/physical parts. |
 | **Operating Modes / Faults** | `#[sysml::state(subject = Assembly)] pub enum Mode { ... }` | Variants = states; `#[sysml::initial]` marks start; `#[sysml::transition(on = Evt, guard = ..., to = Target)]`. |
 | **Formula / Budget** | `#[sysml::calc] pub fn margin(limit: f64, actual: f64) -> f64 { limit - actual }` | Only pure arithmetic/comparisons & calls to other `#[sysml::calc]` fns. Reuse `SysmlStdFlows` physics calcs! |
@@ -103,7 +120,7 @@ Always build the system in **compiling, auditable increments** — never try to 
    - **Gate:** `cargo test` + `emit` + `rsysdsl audit --files ... --stdlib --strict` -> **0 errors, 0 warnings**.
 2. **Phase 1.5 — Refactor & Generalize (`rsysdsl lint`):**
    - Run `rsysdsl lint --files target/my_system.sysml --strict --format markdown`.
-   - Refactor copy-paste parts into `#[sysml::part(abstract)]` parents + `#[sysml::specializes]` + `#[sysml::variation]`, classify custom interfaces under `InfoChannel`/`DigitalBusChannel`, and break flat >10-part God-assemblies into domain subsystems (`Power`, `Electronics`, `Mechanics`, `HMI`).
+   - Refactor copy-paste parts into `#[sysml::part(abstract)]` parents + `#[sysml::specializes]` + `#[sysml::variation]`, classify custom interfaces under an end-less abstract base (`#[sysml::interface(abstract)] pub struct EnergyChannel {}` + `#[sysml::specializes(EnergyChannel)]`; never strip interfaces from connects), and break flat >10-part God-assemblies into domain subsystems (`Power`, `Electronics`, `Mechanics`, `HMI`).
    - **Gate:** `rsysdsl lint --strict` -> **CLEAN (0 warnings)**.
 3. **Phase 2 — Requirements & Document Provenance:**
    - Add a `Requirements` package with `#[sysml::requirement(id = "...")]`.
@@ -112,7 +129,7 @@ Always build the system in **compiling, auditable increments** — never try to 
    - **Gate:** `audit --stdlib --strict` -> **0 orphan requirements** + `trace-matrix --format markdown` shows 100% linkage.
 4. **Phase 3 — Functions, Modes & Calculations:**
    - Add `#[sysml::action]` + `#[sysml::perform(...)]`, executable guarded `#[sysml::state]` enums, and `#[sysml::calc]` formulas (reusing `SysmlStdFlows` physical laws).
-   - **Gate:** Unit tests exercise `evaluate()`, `step_with()`, and `#[sysml::calc]` functions; `audit --stdlib --strict` stays at 0 errors / 0 warnings.
+   - **Gate:** Unit tests exercise `evaluate()`, `dispatch_with()` (returns `StepOutcome::Ignored` for an event no transition takes; `step_with()` returns `Err` for it), and `#[sysml::calc]` functions; `audit --stdlib --strict` stays at 0 errors / 0 warnings.
 5. **Phase 4 — ISO 26262 Safety & Closed-Loop Simulation (Optional):**
    - Add `#[sysml::safety_goal]`, `#[sysml::fmea]`, `#[sysml::independent]`, `#[sysml::asil_decompose]`, and (if needed) a separate `<system>_sim` crate.
 

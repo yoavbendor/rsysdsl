@@ -55,7 +55,7 @@ pub mod solar_system_model {
         pub orbital_radius: Quantity<f64>,
         #[sysml::attr(redefines = "orbitalPeriod", default = 2.36059e6, unit = "s")]
         pub orbital_period: Quantity<f64>,
-        #[sysml::attr(redefines = "bondAlbedo", default = 0.11)]
+        #[sysml::attr(dimensionless, redefines = "bondAlbedo", default = 0.11)]
         pub bond_albedo: f64,
     }
 
@@ -74,7 +74,7 @@ pub mod solar_system_model {
         pub orbital_radius: Quantity<f64>,
         #[sysml::attr(redefines = "orbitalPeriod", default = 3.06822e5, unit = "s")]
         pub orbital_period: Quantity<f64>,
-        #[sysml::attr(redefines = "bondAlbedo", default = 0.67)]
+        #[sysml::attr(dimensionless, redefines = "bondAlbedo", default = 0.67)]
         pub bond_albedo: f64,
     }
 
@@ -93,7 +93,7 @@ pub mod solar_system_model {
         pub orbital_radius: Quantity<f64>,
         #[sysml::attr(redefines = "orbitalPeriod", default = 7.60052e6, unit = "s")]
         pub orbital_period: Quantity<f64>,
-        #[sysml::attr(redefines = "bondAlbedo", default = 0.088)]
+        #[sysml::attr(dimensionless, redefines = "bondAlbedo", default = 0.088)]
         pub bond_albedo: f64,
         #[sysml::port(redefines)]
         pub radiation_in: Conjugated<RadiativePort>,
@@ -116,7 +116,7 @@ pub mod solar_system_model {
         pub orbital_radius: Quantity<f64>,
         #[sysml::attr(redefines = "orbitalPeriod", default = 1.94142e7, unit = "s")]
         pub orbital_period: Quantity<f64>,
-        #[sysml::attr(redefines = "bondAlbedo", default = 0.76)]
+        #[sysml::attr(dimensionless, redefines = "bondAlbedo", default = 0.76)]
         pub bond_albedo: f64,
         #[sysml::port(redefines)]
         pub radiation_in: Conjugated<RadiativePort>,
@@ -141,7 +141,7 @@ pub mod solar_system_model {
         pub orbital_radius: Quantity<f64>,
         #[sysml::attr(redefines = "orbitalPeriod", default = 3.15581e7, unit = "s")]
         pub orbital_period: Quantity<f64>,
-        #[sysml::attr(redefines = "bondAlbedo", default = 0.306)]
+        #[sysml::attr(dimensionless, redefines = "bondAlbedo", default = 0.306)]
         pub bond_albedo: f64,
         #[sysml::port(redefines)]
         pub radiation_in: Conjugated<RadiativePort>,
@@ -166,7 +166,7 @@ pub mod solar_system_model {
         pub orbital_radius: Quantity<f64>,
         #[sysml::attr(redefines = "orbitalPeriod", default = 5.93550e7, unit = "s")]
         pub orbital_period: Quantity<f64>,
-        #[sysml::attr(redefines = "bondAlbedo", default = 0.25)]
+        #[sysml::attr(dimensionless, redefines = "bondAlbedo", default = 0.25)]
         pub bond_albedo: f64,
         #[sysml::port(redefines)]
         pub radiation_in: Conjugated<RadiativePort>,
@@ -189,7 +189,7 @@ pub mod solar_system_model {
         pub orbital_radius: Quantity<f64>,
         #[sysml::attr(redefines = "orbitalPeriod", default = 3.74356e8, unit = "s")]
         pub orbital_period: Quantity<f64>,
-        #[sysml::attr(redefines = "bondAlbedo", default = 0.503)]
+        #[sysml::attr(dimensionless, redefines = "bondAlbedo", default = 0.503)]
         pub bond_albedo: f64,
         #[sysml::port(redefines)]
         pub radiation_in: Conjugated<RadiativePort>,
@@ -214,7 +214,7 @@ pub mod solar_system_model {
         pub orbital_radius: Quantity<f64>,
         #[sysml::attr(redefines = "orbitalPeriod", default = 9.29292e8, unit = "s")]
         pub orbital_period: Quantity<f64>,
-        #[sysml::attr(redefines = "bondAlbedo", default = 0.342)]
+        #[sysml::attr(dimensionless, redefines = "bondAlbedo", default = 0.342)]
         pub bond_albedo: f64,
         #[sysml::port(redefines)]
         pub radiation_in: Conjugated<RadiativePort>,
@@ -237,7 +237,7 @@ pub mod solar_system_model {
         pub orbital_radius: Quantity<f64>,
         #[sysml::attr(redefines = "orbitalPeriod", default = 2.65137e9, unit = "s")]
         pub orbital_period: Quantity<f64>,
-        #[sysml::attr(redefines = "bondAlbedo", default = 0.300)]
+        #[sysml::attr(dimensionless, redefines = "bondAlbedo", default = 0.300)]
         pub bond_albedo: f64,
         #[sysml::port(redefines)]
         pub radiation_in: Conjugated<RadiativePort>,
@@ -260,7 +260,7 @@ pub mod solar_system_model {
         pub orbital_radius: Quantity<f64>,
         #[sysml::attr(redefines = "orbitalPeriod", default = 5.20042e9, unit = "s")]
         pub orbital_period: Quantity<f64>,
-        #[sysml::attr(redefines = "bondAlbedo", default = 0.290)]
+        #[sysml::attr(dimensionless, redefines = "bondAlbedo", default = 0.290)]
         pub bond_albedo: f64,
         #[sysml::port(redefines)]
         pub radiation_in: Conjugated<RadiativePort>,
@@ -351,11 +351,11 @@ pub mod solar_system_model {
     #[sysml::require_constraint(min_irradiance <= earth_irradiance && earth_irradiance <= max_irradiance)]
     #[derive(Debug, Clone, Copy)]
     pub struct EarthOrbitalIrradianceReq {
-        #[sysml::attr(default = 1340.0)]
+        #[sysml::attr(default = 1340.0, unit = "W/m^2")]
         pub min_irradiance: f64,
-        #[sysml::attr(default = 1361.2)]
+        #[sysml::attr(default = 1361.2, unit = "W/m^2")]
         pub earth_irradiance: f64,
-        #[sysml::attr(default = 1385.0)]
+        #[sysml::attr(default = 1385.0, unit = "W/m^2")]
         pub max_irradiance: f64,
     }
 

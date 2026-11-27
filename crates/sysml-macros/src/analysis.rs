@@ -94,6 +94,7 @@ pub fn expand_analysis(args: TokenStream, mut item: ItemStruct) -> syn::Result<T
             let type_name = explicit_ty.filter(|t| !t.is_empty());
             let value = fkv.get_str("value").or_else(|| fkv.get_str("expr"));
             let unit = fkv.get_str("unit");
+            crate::units_check::validate_unit_kv(&fkv)?;
 
             let ty_tok = quote_opt_str(&type_name);
             let subsets_tok = quote_vec_str(&subsets);
@@ -116,6 +117,7 @@ pub fn expand_analysis(args: TokenStream, mut item: ItemStruct) -> syn::Result<T
         }
     }
 
+    crate::tbd::reject_tbd(&item.attrs, "analysis")?;
     item.attrs = strip_sysml_attrs(std::mem::take(&mut item.attrs));
     let ident = &item.ident;
     let doc_tok = quote_opt_str(&doc);

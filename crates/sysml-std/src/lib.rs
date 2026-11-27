@@ -8,6 +8,20 @@
 //! - [`electronics`]: `ElectronicUnit`, `Microcontroller`, `SensorBase`, `TemperatureSensor`, `FluidSensor`
 //! - [`hmi`]: `HumanOperator`, `HmiPanel`
 //! - [`natural`]: `NaturalBody`, `StarBody`, `PlanetaryBody` (`RockyPlanet`, `GasGiant`, `IceGiant`, `NaturalSatellite`), `FluidReservoir`
+//!
+//! ## Library defaults policy
+//! Abstract bases (`PowerElement`, `PowerSource`, `BatteryPack`, `PhysicalComponent`,
+//! `ElectricMotor`, `Microcontroller`, `SensorBase`, `HmiPanel`, `NaturalBody`, etc.), flow
+//! items (`ElectricalEnergy`, `ThermalEnergy`, `FluidFlow`, ...), and generic links
+//! (`ElectricalLink`, `MechanicalLink`, `CommandChannel`, `TelemetryChannel`) declare SI units
+//! with **no numeric defaults**, so specializing models never inherit fictional placeholders.
+//! Concrete standard parts and protocol channels (`AcMainsSupply`, `UartChannel`, `I2cChannel`,
+//! `SpiChannel`, `CanFdChannel`, `EthernetChannel`, `AmbientEnvironment`, `DeepSpaceSink`, etc.)
+//! carry normative/reference library defaults: a specializing model must redefine every value its
+//! source specifies (`#[sysml::attr(redefines = "mainsFrequency", default = 60.0, unit = "Hz")]`),
+//! or blank any open one with `redefines = "...", tbd_value = "reason"`. `rsysdsl lint` reports
+//! inherited concrete defaults as `inherited_std_default` (info).
+//! Emit with `emit --omit-std` to keep these packages out of the model's `.sysml` file.
 
 pub mod comms;
 pub mod electronics;

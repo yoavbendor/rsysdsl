@@ -1292,6 +1292,8 @@ fn is_stdlib_package(pkg: &str) -> bool {
             | "Objects"
             | "Performances"
             | "ISO26262Metadata"
+            | "TbdMetadata"
+            | "CustomUnitMetadata"
     )
 }
 

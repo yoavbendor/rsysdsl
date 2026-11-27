@@ -1,0 +1,5 @@
+error[E0080]: evaluation panicked: concrete #[sysml::interface] `HeatLink` inherits no `end` ports from its abstract base interface; declare two #[sysml::end] port fields
+ --> tests/ui/bad_interface_no_ends.rs:7:1
+  |
+7 | #[sysml::interface]
+  | ^^^^^^^^^^^^^^^^^^^ evaluation of `_` failed here

@@ -48,7 +48,7 @@ cargo check -p embedded-flight-controller --no-default-features
 ```
 
 `cargo test --workspace` automatically runs:
-1. **Gate 1 — Rust Compile-Time Safety, Anti-Leakage & ISO 26262 (`crates/sysml-dsl/tests/gate1_compile_safety.rs`):** `trybuild` verifies 1 valid model compiles and **14** invalid/leaky models fail `rustc` (port polarity/mismatch, cross-kind `:>` specialization, wrong requirement ID, non-action `perform`, missing state target, raw `fn`/`impl`/unannotated `struct` inside `#[sysml::package]`, typo in `#[sysml::require_constraint]`, opaque Rust call in `#[sysml::calc]`, nonexistent field in `#[sysml::transition]` guard, illegal ISO 26262 `ASIL_D -> (ASIL_B, ASIL_A)` decomposition, and missing `#[sysml::independent(...)]` freedom-from-interference witness).
+1. **Gate 1 — Rust Compile-Time Safety, Anti-Leakage & ISO 26262 (`crates/sysml-dsl/tests/gate1_compile_safety.rs`):** `trybuild` verifies 1 valid model compiles and **22** invalid/leaky models fail `rustc` (port polarity/mismatch, cross-kind `:>` specialization, wrong requirement ID, non-action `perform`, missing state target, raw `fn`/`impl`/unannotated `struct` inside `#[sysml::package]`, typo in `#[sysml::require_constraint]`, opaque Rust call in `#[sysml::calc]`, nonexistent field in `#[sysml::transition]` guard, illegal ISO 26262 `ASIL_D -> (ASIL_B, ASIL_A)` decomposition, missing `#[sysml::independent(...)]` freedom-from-interference witness, unknown / non-OMG units, dimensionally inconsistent constraints and guards, bad `redefines` targets, and a concrete interface without `end` ports).
 2. **Gate 2 — Normative SysML v2 Validation & Audit (`crates/sysml-lift/tests/apollo11_roundtrip.rs`, `examples/embedded_flight_controller/src/lib.rs`):** Validates both `apollo11-model` and `embedded-flight-controller` (including `@SafetyGoal`, `@FMEA`, `@AsilDecomposition`, `calc def`s, and guarded transitions) against the full official **OMG SysML v2 Standard Library (`sysml.library`)** via `Open-MBEE/sysml-toolkit` with **0 errors AND 0 warnings**, and runs `audit_model_with_stdlib(..., strict = true)` (**0 orphan requirements, 0 unverified constrained requirements**).
 3. **Gate 3 — Semantic Round-Trip Fidelity (`crates/sysml-lift/tests/apollo11_roundtrip.rs`):** Lifts a 13-package Airbus Apollo 11 vertical slice (all 5 CoSMA layers + `CapabilitiesPackage`, `CalculationsPackage`, `AnalysisPackage`, 0 unsupported) -> generates Rust DSL -> compiles & executes it with `cargo run` -> re-emits `.sysml` -> validates with Open-MBEE -> verifies **100% semantic match (0 missing, 0 extra)**; plus audits all 28 Airbus Apollo 11 files (**2,916 / 2,916 facts matched, 100.0% corpus coverage, 28 / 28 files at 0 unsupported**).
 4. **Gate 4 — Closed-Loop Executable Verification (`examples/apollo11_sim/src/lib.rs`, `examples/embedded_flight_controller/src/lib.rs`):** Executes terminal powered-descent physics and DPS stuck-throttle fault injection directly on `apollo11-model` (emitting JSON verdicts linked to `HLR-R002`, `CLR-R050`, `CLR-R057`, `CLR-R058`) and exercises the `#![no_std]` ISO 26262 flight controller safety state machine and FTTI requirement constraints.
@@ -56,30 +56,38 @@ cargo check -p embedded-flight-controller --no-default-features
 
 ### Agent-First CLI (`rsysdsl`)
 
+The CLI crate `crates/sysml-cli` builds a binary named `rsysdsl`. Install it once from the repo root:
+
+```bash
+cargo install --path crates/sysml-cli   # puts `rsysdsl` on PATH (~/.cargo/bin); re-run after pulling
+```
+
+Every `rsysdsl <cmd> ...` below is equivalent to `rsysdsl <cmd> ...` run from the repo root (no install needed).
+
 ```bash
 # Emit OMG-valid SysML v2 from the pure declarative 5-layer Apollo 11 Rust DSL model
-cargo run -q -p sysml-cli -- emit --model apollo11-model --pretty
+rsysdsl emit --model apollo11-model --pretty
 
 # Emit raw .sysml text to a file
-cargo run -q -p sysml-cli -- emit --model apollo11-model --raw -o /tmp/apollo11_model.sysml
+rsysdsl emit --model apollo11-model --raw -o /tmp/apollo11_model.sysml
 
 # Run strict 0-warning OMG Standard Library semantic validation + orphan-requirement + verification audit
-cargo run -q -p sysml-cli -- audit --model apollo11-model --verify --stdlib --strict --pretty
+rsysdsl audit --model apollo11-model --verify --stdlib --strict --pretty
 
 # Export ASPICE bidirectional traceability matrix (JSON, Markdown, or RFC-4180 CSV)
-cargo run -q -p sysml-cli -- trace-matrix --model apollo11-model --verify --format markdown
-cargo run -q -p sysml-cli -- trace-matrix --model apollo11-model --verify --format csv -o /tmp/trace.csv
+rsysdsl trace-matrix --model apollo11-model --verify --format markdown
+rsysdsl trace-matrix --model apollo11-model --verify --format csv -o /tmp/trace.csv
 
 # Export ISO 26262 Safety, FMEA RPN Ranking & Minimal Fault Cut-Set Report (JSON or Markdown)
-cargo run -q -p sysml-cli -- safety-report --model embedded-flight-controller --format markdown
+rsysdsl safety-report --model embedded-flight-controller --format markdown
 
 # Generate a traceability matrix directly from existing Airbus Apollo 11 .sysml files
-cargo run -q -p sysml-cli -- trace-matrix --format markdown --files \
+rsysdsl trace-matrix --format markdown --files \
   tests/fixtures/apollo-11-sysml-v2/Requirements/TechnicalRequirementsPackage.sysml \
   tests/fixtures/apollo-11-sysml-v2/Technical/SystemSpecificationPackage.sysml
 
 # Lift real Airbus Apollo 11 .sysml files into compilable Rust DSL
-cargo run -q -p sysml-cli -- lift \
+rsysdsl lift \
   tests/fixtures/apollo-11-sysml-v2/CoSMA/CoSMAPackage.sysml \
   tests/fixtures/apollo-11-sysml-v2/Logical/LogicalComponentsPackage.sysml \
   tests/fixtures/apollo-11-sysml-v2/Technical/TechnicalPortsPackage.sysml \
@@ -87,17 +95,17 @@ cargo run -q -p sysml-cli -- lift \
   -o /tmp/apollo11_lifted.rs
 
 # Run bidirectional round-trip check (exit 0 = valid + 100% semantic fidelity)
-cargo run -q -p sysml-cli -- roundtrip-check --pretty \
+rsysdsl roundtrip-check --pretty \
   tests/fixtures/apollo-11-sysml-v2/CoSMA/CoSMAPackage.sysml \
   tests/fixtures/apollo-11-sysml-v2/Logical/LogicalComponentsPackage.sysml \
   tests/fixtures/apollo-11-sysml-v2/Technical/TechnicalPortsPackage.sysml \
   tests/fixtures/apollo-11-sysml-v2/Technical/TechnicalComponentsPackage.sysml
 
 # Execute closed-loop Powered Descent verification (nominal + fault injection)
-cargo run -q -p sysml-cli -- verify --scenario all --pretty
+rsysdsl verify --scenario all --pretty
 
 # Validate any .sysml file with the embedded Open-MBEE sysml-toolkit oracle + OMG stdlib
-cargo run -q -p sysml-cli -- validate --stdlib --strict --pretty /tmp/apollo11_model.sysml
+rsysdsl validate --stdlib --strict --pretty /tmp/apollo11_model.sysml
 ```
 
 ## References & Provenance

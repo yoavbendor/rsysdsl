@@ -75,3 +75,55 @@ Start with **Tier 1 + Tier 2 MVP (`crates/sysml-sim`)**:
 1. Define a minimal `#![no_std]`-compatible `SimClock` + `TraceRecorder` + `ScenarioVerdict` crate (~250 lines, zero heavy deps).
 2. Run a live 120-second coupled thermal/interlock simulation on **`microwave`** and a 90-minute wash cycle on **`dishwasher`** + a **2Ah vs 5Ah** battery discharge comparison on **`power_tools_family`**.
 3. Wire `--trace` playback into our offline HTML viewer and publish live simulation traces right alongside the SysML v2 diagrams on GitHub Pages!
+
+---
+
+## 4. Implemented Today: `crates/sysml-sim` (Stage S2)
+
+A small, deterministic fixed-step runner (deps: `sysml-ir`, `serde`, `serde_json`; no ODE framework).
+Three-tier rule: `model crate <- runner crate (e.g. apollo11-sim) -> sysml-sim`; models never depend on it.
+
+```rust
+pub trait Scenario: Sized + 'static {           // the struct IS the simulation state
+    fn name(&self) -> &str;
+    fn dt(&self) -> f64;                          // fixed step [s]; t_k = k * dt (no drift)
+    fn duration(&self) -> f64;                    // max simulated time [s]
+    fn requirement_ids(&self) -> Vec<String>;     // default: the monitors' IDs
+    fn initialize(&mut self) {}                   // e.g. drive the mode machine to its start phase
+    fn step(&mut self, t: f64, dt: f64);          // plant + controller; may call step_with(...)
+    fn is_done(&self, t: f64) -> bool { false }   // early stop (touchdown, ...)
+    fn finalize(&mut self, t: f64) {}             // terminal event (e.g. TouchdownTelemetry)
+    fn signals(&self) -> Vec<(&'static str, f64)>;// recorded into the trace every sample
+    fn mode(&self) -> Option<&str> { None }       // e.g. sysml_state_name(); changes -> trace events
+    fn monitors(&self) -> Vec<Monitor<Self>>;
+    fn faults(&self) -> Vec<Fault<Self>> { vec![] } // Fault::at(t_s, name, |s| ...)
+}
+
+pub fn run<S: Scenario>(s: &mut S) -> RunResult;   // trace + Vec<Verdict>; .to_json(), .to_report(model)
+pub fn rk4_step<const N: usize>(f, t, x: &[f64; N], dt) -> [f64; N];
+pub struct ZeroCrossing;                          // .update(t, g) -> Option<t_cross> (event detection)
+
+Monitor::requirement(|s| MyReq { actual: .., ..Default::default() })  // calls EvaluableRequirement::evaluate()
+    .at_end()                    // or sampled every step (default)
+    .with_margin(|s| limit - actual)
+    .with_evidence(|s| json!({..}))
+    .satisfied_by("Path.to.part").messages("pass msg", "fail msg");
+Monitor::new("REQ-ID", |s| predicate)             // any closure
+
+pub struct Verdict { scenario, requirement_id, requirement_name, satisfied_by, pass, sampling,
+                     samples, first_violation_s: Option<f64>, min_margin: Option<f64>, message, evidence }
+```
+
+Runner crates expose `pub fn scenarios() -> Vec<sysml_sim::RegisteredScenario>`; the CLI registers them:
+
+```bash
+rsysdsl verify --list                                   # registered scenarios (JSON)
+rsysdsl verify --scenario nominal                       # name or alias; default: nominal
+rsysdsl verify --scenario all                           # {"ok", "<key>": report, ...}
+rsysdsl verify --scenario fault --trace target/fault.json   # full time-series trace + verdicts
+```
+
+Apollo 11 (`examples/apollo11_sim::PoweredDescentScenario`) is the first port; its verdict JSON is
+byte-identical to the pre-port output. Limitations: one fixed `dt` per scenario (no adaptive
+stepping), event times inside a step are interpolated by `ZeroCrossing` but the trace records the
+step-end time, and evidence is captured at the end of the run.

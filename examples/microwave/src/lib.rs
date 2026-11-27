@@ -20,6 +20,8 @@ use sysml_dsl::prelude::*;
 #[sysml::import("SysmlStdMechanics::*")]
 #[sysml::import("SysmlStdElectronics::*")]
 #[sysml::import("SysmlStdHmi::*")]
+#[sysml::import("ModelingMetadata::*")]
+#[sysml::import("ISO26262Metadata::*")]
 pub mod microwave_model {
     use super::*;
     use sysml_std::prelude::*;
@@ -32,7 +34,7 @@ pub mod microwave_model {
     #[sysml::item]
     #[derive(Debug, Clone, Copy, Default, PartialEq)]
     pub struct CookStartCommand {
-        #[sysml::attr(default = 0.0)]
+        #[sysml::attr(dimensionless, default = 0.0)]
         pub door_closed: f64,
         #[sysml::attr(default = 900.0, unit = "W")]
         pub requested_rf_power_w: f64,
@@ -42,9 +44,9 @@ pub mod microwave_model {
     #[sysml::item]
     #[derive(Debug, Clone, Copy, Default, PartialEq)]
     pub struct DoorInterlockEvent {
-        #[sysml::attr(default = 0.0)]
+        #[sysml::attr(dimensionless, default = 0.0)]
         pub door_open: f64,
-        #[sysml::attr(default = 1.0)]
+        #[sysml::attr(dimensionless, default = 1.0)]
         pub door_closed: f64,
     }
 
@@ -60,7 +62,7 @@ pub mod microwave_model {
     #[sysml::item]
     #[derive(Debug, Clone, Copy, Default, PartialEq)]
     pub struct CookStopEvent {
-        #[sysml::attr(default = 1.0)]
+        #[sysml::attr(dimensionless, default = 1.0)]
         pub cycle_done: f64,
     }
 
@@ -104,7 +106,8 @@ pub mod microwave_model {
     pub struct MagnetronRfOutputRequirement {
         #[sysml::attr(default = 800.0, unit = "W")]
         pub min_rf_power_w: Quantity<f64>,
-        #[sysml::attr(default = 900.0, unit = "W")]
+        /// Evidence: supplied by `microwave_sim` (MW-001 monitor); 900 W is a model estimate.
+        #[sysml::attr(default = 900.0, unit = "W", evidence)]
         pub rf_output_power_w: Quantity<f64>,
     }
 
@@ -115,7 +118,7 @@ pub mod microwave_model {
     pub struct MagnetronCoolingTempRequirement {
         #[sysml::attr(default = 45.0, unit = "K")]
         pub max_temp_rise_k: Quantity<f64>,
-        #[sysml::attr(default = 33.17, unit = "K")]
+        #[sysml::attr(default = 33.17, unit = "K", evidence)]
         pub actual_temp_rise_k: Quantity<f64>,
     }
 
@@ -124,20 +127,32 @@ pub mod microwave_model {
     #[sysml::require_constraint(operating_noise_db <= max_noise_db)]
     #[derive(Debug, Clone, Copy)]
     pub struct AcousticNoiseLimitRequirement {
-        #[sysml::attr(default = 58.0)]
+        #[sysml::attr(dimensionless, default = 58.0)]
         pub max_noise_db: f64,
-        #[sysml::attr(default = 54.0)]
+        #[sysml::attr(dimensionless, default = 54.0, evidence)]
         pub operating_noise_db: f64,
     }
 
     /// MW-004: Dual redundant door interlocks shall cut off HV magnetron excitation within 20 ms of door opening.
+    ///
+    /// Also carries the door-interlock safety goal (hazard: RF exposure with the door open;
+    /// safe state: `DoorOpenCutoff`, i.e. HV/RF off).
+    /// - `ftti_ms = 20`: taken from this requirement's own `max_cutoff_latency_s = 0.020 s`
+    ///   (same quantity: door opening -> HV excitation cut off). Not derived from a separate
+    ///   hazard analysis.
+    /// - `asil = AsilD`: PLACEHOLDER — no source. The model has no hazard analysis / risk
+    ///   assessment; the highest integrity level is used as a conservative stand-in and must be
+    ///   replaced by a real classification.
     #[sysml::requirement(id = "MW-004")]
+    #[sysml::rationale("Safety goal metadata: FTTI 20 ms from max_cutoff_latency_s (MW-004); ASIL D is a PLACEHOLDER with no source.")]
+    #[sysml::safety_goal(asil = AsilD, safe_state = "doorOpenCutoff", ftti_ms = 20)]
     #[sysml::require_constraint(actual_cutoff_latency_s <= max_cutoff_latency_s)]
     #[derive(Debug, Clone, Copy)]
     pub struct DoorInterlockCutoffRequirement {
         #[sysml::attr(default = 0.020, unit = "s")]
         pub max_cutoff_latency_s: Quantity<f64>,
-        #[sysml::attr(default = 0.008, unit = "s")]
+        /// Evidence: supplied by `microwave_sim` (MW-004 monitor); 8 ms is a model estimate.
+        #[sysml::attr(default = 0.008, unit = "s", evidence)]
         pub actual_cutoff_latency_s: Quantity<f64>,
     }
 
@@ -179,7 +194,7 @@ pub mod microwave_model {
         pub rated_power: Quantity<f64>,
         #[sysml::attr(redefines = "outputVoltage", default = 5.0, unit = "V")]
         pub output_voltage: Quantity<f64>,
-        #[sysml::attr(redefines = "efficiency", default = 0.85)]
+        #[sysml::attr(dimensionless, redefines = "efficiency", default = 0.85)]
         pub efficiency: f64,
         #[sysml::port(redefines)]
         pub power_in: Conjugated<ElectricalPowerPort>,
@@ -217,13 +232,13 @@ pub mod microwave_model {
         pub mass: Quantity<f64>,
         #[sysml::attr(redefines = "ratedPower", default = 1550.0, unit = "W")]
         pub rated_power: Quantity<f64>,
-        #[sysml::attr(redefines = "efficiency", default = 0.90)]
+        #[sysml::attr(dimensionless, redefines = "efficiency", default = 0.90)]
         pub efficiency: f64,
         #[sysml::attr(redefines = "wasteHeat", default = 140.0, unit = "W")]
         pub waste_heat: Quantity<f64>,
         #[sysml::attr(redefines = "outputVoltage", default = 2100.0, unit = "V")]
         pub output_voltage: Quantity<f64>,
-        #[sysml::attr(redefines = "humNoiseDb", default = 47.0)]
+        #[sysml::attr(dimensionless, redefines = "humNoiseDb", default = 47.0)]
         pub hum_noise_db: f64,
         #[sysml::port(redefines)]
         pub power_in: Conjugated<ElectricalPowerPort>,
@@ -267,7 +282,7 @@ pub mod microwave_model {
         pub mass: Quantity<f64>,
         #[sysml::attr(redefines = "ratedPower", default = 1400.0, unit = "W")]
         pub rated_power: Quantity<f64>,
-        #[sysml::attr(redefines = "efficiency", default = 0.642857)]
+        #[sysml::attr(dimensionless, redefines = "efficiency", default = 0.642857)]
         pub efficiency: f64,
         #[sysml::attr(redefines = "wasteHeat", default = 500.0, unit = "W")]
         pub waste_heat: Quantity<f64>,
@@ -290,7 +305,7 @@ pub mod microwave_model {
     pub struct Waveguide {
         #[sysml::attr(redefines = "mass", default = 0.25, unit = "kg")]
         pub mass: Quantity<f64>,
-        #[sysml::attr(redefines = "transmissionEfficiency", default = 0.98)]
+        #[sysml::attr(dimensionless, redefines = "transmissionEfficiency", default = 0.98)]
         pub transmission_efficiency: f64,
         #[sysml::port(redefines)]
         pub radiation_in: Conjugated<RadiativePort>,
@@ -308,11 +323,11 @@ pub mod microwave_model {
         pub mass: Quantity<f64>,
         #[sysml::attr(redefines = "heatDissipation", default = 45.0, unit = "W")]
         pub heat_dissipation: Quantity<f64>,
-        #[sysml::attr(redefines = "thermalConductanceWPerK", default = 1.5)]
+        #[sysml::attr(redefines = "thermalConductanceWPerK", default = 1.5, unit = "W/K")]
         pub thermal_conductance_w_per_k: f64,
-        #[sysml::attr(redefines = "acousticAttenuationDb", default = 14.0)]
+        #[sysml::attr(dimensionless, redefines = "acousticAttenuationDb", default = 14.0)]
         pub acoustic_attenuation_db: f64,
-        #[sysml::attr(default = 0.88)]
+        #[sysml::attr(dimensionless, default = 0.88)]
         pub rf_coupling_efficiency: f64,
         #[sysml::attr(default = 0.50, unit = "kg")]
         pub nominal_food_mass: Quantity<f64>,
@@ -333,11 +348,11 @@ pub mod microwave_model {
         pub mass: Quantity<f64>,
         #[sysml::attr(redefines = "ratedPower", default = 4.0, unit = "W")]
         pub rated_power: Quantity<f64>,
-        #[sysml::attr(redefines = "efficiency", default = 0.55)]
+        #[sysml::attr(dimensionless, redefines = "efficiency", default = 0.55)]
         pub efficiency: f64,
         #[sysml::attr(redefines = "ratedRotationFreq", default = 0.10, unit = "Hz")]
         pub rated_rotation_freq: Quantity<f64>,
-        #[sysml::attr(redefines = "noiseLevelDb", default = 34.0)]
+        #[sysml::attr(dimensionless, redefines = "noiseLevelDb", default = 34.0)]
         pub noise_level_db: f64,
         #[sysml::port(redefines)]
         pub power_in: Conjugated<ElectricalPowerPort>,
@@ -363,7 +378,7 @@ pub mod microwave_model {
         pub airflow_rate: Quantity<f64>,
         #[sysml::attr(redefines = "ratedPower", default = 18.0, unit = "W")]
         pub rated_power: Quantity<f64>,
-        #[sysml::attr(redefines = "noiseLevelDb", default = 52.0)]
+        #[sysml::attr(dimensionless, redefines = "noiseLevelDb", default = 52.0)]
         pub noise_level_db: f64,
         #[sysml::port(redefines)]
         pub power_in: Conjugated<ElectricalPowerPort>,
@@ -400,9 +415,21 @@ pub mod microwave_model {
     // =========================================================================
 
     /// Primary mechanical door-latch interlock switch directly sensing door latch state.
+    ///
+    /// FMEA: contacts welded closed -> the switch keeps reporting "door closed" when the door
+    /// opens, so HV cutoff relies on `MonitorDoorInterlock` alone (failure mode named in the
+    /// `MonitorDoorInterlock` description). `severity`/`occurrence`/`detection` = 10/10/10 are
+    /// PLACEHOLDER — no source (worst-case stand-ins; the model has no FMEA ratings).
     #[sysml::part]
     #[sysml::specializes(SafetyInterlockSwitch)]
     #[sysml::satisfy(req = DoorInterlockCutoffRequirement, id = "MW-004")]
+    #[sysml::fmea(
+        failure_mode = "ContactsWeldedClosed",
+        effect = "DoorOpenNotReportedByPrimaryInterlock",
+        severity = 10,
+        occurrence = 10,
+        detection = 10
+    )]
     #[derive(Debug, Clone, Copy)]
     pub struct PrimaryDoorInterlock {
         #[sysml::attr(redefines = "mass", default = 0.03, unit = "kg")]
@@ -416,9 +443,21 @@ pub mod microwave_model {
     }
 
     /// Secondary redundant monitor interlock switch detecting welded contacts or unlatched door.
+    ///
+    /// FMEA: contacts welded closed -> loss of the redundant door-open detection; combined
+    /// with the same fault on `PrimaryDoorInterlock` the HV is never cut off (MW-004 violated).
+    /// `severity`/`occurrence`/`detection` = 10/10/10 are PLACEHOLDER — no source (worst-case
+    /// stand-ins; the model has no FMEA ratings).
     #[sysml::part]
     #[sysml::specializes(SafetyInterlockSwitch)]
     #[sysml::satisfy(req = DoorInterlockCutoffRequirement, id = "MW-004")]
+    #[sysml::fmea(
+        failure_mode = "ContactsWeldedClosed",
+        effect = "RedundantDoorOpenDetectionLost",
+        severity = 10,
+        occurrence = 10,
+        detection = 10
+    )]
     #[derive(Debug, Clone, Copy)]
     pub struct MonitorDoorInterlock {
         #[sysml::attr(redefines = "mass", default = 0.03, unit = "kg")]
@@ -460,7 +499,7 @@ pub mod microwave_model {
         pub power_draw: Quantity<f64>,
         #[sysml::attr(default = 373.15, unit = "K")]
         pub max_safe_cavity_temp_k: Quantity<f64>,
-        #[sysml::attr(default = 0.5)]
+        #[sysml::attr(dimensionless, default = 0.5)]
         pub door_open_trip_factor: f64,
         #[sysml::port(redefines)]
         pub power_in: Conjugated<ElectricalPowerPort>,
@@ -511,9 +550,9 @@ pub mod microwave_model {
     pub struct MicrowaveKeypadDisplay {
         #[sysml::attr(redefines = "powerDraw", default = 2.5, unit = "W")]
         pub power_draw: Quantity<f64>,
-        #[sysml::attr(redefines = "chimeLevelDb", default = 68.0)]
+        #[sysml::attr(dimensionless, redefines = "chimeLevelDb", default = 68.0)]
         pub chime_level_db: f64,
-        #[sysml::attr(default = 12)]
+        #[sysml::attr(dimensionless, default = 12)]
         pub keypad_button_count: i64,
         #[sysml::attr(default = 2700.0, unit = "Hz")]
         pub buzzer_freq: Quantity<f64>,
@@ -659,9 +698,11 @@ pub mod microwave_model {
     }
 }
 
-/// Build the complete Microwave Oven `sysml_ir::Model` including all `sysml-std` packages.
+/// Build the complete Microwave Oven `sysml_ir::Model` including all `sysml-std` packages
+/// and the ISO 26262 metadata package (for `@SafetyGoal` / `@FMEA`).
 pub fn build_model() -> Model {
     let mut pkgs = sysml_std::std_packages();
+    pkgs.push(sysml_emit::iso26262_metadata_package());
     pkgs.push(microwave_model::sysml_package());
     Model::new(pkgs)
 }
@@ -803,6 +844,12 @@ mod tests {
             requested_rf_power_w: 900.0,
         };
         assert!(state.step_with(&start_while_open, &mcu).is_err());
+        assert_eq!(state, MicrowaveState::Standby);
+        // `dispatch_with` reports the same unmatched event as the normal SysML no-op.
+        assert_eq!(
+            state.dispatch_with(&start_while_open, &mcu),
+            StepOutcome::Ignored
+        );
         assert_eq!(state, MicrowaveState::Standby);
 
         // Door closed allows entering Cooking

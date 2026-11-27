@@ -20,6 +20,8 @@ use sysml_emit::{
     render_trace_matrix_csv, render_trace_matrix_markdown, validate_sysml_units,
     validate_sysml_units_with_lib, ViewerOptions, ViewerTheme, ViewerView,
 };
+mod scaffold;
+
 use sysml_lift::{
     compare_sysml_roundtrip, generate_rust_dsl, lift_sysml_units, CodegenOptions,
 };
@@ -82,11 +84,17 @@ enum Commands {
         reemitted_out: Option<PathBuf>,
     },
 
-    /// Execute closed-loop verification on the Rust DSL Apollo 11 model and emit JSON verdicts.
+    /// Execute registered closed-loop verification scenarios (sysml-sim) and emit JSON verdicts.
     Verify {
-        /// Scenario to execute.
-        #[arg(long, value_enum, default_value = "nominal")]
-        scenario: VerifyScenario,
+        /// Scenario name or alias (see `--list`); `all` runs every registered scenario.
+        #[arg(long, default_value = "nominal")]
+        scenario: String,
+        /// List registered scenarios as JSON and exit.
+        #[arg(long)]
+        list: bool,
+        /// Write the sysml-sim run (JSON time-series trace + per-requirement verdicts) here.
+        #[arg(long)]
+        trace: Option<PathBuf>,
     },
 
     /// Audit semantic validity, orphan requirements, and verification traceability completeness.
@@ -111,9 +119,47 @@ enum Commands {
         #[arg(long)]
         lib: Option<PathBuf>,
 
-        /// Fail with exit code 1 if any Open-MBEE validation warnings are emitted.
+        /// Fail with exit code 1 if any Open-MBEE validation warnings are emitted (and if any
+        /// TBD is overdue at `--maturity`).
         #[arg(long)]
         strict: bool,
+
+        /// Design maturity: every TBD whose `resolve_by` is at or before this phase is overdue
+        /// (an error in `--strict`). `release` therefore allows no TBDs.
+        #[arg(long, value_enum, default_value = "concept")]
+        maturity: CliPhase,
+    },
+
+    /// Print the TBD ledger (every escape hatch with its reason, owner and resolve-by phase).
+    Tbd {
+        /// Built-in model name (ignored when `--files` is provided).
+        #[arg(long, default_value = "apollo11-model")]
+        model: String,
+
+        /// `.sysml` input files to lift (emitted by a model's `emit` binary).
+        #[arg(long, num_args = 1..)]
+        files: Vec<PathBuf>,
+
+        /// Output format: json or markdown.
+        #[arg(long, value_enum, default_value = "json")]
+        format: LintFormat,
+
+        /// Optional file path to write the rendered ledger.
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        /// TBD baseline JSON (a ledger written by `--write-baseline`), used by `--check`.
+        #[arg(long)]
+        baseline: Option<PathBuf>,
+
+        /// Ratchet: exit 1 if the TBD count (total or any kind) rose above `--baseline`, printing
+        /// the new entries. Raising the baseline must be a deliberate change in the same commit.
+        #[arg(long, requires = "baseline")]
+        check: bool,
+
+        /// Write the current ledger to `--baseline` (creates or overwrites it).
+        #[arg(long, requires = "baseline", conflicts_with = "check")]
+        write_baseline: bool,
     },
 
     /// Generate an ASPICE bidirectional traceability matrix (JSON, Markdown, or CSV).
@@ -237,13 +283,20 @@ enum Commands {
         #[arg(long, default_value_t = 8080)]
         port: u16,
     },
-}
 
-#[derive(Clone, Copy, ValueEnum)]
-enum VerifyScenario {
-    Nominal,
-    Fault,
-    All,
+    /// Scaffold a new compiling model crate with layered Types -> Requirements -> Subsystems -> Context packages.
+    New {
+        /// System name in any case (`my_system`, `my-system`, `MySystem`); package name becomes kebab-case.
+        name: String,
+
+        /// Target directory (default: `<workspace>/examples/<snake_name>`). Must not exist.
+        #[arg(long)]
+        dir: Option<PathBuf>,
+
+        /// Do not add the crate to the root `Cargo.toml` `members`; generate a standalone crate instead.
+        #[arg(long)]
+        no_workspace: bool,
+    },
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -257,6 +310,25 @@ enum TraceFormat {
 enum SafetyFormat {
     Json,
     Markdown,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum CliPhase {
+    Concept,
+    Preliminary,
+    Detailed,
+    Release,
+}
+
+impl From<CliPhase> for sysml_ir::TbdPhase {
+    fn from(p: CliPhase) -> Self {
+        match p {
+            CliPhase::Concept => sysml_ir::TbdPhase::Concept,
+            CliPhase::Preliminary => sysml_ir::TbdPhase::Preliminary,
+            CliPhase::Detailed => sysml_ir::TbdPhase::Detailed,
+            CliPhase::Release => sysml_ir::TbdPhase::Release,
+        }
+    }
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -333,6 +405,25 @@ fn read_units(files: &[PathBuf]) -> Result<Vec<(String, String)>, String> {
     Ok(units)
 }
 
+/// Name of the synthetic unit holding the sysml-std library when it is auto-loaded.
+const SYSML_STD_UNIT: &str = "<sysml-std>";
+
+/// Like [`read_units`], but when the files reference `SysmlStd*` packages without defining
+/// them (emitted with `emit --omit-std`), append the bundled sysml-std library as an extra
+/// unit so validation, lint and trace resolve it.
+fn read_units_with_std(files: &[PathBuf]) -> Result<Vec<(String, String)>, String> {
+    let mut units = read_units(files)?;
+    let references_std = units.iter().any(|(_, t)| t.contains("SysmlStd"));
+    let defines_std = units
+        .iter()
+        .any(|(_, t)| t.contains("library package SysmlStd") || t.contains("package SysmlStd"));
+    if references_std && !defines_std {
+        let std_model = sysml_ir::Model::new(sysml_std::std_packages());
+        units.push((SYSML_STD_UNIT.to_string(), sysml_emit::emit_model(&std_model)));
+    }
+    Ok(units)
+}
+
 fn resolve_lib_dir(stdlib: bool, lib: Option<PathBuf>) -> Result<Option<PathBuf>, String> {
     if let Some(dir) = lib {
         if !dir.is_dir() {
@@ -364,7 +455,11 @@ fn main() -> ExitCode {
             files,
             reemitted_out,
         } => cmd_roundtrip_check(&files, reemitted_out, cli.pretty),
-        Commands::Verify { scenario } => cmd_verify(scenario, cli.pretty),
+        Commands::Verify {
+            scenario,
+            list,
+            trace,
+        } => cmd_verify(&scenario, list, trace, cli.pretty),
         Commands::Audit {
             model,
             files,
@@ -372,7 +467,23 @@ fn main() -> ExitCode {
             stdlib,
             lib,
             strict,
-        } => cmd_audit(&model, &files, verify, stdlib, lib, strict, cli.pretty),
+            maturity,
+        } => cmd_audit(&model, &files, verify, stdlib, lib, strict, maturity.into(), cli.pretty),
+        Commands::Tbd {
+            model,
+            files,
+            format,
+            output,
+            baseline,
+            check,
+            write_baseline,
+        } => {
+            if let Some(path) = baseline.filter(|_| check || write_baseline) {
+                cmd_tbd_baseline(&model, &files, &path, write_baseline, cli.pretty)
+            } else {
+                cmd_tbd(&model, &files, format, output, cli.pretty)
+            }
+        }
         Commands::TraceMatrix {
             model,
             files,
@@ -421,6 +532,11 @@ fn main() -> ExitCode {
             port,
             cli.pretty,
         ),
+        Commands::New {
+            name,
+            dir,
+            no_workspace,
+        } => cmd_new(&name, dir, no_workspace, cli.pretty),
     }
 }
 
@@ -438,7 +554,7 @@ fn cmd_view(
     pretty: bool,
 ) -> ExitCode {
     let (default_title, default_out, model) = if !files.is_empty() {
-        let units = match read_units(files) {
+        let units = match read_units_with_std(files) {
             Ok(u) => u,
             Err(e) => {
                 eprintln!("error: {e}");
@@ -598,8 +714,20 @@ fn resolve_builtin_model(model_name: &str) -> Result<sysml_ir::Model, String> {
             iso26262_metadata_package(),
             embedded_flight_controller::flight_controller::sysml_package(),
         ])),
+        "microwave" => Ok(microwave::build_model()),
         other => Err(format!(
-            "unknown model '{other}' (available: apollo11-model, embedded-flight-controller)"
+            "unknown model '{other}' (available: apollo11-model, embedded-flight-controller, microwave)"
+        )),
+    }
+}
+
+/// Executable verification evidence for a built-in model (`--verify`).
+fn builtin_verification(model_name: &str) -> Result<sysml_ir::VerificationReport, String> {
+    match model_name {
+        "apollo11-model" => Ok(apollo11_sim::run_nominal_verification()),
+        "microwave" => Ok(microwave_sim::verification_report()),
+        other => Err(format!(
+            "`--verify` has no simulation runner for model '{other}' (available: apollo11-model, microwave)"
         )),
     }
 }
@@ -612,7 +740,7 @@ fn cmd_safety_report(
     pretty: bool,
 ) -> ExitCode {
     let (label, model) = if !files.is_empty() {
-        let units = match read_units(files) {
+        let units = match read_units_with_std(files) {
             Ok(u) => u,
             Err(e) => {
                 eprintln!("error: {e}");
@@ -672,6 +800,153 @@ fn cmd_safety_report(
     ExitCode::SUCCESS
 }
 
+/// Load a model from `--files` (lifted, sysml-std appended when referenced) or a built-in name.
+fn load_model(model_name: &str, files: &[PathBuf]) -> Result<(String, sysml_ir::Model), ExitCode> {
+    if files.is_empty() {
+        return resolve_builtin_model(model_name)
+            .map(|m| (model_name.to_string(), m))
+            .map_err(|e| {
+                eprintln!("error: {e}");
+                ExitCode::from(2)
+            });
+    }
+    let units = read_units_with_std(files).map_err(|e| {
+        eprintln!("error: {e}");
+        ExitCode::from(2)
+    })?;
+    let lifted = lift_sysml_units(&units);
+    if !lifted.parse_errors.is_empty() {
+        for err in &lifted.parse_errors {
+            eprintln!("parse error: {err}");
+        }
+        return Err(ExitCode::from(2));
+    }
+    let label = if files.len() == 1 {
+        files[0].display().to_string()
+    } else {
+        format!("{} files", files.len())
+    };
+    Ok((label, lifted.model))
+}
+
+fn cmd_tbd(
+    model_name: &str,
+    files: &[PathBuf],
+    format: LintFormat,
+    output: Option<PathBuf>,
+    pretty: bool,
+) -> ExitCode {
+    let (label, model) = match load_model(model_name, files) {
+        Ok(v) => v,
+        Err(code) => return code,
+    };
+    let ledger = sysml_emit::tbd_ledger_report(label, &model);
+    let rendered = match format {
+        LintFormat::Json => {
+            let text = if pretty {
+                serde_json::to_string_pretty(&ledger)
+            } else {
+                serde_json::to_string(&ledger)
+            };
+            match text {
+                Ok(s) => format!("{s}\n"),
+                Err(e) => {
+                    eprintln!("error: failed to serialize TBD ledger: {e}");
+                    return ExitCode::from(2);
+                }
+            }
+        }
+        LintFormat::Markdown => sysml_emit::render_tbd_markdown(&ledger),
+    };
+    if let Some(path) = &output {
+        if let Err(e) = fs::write(path, &rendered) {
+            eprintln!("error: failed to write '{}': {e}", path.display());
+            return ExitCode::from(2);
+        }
+    }
+    print!("{rendered}");
+    ExitCode::SUCCESS
+}
+
+/// `rsysdsl tbd --baseline <file> --check | --write-baseline`.
+fn cmd_tbd_baseline(
+    model_name: &str,
+    files: &[PathBuf],
+    baseline_path: &std::path::Path,
+    write: bool,
+    pretty: bool,
+) -> ExitCode {
+    let (label, model) = match load_model(model_name, files) {
+        Ok(v) => v,
+        Err(code) => return code,
+    };
+    let current = sysml_emit::tbd_ledger_report(label, &model);
+    if write {
+        let text = match serde_json::to_string_pretty(&current) {
+            Ok(t) => format!("{t}\n"),
+            Err(e) => {
+                eprintln!("error: failed to serialize TBD baseline: {e}");
+                return ExitCode::from(2);
+            }
+        };
+        if let Err(e) = fs::write(baseline_path, text) {
+            eprintln!("error: failed to write '{}': {e}", baseline_path.display());
+            return ExitCode::from(2);
+        }
+        eprintln!(
+            "wrote TBD baseline {} ({} TBD(s))",
+            baseline_path.display(),
+            current.tbd_count
+        );
+        print_json(&current, pretty);
+        return ExitCode::SUCCESS;
+    }
+    let baseline: sysml_emit::TbdLedger = match fs::read_to_string(baseline_path)
+        .map_err(|e| e.to_string())
+        .and_then(|t| serde_json::from_str(&t).map_err(|e| e.to_string()))
+    {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!(
+                "error: cannot read TBD baseline '{}': {e} (create it with `rsysdsl tbd --files ... --baseline {} --write-baseline`)",
+                baseline_path.display(),
+                baseline_path.display()
+            );
+            return ExitCode::from(2);
+        }
+    };
+    let ratchet = sysml_emit::check_tbd_ratchet(&baseline, &current);
+    print_json(&ratchet, pretty);
+    if ratchet.ok {
+        if !ratchet.resolved_entries.is_empty() {
+            eprintln!(
+                "note: {} baseline TBD(s) resolved; lower the baseline with --write-baseline to lock that in",
+                ratchet.resolved_entries.len()
+            );
+        }
+        ExitCode::SUCCESS
+    } else {
+        eprintln!(
+            "error: TBD count rose above the baseline ({}); new TBDs:",
+            ratchet.rose.join(", ")
+        );
+        for e in &ratchet.new_entries {
+            eprintln!(
+                "  + {} [{}, resolve by {}]: {}",
+                e.element,
+                e.kind.as_str(),
+                e.resolve_by.as_str(),
+                e.reason
+            );
+        }
+        eprintln!(
+            "help: resolve them, or raise the baseline deliberately in the same commit: rsysdsl tbd --files ... --baseline {} --write-baseline",
+            baseline_path.display()
+        );
+        ExitCode::from(1)
+    }
+}
+
 fn cmd_lint(
     model_name: &str,
     files: &[PathBuf],
@@ -681,7 +956,7 @@ fn cmd_lint(
     pretty: bool,
 ) -> ExitCode {
     let (label, model) = if !files.is_empty() {
-        let units = match read_units(files) {
+        let units = match read_units_with_std(files) {
             Ok(u) => u,
             Err(e) => {
                 eprintln!("error: {e}");
@@ -805,6 +1080,7 @@ fn cmd_emit(model_name: &str, output: Option<PathBuf>, raw: bool, pretty: bool) 
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn cmd_audit(
     model_name: &str,
     files: &[PathBuf],
@@ -812,6 +1088,7 @@ fn cmd_audit(
     stdlib: bool,
     lib: Option<PathBuf>,
     strict: bool,
+    maturity: sysml_ir::TbdPhase,
     pretty: bool,
 ) -> ExitCode {
     let lib_dir = match resolve_lib_dir(stdlib, lib) {
@@ -821,12 +1098,12 @@ fn cmd_audit(
             return ExitCode::from(2);
         }
     };
-    let report = if !files.is_empty() {
+    let mut report = if !files.is_empty() {
         if with_verify {
             eprintln!("error: `--verify` is only supported for executable built-in models, not `--files`");
             return ExitCode::from(2);
         }
-        let units = match read_units(files) {
+        let units = match read_units_with_std(files) {
             Ok(u) => u,
             Err(e) => {
                 eprintln!("error: {e}");
@@ -844,7 +1121,13 @@ fn cmd_audit(
             }
         };
         let verification = if with_verify {
-            Some(apollo11_sim::run_nominal_verification())
+            match builtin_verification(model_name) {
+                Ok(v) => Some(v),
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    return ExitCode::from(2);
+                }
+            }
         } else {
             None
         };
@@ -856,10 +1139,18 @@ fn cmd_audit(
             strict,
         )
     };
+    sysml_emit::apply_maturity(&mut report, maturity, strict);
     print_json(&report, pretty);
     if report.ok {
         ExitCode::SUCCESS
     } else {
+        if !report.overdue_tbds.is_empty() && strict {
+            eprintln!(
+                "error: {} TBD(s) due by maturity `{}` are still open (see `overdue_tbds`)",
+                report.overdue_tbds.len(),
+                report.maturity.as_str()
+            );
+        }
         eprintln!(
             "error: audit failed with {} finding(s)",
             report.findings.len()
@@ -881,7 +1172,7 @@ fn cmd_trace_matrix(
             eprintln!("error: `--verify` is only supported for executable built-in models, not `--files`");
             return ExitCode::from(2);
         }
-        let units = match read_units(files) {
+        let units = match read_units_with_std(files) {
             Ok(u) => u,
             Err(e) => {
                 eprintln!("error: {e}");
@@ -910,7 +1201,13 @@ fn cmd_trace_matrix(
             }
         };
         let verification = if with_verify {
-            Some(apollo11_sim::run_nominal_verification())
+            match builtin_verification(model_name) {
+                Ok(v) => Some(v),
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    return ExitCode::from(2);
+                }
+            }
         } else {
             None
         };
@@ -1073,56 +1370,100 @@ fn cmd_roundtrip_check(
     }
 }
 
-fn cmd_verify(scenario: VerifyScenario, pretty: bool) -> ExitCode {
-    match scenario {
-        VerifyScenario::Nominal => {
-            let report = apollo11_sim::run_nominal_verification();
-            print_json(&report, pretty);
-            if report.all_passed {
-                ExitCode::SUCCESS
-            } else {
-                eprintln!("error: {} requirement(s) failed verification", report.failed);
-                ExitCode::from(1)
-            }
+/// Every scenario `rsysdsl verify` can run. Runner crates register here.
+fn verify_registry() -> sysml_sim::Registry {
+    let mut registry = sysml_sim::Registry::new();
+    registry.extend(apollo11_sim::scenarios());
+    registry.extend(microwave_sim::scenarios());
+    registry
+}
+
+/// `--scenario all` output: `{"ok": .., "<key>": report, ...}` in registration order.
+struct AllVerifyOutput {
+    ok: bool,
+    reports: Vec<(&'static str, sysml_ir::VerificationReport)>,
+}
+
+impl Serialize for AllVerifyOutput {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(Some(self.reports.len() + 1))?;
+        map.serialize_entry("ok", &self.ok)?;
+        for (key, report) in &self.reports {
+            map.serialize_entry(key, report)?;
         }
-        VerifyScenario::Fault => {
-            let report = apollo11_sim::run_fault_injection_verification();
-            print_json(&report, pretty);
-            if report.all_passed {
-                ExitCode::SUCCESS
-            } else {
+        map.end()
+    }
+}
+
+fn cmd_verify(scenario: &str, list: bool, trace: Option<PathBuf>, pretty: bool) -> ExitCode {
+    let registry = verify_registry();
+    if list {
+        print_json(&registry.iter().collect::<Vec<_>>(), pretty);
+        return ExitCode::SUCCESS;
+    }
+
+    let selected: Vec<&sysml_sim::RegisteredScenario> = if scenario == "all" {
+        registry.iter().collect()
+    } else {
+        match registry.find(scenario) {
+            Some(s) => vec![s],
+            None => {
+                let names: Vec<_> = registry.iter().map(|s| s.name).collect();
                 eprintln!(
-                    "info: fault-injection scenario triggered {} expected requirement failure(s)",
-                    report.failed
+                    "error: unknown scenario '{scenario}' (available: all, {}; see `rsysdsl verify --list`)",
+                    names.join(", ")
                 );
-                ExitCode::from(1)
+                return ExitCode::from(2);
             }
         }
-        VerifyScenario::All => {
-            let nominal = apollo11_sim::run_nominal_verification();
-            let fault = apollo11_sim::run_fault_injection_verification();
-            let ok = nominal.all_passed && !fault.all_passed;
-            #[derive(Serialize)]
-            struct AllVerifyOutput {
-                ok: bool,
-                nominal: sysml_ir::VerificationReport,
-                fault_injection: sysml_ir::VerificationReport,
-            }
-            print_json(
-                &AllVerifyOutput {
-                    ok,
-                    nominal,
-                    fault_injection: fault,
-                },
-                pretty,
-            );
-            if ok {
-                ExitCode::SUCCESS
-            } else {
-                eprintln!("error: verification suite expectation mismatch");
-                ExitCode::from(1)
-            }
+    };
+
+    let outcomes: Vec<_> = selected.iter().map(|s| (s, (s.run)())).collect();
+
+    if let Some(path) = trace {
+        let runs: Vec<&sysml_sim::RunResult> = outcomes.iter().map(|(_, o)| &o.run).collect();
+        let text = if runs.len() == 1 {
+            serde_json::to_string(runs[0])
+        } else {
+            serde_json::to_string(&runs)
         }
+        .expect("run results serialize");
+        if let Err(e) = fs::write(&path, text) {
+            eprintln!("error: cannot write trace to {}: {e}", path.display());
+            return ExitCode::from(2);
+        }
+    }
+
+    if scenario == "all" {
+        let ok = outcomes.iter().all(|(s, o)| s.meets_expectation(o));
+        let reports = outcomes
+            .into_iter()
+            .map(|(s, o)| (s.key, o.report))
+            .collect();
+        print_json(&AllVerifyOutput { ok, reports }, pretty);
+        return if ok {
+            ExitCode::SUCCESS
+        } else {
+            eprintln!("error: verification suite expectation mismatch");
+            ExitCode::from(1)
+        };
+    }
+
+    let (entry, outcome) = &outcomes[0];
+    let report = &outcome.report;
+    print_json(report, pretty);
+    if report.all_passed {
+        ExitCode::SUCCESS
+    } else if !entry.expect_pass {
+        eprintln!(
+            "info: fault-injection scenario triggered {} expected requirement failure(s)",
+            report.failed
+        );
+        ExitCode::from(1)
+    } else {
+        eprintln!("error: {} requirement(s) failed verification", report.failed);
+        ExitCode::from(1)
     }
 }
 
@@ -1133,7 +1474,7 @@ fn cmd_validate(
     strict: bool,
     pretty: bool,
 ) -> ExitCode {
-    let units = match read_units(files) {
+    let units = match read_units_with_std(files) {
         Ok(u) => u,
         Err(e) => {
             eprintln!("error: {e}");
@@ -1164,5 +1505,19 @@ fn cmd_validate(
             report.warning_count
         );
         ExitCode::from(1)
+    }
+}
+
+fn cmd_new(name: &str, dir: Option<PathBuf>, no_workspace: bool, pretty: bool) -> ExitCode {
+    match scaffold::scaffold(name, dir, no_workspace) {
+        Ok(report) => {
+            eprintln!("created {} at {}", report.package, report.dir);
+            print_json(&report, pretty);
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            ExitCode::from(2)
+        }
     }
 }

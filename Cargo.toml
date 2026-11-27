@@ -9,6 +9,7 @@ members = [
     "crates/sysml-emit",
     "crates/sysml-lift",
     "crates/sysml-cli",
+    "crates/sysml-sim",
     "examples/apollo11_model",
     "examples/apollo11_sim",
     "examples/embedded_flight_controller",
@@ -19,6 +20,7 @@ members = [
     "examples/power_tools_family",
     "examples/dishwasher",
     "examples/microwave",
+    "examples/microwave_sim",
 ]
 exclude = [
     "third_party/open-mbee/crates/sysmlv2-syntax",
@@ -39,9 +41,12 @@ sysml-dsl = { path = "crates/sysml-dsl" }
 sysml-std = { path = "crates/sysml-std" }
 sysml-emit = { path = "crates/sysml-emit" }
 sysml-lift = { path = "crates/sysml-lift" }
+sysml-sim = { path = "crates/sysml-sim" }
 apollo11-model = { path = "examples/apollo11_model" }
 apollo11-sim = { path = "examples/apollo11_sim" }
 embedded-flight-controller = { path = "examples/embedded_flight_controller" }
+microwave = { path = "examples/microwave" }
+microwave-sim = { path = "examples/microwave_sim" }
 
 # Primary SysML v2 parser & validation oracle (vendored from Open-MBEE/sysml-toolkit rev c8d256b
 # so Cargo never downloads the 2.1 GB upstream SysML-v2-Release git submodule)

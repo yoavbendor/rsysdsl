@@ -13,6 +13,7 @@ note: required by a bound in `assert_asil_decomposition`
   --> $WORKSPACE/crates/sysml-core/src/safety.rs
    |
    | pub const fn assert_asil_decomposition<G, LeftPart, LeftAsil, RightPart, RightAsil>()
+   |              ------------------------- required by a bound in this function
 ...
    |     LeftPart: SysmlPartCore + IndependentFrom<RightPart>,
    |                               ^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `assert_asil_decomposition`

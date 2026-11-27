@@ -1,0 +1,10 @@
+error[E0609]: no field `dat` on type `Node`
+  --> tests/ui/bad_tbd_channel_path.rs:24:98
+   |
+24 | #[sysml::connect(tbd = "bus protocol not chosen", name = "link", from = node_a.data, to = node_b.dat)]
+   |                                                                                                  ^^^ unknown field
+   |
+help: a field with a similar name exists
+   |
+24 | #[sysml::connect(tbd = "bus protocol not chosen", name = "link", from = node_a.data, to = node_b.data)]
+   |                                                                                                     +

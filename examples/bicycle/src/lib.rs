@@ -68,17 +68,17 @@ pub mod bicycle_model {
     pub struct Drivetrain {
         #[sysml::attr(redefines = "mass", default = 1.4, unit = "kg")]
         pub mass: Quantity<f64>,
-        #[sysml::attr(redefines = "gearRatio", default = 2.5)]
+        #[sysml::attr(dimensionless, redefines = "gearRatio", default = 2.5)]
         pub gear_ratio: f64,
-        #[sysml::attr(redefines = "efficiency", default = 0.96)]
+        #[sysml::attr(dimensionless, redefines = "efficiency", default = 0.96)]
         pub efficiency: f64,
         #[sysml::attr(redefines = "heatDissipation", default = 8.0, unit = "W")]
         pub heat_dissipation: Quantity<f64>,
-        #[sysml::attr(redefines = "noiseLevelDb", default = 52.0)]
+        #[sysml::attr(dimensionless, redefines = "noiseLevelDb", default = 52.0)]
         pub noise_level_db: f64,
-        #[sysml::attr(default = 50)]
+        #[sysml::attr(dimensionless, default = 50)]
         pub chainring_teeth: u32,
-        #[sysml::attr(default = 20)]
+        #[sysml::attr(dimensionless, default = 20)]
         pub cog_teeth: u32,
         #[sysml::port(redefines)]
         pub mech_in: Conjugated<MechanicalPowerPort>,
@@ -99,9 +99,9 @@ pub mod bicycle_model {
         pub mass: Quantity<f64>,
         #[sysml::attr(redefines = "heatDissipation", default = 5.0, unit = "W")]
         pub heat_dissipation: Quantity<f64>,
-        #[sysml::attr(redefines = "noiseLevelDb", default = 58.0)]
+        #[sysml::attr(dimensionless, redefines = "noiseLevelDb", default = 58.0)]
         pub noise_level_db: f64,
-        #[sysml::attr(redefines = "rollingResistanceCoeff", default = 0.004)]
+        #[sysml::attr(dimensionless, redefines = "rollingResistanceCoeff", default = 0.004)]
         pub rolling_resistance_coeff: f64,
         #[sysml::attr(redefines = "wheelRadius", default = 0.34, unit = "m")]
         pub wheel_radius: Quantity<f64>,
@@ -122,7 +122,7 @@ pub mod bicycle_model {
         pub mass: Quantity<f64>,
         #[sysml::attr(redefines = "heatDissipation", default = 1500.0, unit = "W")]
         pub heat_dissipation: Quantity<f64>,
-        #[sysml::attr(redefines = "noiseLevelDb", default = 72.0)]
+        #[sysml::attr(dimensionless, redefines = "noiseLevelDb", default = 72.0)]
         pub noise_level_db: f64,
         #[sysml::attr(redefines = "maxBrakingForce", default = 1800.0, unit = "N")]
         pub max_braking_force: Quantity<f64>,
@@ -257,9 +257,9 @@ pub mod bicycle_model {
     #[sysml::require_constraint(drivetrain_efficiency >= min_efficiency)]
     #[derive(Debug, Clone, Copy)]
     pub struct DrivetrainEfficiencyReq {
-        #[sysml::attr(default = 0.94)]
+        #[sysml::attr(dimensionless, default = 0.94)]
         pub min_efficiency: f64,
-        #[sysml::attr(default = 0.96)]
+        #[sysml::attr(dimensionless, default = 0.96)]
         pub drivetrain_efficiency: f64,
     }
 

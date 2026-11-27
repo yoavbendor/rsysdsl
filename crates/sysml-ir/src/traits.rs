@@ -11,7 +11,7 @@ pub use sysml_core::{
     assert_port_core, assert_ports_connect_core, assert_requirement_core, assert_safety_goal,
     assert_specializes, assert_state_core, const_str_eq, Asil, AsilA, AsilB, AsilC, AsilD,
     AsilDecomposable, AsilLevel, Conjugated, EvaluableRequirement, IndependentFrom,
-    NoStdTransitionError, Performs, PortConnectable, Qm, SafetyGoal, Satisfies, Specializes,
+    NoStdTransitionError, Performs, StepOutcome, PortConnectable, Qm, SafetyGoal, Satisfies, Specializes,
     SymmetricPort, SysmlActionCore, SysmlCalcCore, SysmlEnumCore, SysmlInterfaceCore,
     SysmlItemCore, SysmlPartCore, SysmlPortCore, SysmlRequirementCore, SysmlStateCore, ToScalar,
     Verifies,

@@ -40,7 +40,7 @@ pub mod flight_controller {
     #[sysml::item]
     #[derive(Debug, Clone, Copy, Default, PartialEq)]
     pub struct ValveCutoffCommand {
-        #[sysml::attr(default = 1.0)]
+        #[sysml::attr(dimensionless, default = 1.0)]
         pub close_valve: f64,
     }
 
@@ -201,15 +201,20 @@ mod tests {
         };
         assert!(mode.step_with(&transient, &assembly).is_err());
         assert_eq!(mode, ControllerMode::Nominal);
+        assert_eq!(
+            mode.dispatch_with(&transient, &assembly),
+            StepOutcome::Ignored
+        );
 
         // Sustained fault > 50 ms (0.055 s) deterministically transitions to SafeCutoff
         let fault = FaultSensorTelemetry {
             detected_overthrust_s: 0.055,
         };
         assert_eq!(
-            mode.step_with(&fault, &assembly).unwrap(),
-            ControllerMode::SafeCutoff
+            mode.dispatch_with(&fault, &assembly),
+            StepOutcome::Moved(ControllerMode::SafeCutoff)
         );
+        assert_eq!(mode, ControllerMode::SafeCutoff);
     }
 
     #[cfg(feature = "reflect")]

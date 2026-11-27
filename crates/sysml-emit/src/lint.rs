@@ -6,17 +6,32 @@
 //!   >= 3 identical port/attribute names -> extract an `abstract` base part.
 //! - `unclassified_interfaces`: 3+ concrete `InterfaceDef`s with no `specializes`
 //!   parent -> specialize a shared channel base (e.g. `InfoChannel` / `EnergyChannel`).
+//! - `untyped_connections`: `connect` usages with no interface/connection type in a model that
+//!   otherwise declares or uses typed interfaces (deleting the interface is never the fix for
+//!   `unclassified_interfaces`; classify it under an abstract base instead). TBD channels
+//!   (`#[sysml::connect(tbd = "reason", ...)]`) are excluded: they are counted as TBDs.
 //! - `flat_god_assembly`: a `PartDef` owning > 10 direct child parts with zero
 //!   intermediate subsystem decomposition.
 //! - `missing_physical_unit`: numeric `Real` attribute carrying a literal value without
 //!   an SI unit (excluding dimensionless counts/ratios/efficiencies/factors).
+//! - `inherited_std_default` (info): a model definition specializing a `sysml-std` element
+//!   inherits numeric library defaults (e.g. mains `frequency = 50 Hz`) without redefining
+//!   them. Library defaults are generic placeholders, not source-document values. A
+//!   redefinition with `tbd_value = "reason"` (no value, counted TBD) counts as handled.
+//! - `unreachable_state` (warning): a sub-state of a `state def` that no chain of transitions
+//!   reaches from the initial state (`entry; then <initial>;`). Skipped when the initial state
+//!   is unknown (state defs emitted before S6b carry no `entry; then`).
+//! - `dead_end_state` (info): a sub-state with no transition to another state. Legitimate for
+//!   latched faults / final states, so it never fails `--strict`.
+//! - `overlapping_guards` (info): 2+ transitions leave the same state on the same trigger and
+//!   at least one is guarded (disjointness cannot be proven) or more than one is unguarded.
 //! - `unused_abstract_base`: an `abstract` part/interface/port with zero specializing
 //!   subtypes in the model (useful during refactoring; skipped for library packages).
 
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
-use sysml_ir::{InterfaceDef, Model, Package, PackageMember, PartDef, PortDef};
+use sysml_ir::{InterfaceDef, Model, Package, PackageMember, PartDef, PortDef, StateDef};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -48,7 +63,21 @@ pub struct LintSummary {
     pub classified_interfaces: usize,
     pub reuse_ratio_pct: f64,
     pub warning_count: usize,
+    /// Info-level smells (excludes `inherited_std_default`, counted separately below).
     pub info_count: usize,
+    /// Model definitions that inherit unredefined numeric sysml-std library defaults
+    /// (`inherited_std_default` findings; informational, never fails `--strict`).
+    #[serde(default)]
+    pub inherited_std_default_count: usize,
+    /// State-machine review items (`dead_end_state`, `overlapping_guards`): informational,
+    /// counted apart from `info_count` because they are often intended (latched faults,
+    /// prioritized guards) and never fail `--strict`.
+    #[serde(default)]
+    pub state_review_count: usize,
+    /// TBD markers (escape hatches) in the model: informational, never a warning; the
+    /// maturity gate is `rsysdsl audit --maturity`, the ratchet `rsysdsl tbd --check`.
+    #[serde(default)]
+    pub tbd_count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -210,8 +239,53 @@ pub fn lint_model(model_name: impl Into<String>, model: &Model) -> LintReport {
                 names.len(),
                 names.join(", ")
             ),
-            suggestion: "Specialize a shared abstract interface (e.g. `sysml_std::comms::InfoChannel` or `sysml_std::flows::EnergyLink`) so protocols/channels form a clean taxonomy.".to_string(),
+            suggestion: "Keep the interfaces and classify them: declare an end-less abstract base `#[sysml::interface(abstract)] pub struct EnergyChannel {}` (or reuse a sysml-std channel such as `InfoChannel` / `ThermalLink` / `ElectricalLink` when its port types match) and add `#[sysml::specializes(EnergyChannel)]` to each concrete interface. Do NOT remove interface types from `#[sysml::connect]` (that triggers `untyped_connections`).".to_string(),
         });
+    }
+
+    // 2b. Untyped connections in a model that otherwise uses typed interfaces.
+    let model_uses_typed_ifaces = interfaces
+        .iter()
+        .any(|(_, is_lib, i)| !*is_lib && !i.is_abstract)
+        || parts.iter().any(|(_, is_lib, p)| {
+            !*is_lib && p.connections.iter().any(|c| c.type_name.is_some())
+        });
+    if model_uses_typed_ifaces {
+        for (pkg_name, is_lib, p) in &parts {
+            if *is_lib {
+                continue;
+            }
+            let untyped: Vec<String> = p
+                .connections
+                .iter()
+                .filter(|c| {
+                    // TBD channels (`#[sysml::connect(tbd = ...)]`) are counted as TBDs instead.
+                    c.type_name.is_none()
+                        && !c.tbd.iter().any(|m| m.kind == sysml_ir::TbdKind::Channel)
+                })
+                .map(|c| match (&c.name, &c.from, &c.to) {
+                    (Some(n), _, _) => n.clone(),
+                    (None, Some(f), Some(t)) => format!("{f} -> {t}"),
+                    _ => "<anonymous>".to_string(),
+                })
+                .collect();
+            if untyped.is_empty() {
+                continue;
+            }
+            findings.push(LintFinding {
+                code: "untyped_connections".to_string(),
+                severity: LintSeverity::Warning,
+                package: pkg_name.clone(),
+                element: format!("{} ({})", p.name, untyped.join(", ")),
+                message: format!(
+                    "Part `{}` has {} connection(s) with no interface type ({}) while the model uses typed interfaces.",
+                    p.name,
+                    untyped.len(),
+                    untyped.join(", ")
+                ),
+                suggestion: "Type every arrow: add `interface = SomeLink` to each `#[sysml::connect(...)]` (declare `#[sysml::interface]` defs with two `#[sysml::end]` ports, classified under an abstract base).".to_string(),
+            });
+        }
     }
 
     // 3. Flat God-assembly (> 10 direct child parts where none are composite subsystems)
@@ -282,12 +356,34 @@ pub fn lint_model(model_name: impl Into<String>, model: &Model) -> LintReport {
         }
     }
 
+    // 5. Numeric sysml-std defaults inherited without a redefinition.
+    findings.extend(inherited_std_defaults(model));
+
+    // 6. State machine smells (unreachable / dead-end states, overlapping guards).
+    let mut state_defs: Vec<(String, &StateDef)> = Vec::new();
+    for pkg in &model.packages {
+        collect_state_defs(pkg, &mut state_defs);
+    }
+    for (pkg_name, sd) in &state_defs {
+        findings.extend(state_machine_findings(pkg_name, sd));
+    }
+
     for f in &findings {
         match f.severity {
             LintSeverity::Warning => summary.warning_count += 1,
+            LintSeverity::Info if f.code == "inherited_std_default" => {
+                summary.inherited_std_default_count += 1
+            }
+            LintSeverity::Info
+                if matches!(f.code.as_str(), "dead_end_state" | "overlapping_guards") =>
+            {
+                summary.state_review_count += 1
+            }
             LintSeverity::Info => summary.info_count += 1,
         }
     }
+
+    summary.tbd_count = crate::tbd::collect_tbd_ledger(model).len();
 
     LintReport {
         model: model_name.into(),
@@ -319,15 +415,25 @@ pub fn render_lint_markdown(report: &LintReport) -> String {
     );
     let _ = writeln!(
         out,
-        "- **Findings:** {} warning(s), {} info(s)\n",
-        report.summary.warning_count, report.summary.info_count
+        "- **Findings:** {} warning(s), {} info(s), {} definition(s) inheriting sysml-std library defaults, {} state-machine review item(s)\n",
+        report.summary.warning_count,
+        report.summary.info_count,
+        report.summary.inherited_std_default_count,
+        report.summary.state_review_count
     );
+    if report.summary.tbd_count > 0 {
+        let _ = writeln!(
+            out,
+            "- **TBDs (info):** {} open escape hatch(es); list them with `rsysdsl tbd`, gate them with `rsysdsl audit --maturity <phase>`\n",
+            report.summary.tbd_count
+        );
+    }
 
     if report.findings.is_empty() {
         let _ = writeln!(out, "No architectural smells detected.");
     } else {
-        let _ = writeln!(out, "| Severity | Code | Package | Element | Suggestion |");
-        let _ = writeln!(out, "| --- | --- | --- | --- | --- |");
+        let _ = writeln!(out, "| Severity | Code | Package | Element | Finding | Suggestion |");
+        let _ = writeln!(out, "| --- | --- | --- | --- | --- | --- |");
         for f in &report.findings {
             let sev = match f.severity {
                 LintSeverity::Warning => "warning",
@@ -335,8 +441,12 @@ pub fn render_lint_markdown(report: &LintReport) -> String {
             };
             let _ = writeln!(
                 out,
-                "| {sev} | `{}` | `{}` | `{}` | {} |",
-                f.code, f.package, f.element, f.suggestion
+                "| {sev} | `{}` | `{}` | `{}` | {} | {} |",
+                f.code,
+                f.package,
+                f.element,
+                f.message.replace('|', "\\|"),
+                f.suggestion.replace('|', "\\|")
             );
         }
     }
@@ -351,7 +461,11 @@ fn collect_pkg<'a>(
     ports: &mut Vec<(String, bool, &'a PortDef)>,
 ) {
     *total_packages += 1;
-    let is_lib = pkg.is_library || pkg.name.starts_with("SysmlStd") || pkg.name == "ISO26262Metadata";
+    let is_lib = pkg.is_library
+        || pkg.name.starts_with("SysmlStd")
+        || pkg.name == "ISO26262Metadata"
+        || pkg.name == sysml_ir::TBD_METADATA_PACKAGE
+        || pkg.name == sysml_ir::CUSTOM_UNIT_METADATA_PACKAGE;
     for m in &pkg.members {
         match m {
             PackageMember::Package(sub) => collect_pkg(sub, total_packages, parts, interfaces, ports),
@@ -361,6 +475,212 @@ fn collect_pkg<'a>(
             _ => {}
         }
     }
+}
+
+fn collect_state_defs<'a>(pkg: &'a Package, out: &mut Vec<(String, &'a StateDef)>) {
+    if pkg.is_library
+        || pkg.name.starts_with("SysmlStd")
+        || pkg.name == "ISO26262Metadata"
+        || pkg.name == sysml_ir::TBD_METADATA_PACKAGE
+        || pkg.name == sysml_ir::CUSTOM_UNIT_METADATA_PACKAGE
+    {
+        return;
+    }
+    for m in &pkg.members {
+        match m {
+            PackageMember::Package(sub) => collect_state_defs(sub, out),
+            PackageMember::StateDef(sd) => out.push((pkg.name.clone(), sd)),
+            _ => {}
+        }
+    }
+}
+
+/// `unreachable_state`, `dead_end_state` and `overlapping_guards` for one `state def`.
+fn state_machine_findings(pkg_name: &str, sd: &StateDef) -> Vec<LintFinding> {
+    let mut out = Vec::new();
+    if sd.states.is_empty() {
+        return out;
+    }
+    let element = |state: &str| format!("{}.{}", sd.name, state);
+
+    // Reachability from the initial state (only when it is known).
+    if let Some(initial) = sd
+        .initial_state
+        .as_deref()
+        .filter(|i| sd.states.iter().any(|s| s.name == *i))
+    {
+        let mut reached: BTreeSet<&str> = BTreeSet::from([initial]);
+        let mut frontier = vec![initial];
+        while let Some(cur) = frontier.pop() {
+            for t in sd.transitions.iter().filter(|t| t.source == cur) {
+                if reached.insert(t.target.as_str()) {
+                    frontier.push(t.target.as_str());
+                }
+            }
+        }
+        for st in sd.states.iter().filter(|s| !reached.contains(s.name.as_str())) {
+            out.push(LintFinding {
+                code: "unreachable_state".to_string(),
+                severity: LintSeverity::Warning,
+                package: pkg_name.to_string(),
+                element: element(&st.name),
+                message: format!(
+                    "State `{}` of `{}` is not reachable from the initial state `{initial}` by any transition.",
+                    st.name, sd.name
+                ),
+                suggestion: "Add the transition your source document describes into this state (`#[sysml::transition(on = Evt, to = ThisState)]` on a source variant), or delete the state if the source has no such mode. Do not invent a trigger to silence this.".to_string(),
+            });
+        }
+    }
+
+    for st in &sd.states {
+        let leaves = sd
+            .transitions
+            .iter()
+            .any(|t| t.source == st.name && t.target != st.name);
+        if !leaves {
+            out.push(LintFinding {
+                code: "dead_end_state".to_string(),
+                severity: LintSeverity::Info,
+                package: pkg_name.to_string(),
+                element: element(&st.name),
+                message: format!(
+                    "State `{}` of `{}` has no transition to another state (once entered, the machine stays there).",
+                    st.name, sd.name
+                ),
+                suggestion: "Fine for a latched fault or final state (say so in its `///` doc). Otherwise add the exit transition from your source document (e.g. a reset or recovery event).".to_string(),
+            });
+        }
+    }
+
+    // Transitions sharing source state and trigger: the first matching one wins.
+    let mut groups: BTreeMap<(&str, &str), Vec<&sysml_ir::Transition>> = BTreeMap::new();
+    for t in &sd.transitions {
+        let trig = t.trigger.as_deref().unwrap_or("<completion>");
+        groups.entry((t.source.as_str(), trig)).or_default().push(t);
+    }
+    for ((source, trig), ts) in groups {
+        if ts.len() < 2 {
+            continue;
+        }
+        let guarded = ts.iter().filter(|t| t.guard.is_some()).count();
+        let unguarded = ts.len() - guarded;
+        if guarded == 0 && unguarded < 2 {
+            continue;
+        }
+        let guards: Vec<String> = ts
+            .iter()
+            .map(|t| match &t.guard {
+                Some(g) => format!("`{g}` -> {}", t.target),
+                None => format!("(no guard) -> {}", t.target),
+            })
+            .collect();
+        out.push(LintFinding {
+            code: "overlapping_guards".to_string(),
+            severity: LintSeverity::Info,
+            package: pkg_name.to_string(),
+            element: element(source),
+            message: format!(
+                "{} transitions leave `{}` on `{trig}` and may be enabled together: {}.",
+                ts.len(),
+                source,
+                guards.join("; ")
+            ),
+            suggestion: "Check the guards are mutually exclusive (e.g. `x > limit` vs `x <= limit`); the first transition declared wins when several are enabled. An unguarded transition shadows every later one on the same trigger.".to_string(),
+        });
+    }
+    out
+}
+
+struct DefInfo<'a> {
+    package: String,
+    is_std: bool,
+    is_abstract: bool,
+    specializes: Vec<String>,
+    attributes: &'a [sysml_ir::AttributeUsage],
+}
+
+fn collect_defs<'a>(pkg: &'a Package, out: &mut BTreeMap<String, DefInfo<'a>>) {
+    let is_std = pkg.name.starts_with("SysmlStd");
+    for m in &pkg.members {
+        let (name, is_abstract, specializes, attributes) = match m {
+            PackageMember::Package(sub) => {
+                collect_defs(sub, out);
+                continue;
+            }
+            PackageMember::PartDef(p) => (&p.name, p.is_abstract, &p.specializes, &p.attributes),
+            PackageMember::ItemDef(i) => (&i.name, i.is_abstract, &i.specializes, &i.attributes),
+            PackageMember::PortDef(p) => (&p.name, p.is_abstract, &p.specializes, &p.attributes),
+            PackageMember::InterfaceDef(i) => {
+                (&i.name, i.is_abstract, &i.specializes, &i.attributes)
+            }
+            _ => continue,
+        };
+        out.entry(name.clone()).or_insert(DefInfo {
+            package: pkg.name.clone(),
+            is_std,
+            is_abstract,
+            specializes: specializes.iter().map(|s| simple_name(s).to_string()).collect(),
+            attributes: attributes.as_slice(),
+        });
+    }
+}
+
+/// `inherited_std_default`: for every concrete model definition that specializes a sysml-std
+/// element, list the numeric std attribute defaults it inherits without redefining them.
+fn inherited_std_defaults(model: &Model) -> Vec<LintFinding> {
+    let mut defs: BTreeMap<String, DefInfo> = BTreeMap::new();
+    for pkg in &model.packages {
+        collect_defs(pkg, &mut defs);
+    }
+    let mut findings = Vec::new();
+    for (name, d) in &defs {
+        if d.is_std || d.is_abstract {
+            continue;
+        }
+        // Names already given a value by a closer (model-side or more specific std) definition.
+        let mut resolved: BTreeSet<String> = BTreeSet::new();
+        let mut inherited: Vec<String> = Vec::new();
+        let mut visited: BTreeSet<String> = BTreeSet::new();
+        let mut queue: std::collections::VecDeque<String> = [name.clone()].into();
+        while let Some(cur) = queue.pop_front() {
+            if !visited.insert(cur.clone()) {
+                continue;
+            }
+            let Some(info) = defs.get(&cur) else { continue };
+            for a in info.attributes {
+                let mut names: Vec<String> = a.name.iter().cloned().collect();
+                names.extend(a.redefines.iter().map(|r| simple_name(r).to_string()));
+                let Some(primary) = names.first().cloned() else { continue };
+                if info.is_std && !resolved.contains(&primary) {
+                    if let Some(v) = a.value.as_deref().map(str::trim) {
+                        if v.parse::<f64>().is_ok() {
+                            let unit = a.unit.as_deref().map(|u| format!(" [{u}]")).unwrap_or_default();
+                            inherited.push(format!("{primary} = {v}{unit} (from {cur})"));
+                        }
+                    }
+                }
+                resolved.extend(names);
+            }
+            queue.extend(info.specializes.iter().cloned());
+        }
+        if inherited.is_empty() {
+            continue;
+        }
+        findings.push(LintFinding {
+            code: "inherited_std_default".to_string(),
+            severity: LintSeverity::Info,
+            package: d.package.clone(),
+            element: name.clone(),
+            message: format!(
+                "`{name}` inherits {} numeric sysml-std library default(s) it does not redefine: {}.",
+                inherited.len(),
+                inherited.join("; ")
+            ),
+            suggestion: "Library defaults are generic placeholders, not values from your source. Redefine each one your source document specifies (`#[sysml::attr(redefines = \"mainsFrequency\", default = ..., unit = \"Hz\")]`); blank each one your source leaves open with `#[sysml::attr(redefines = \"...\", tbd_value = \"reason\", unit = \"...\")]` (a counted TBD); leave the rest only if the value is genuinely irrelevant to the model.".to_string(),
+        });
+    }
+    findings
 }
 
 fn part_feature_signature(p: &PartDef) -> BTreeSet<String> {
@@ -438,7 +758,190 @@ fn is_dimensionless_name(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lint_flags_state_machine_smells() {
+        use sysml_ir::{StateUsage, Transition};
+        let st = |n: &str| StateUsage {
+            name: n.into(),
+            ..Default::default()
+        };
+        let tr = |s: &str, trig: &str, guard: Option<&str>, t: &str| Transition {
+            source: s.into(),
+            trigger: Some(trig.into()),
+            guard: guard.map(Into::into),
+            target: t.into(),
+            ..Default::default()
+        };
+        let model = |sd: StateDef| {
+            Model::new(vec![Package {
+                name: "M".into(),
+                members: vec![PackageMember::StateDef(sd)],
+                ..Default::default()
+            }])
+        };
+        let sd = StateDef {
+            name: "Mode".into(),
+            initial_state: Some("idle".into()),
+            states: vec![st("idle"), st("running"), st("fault"), st("orphan")],
+            transitions: vec![
+                tr("idle", "Go", Some("e.x > 1"), "running"),
+                tr("idle", "Go", Some("e.x > 2"), "fault"),
+                tr("running", "Stop", None, "idle"),
+                tr("orphan", "Go", None, "idle"),
+            ],
+            ..Default::default()
+        };
+        let rep = lint_model("m", &model(sd.clone()));
+        let codes = |code: &str| -> Vec<String> {
+            rep.findings
+                .iter()
+                .filter(|f| f.code == code)
+                .map(|f| f.element.clone())
+                .collect()
+        };
+        assert_eq!(codes("unreachable_state"), vec!["Mode.orphan"]);
+        assert_eq!(codes("dead_end_state"), vec!["Mode.fault"]);
+        assert_eq!(codes("overlapping_guards"), vec!["Mode.idle"]);
+        assert!(!rep.clean, "unreachable_state is a warning");
+        assert_eq!(rep.summary.state_review_count, 2);
+        assert_eq!(rep.summary.info_count, 0, "state review items are counted apart");
+
+        // Unknown initial state: no reachability verdict; info findings never fail --strict.
+        let rep = lint_model(
+            "m",
+            &model(StateDef {
+                initial_state: None,
+                ..sd.clone()
+            }),
+        );
+        assert!(rep.findings.iter().all(|f| f.code != "unreachable_state"));
+        assert!(rep.clean);
+
+        // One guarded + one unguarded transition on the same trigger also overlaps; a single
+        // transition per trigger does not.
+        let rep = lint_model(
+            "m",
+            &model(StateDef {
+                transitions: vec![
+                    tr("idle", "Go", None, "running"),
+                    tr("idle", "Go", Some("e.x > 2"), "fault"),
+                    tr("running", "Stop", None, "idle"),
+                ],
+                ..sd
+            }),
+        );
+        assert_eq!(
+            rep.findings.iter().filter(|f| f.code == "overlapping_guards").count(),
+            1
+        );
+    }
     use sysml_ir::{AttributeUsage, Model, Package, PackageMember, PartDef, PortUsage};
+
+    #[test]
+    fn lint_flags_untyped_connections_when_model_uses_interfaces() {
+        use sysml_ir::{ConnectionUsage, InterfaceDef};
+        let conn = |name: &str, ty: Option<&str>| ConnectionUsage {
+            name: Some(name.into()),
+            type_name: ty.map(Into::into),
+            from: Some("a.p".into()),
+            to: Some("b.p".into()),
+            ..Default::default()
+        };
+        let model = |conns: Vec<ConnectionUsage>, with_iface: bool| {
+            let mut members = vec![PackageMember::PartDef(PartDef {
+                name: "Ctx".into(),
+                connections: conns,
+                ..Default::default()
+            })];
+            if with_iface {
+                members.push(PackageMember::InterfaceDef(InterfaceDef {
+                    name: "Link".into(),
+                    ..Default::default()
+                }));
+            }
+            Model::new(vec![Package {
+                name: "M".into(),
+                members,
+                ..Default::default()
+            }])
+        };
+        // Mixed typed + untyped -> warning.
+        let rep = lint_model("m", &model(vec![conn("a", Some("Link")), conn("b", None)], true));
+        assert!(rep.findings.iter().any(|f| f.code == "untyped_connections"));
+        assert!(!rep.clean);
+        // Interface defs left behind but stripped from the connects -> still a warning.
+        let rep = lint_model("m", &model(vec![conn("b", None)], true));
+        assert!(rep.findings.iter().any(|f| f.code == "untyped_connections"));
+        // Fully typed -> clean.
+        let rep = lint_model("m", &model(vec![conn("a", Some("Link"))], true));
+        assert!(rep.clean);
+        // No interfaces at all (early skeleton) -> no finding.
+        let rep = lint_model("m", &model(vec![conn("b", None)], false));
+        assert!(rep.clean);
+    }
+
+    #[test]
+    fn lint_lists_inherited_std_defaults_until_redefined() {
+        let attr = |name: Option<&str>, redef: Option<&str>, v: &str, u: &str| AttributeUsage {
+            name: name.map(Into::into),
+            redefines: redef.map(|r| vec![r.to_string()]).unwrap_or_default(),
+            type_name: Some("Real".into()),
+            value: Some(v.into()),
+            unit: Some(u.into()),
+            ..Default::default()
+        };
+        let std_pkg = Package {
+            name: "SysmlStdPower".into(),
+            is_library: true,
+            members: vec![PackageMember::PartDef(PartDef {
+                name: "AcMainsSupply".into(),
+                is_abstract: true,
+                attributes: vec![
+                    attr(Some("frequency"), None, "50.0", "Hz"),
+                    attr(Some("voltage"), None, "230.0", "V"),
+                ],
+                ..Default::default()
+            })],
+            ..Default::default()
+        };
+        let model = |redefine_freq: bool| {
+            let attrs = if redefine_freq {
+                vec![attr(None, Some("frequency"), "60.0", "Hz")]
+            } else {
+                vec![]
+            };
+            Model::new(vec![
+                std_pkg.clone(),
+                Package {
+                    name: "M".into(),
+                    members: vec![PackageMember::PartDef(PartDef {
+                        name: "Mains".into(),
+                        specializes: vec!["AcMainsSupply".into()],
+                        attributes: attrs,
+                        ..Default::default()
+                    })],
+                    ..Default::default()
+                },
+            ])
+        };
+        let rep = lint_model("m", &model(false));
+        let f = rep
+            .findings
+            .iter()
+            .find(|f| f.code == "inherited_std_default")
+            .expect("finding");
+        assert!(f.message.contains("frequency = 50.0 [Hz]"), "{}", f.message);
+        assert!(f.message.contains("voltage = 230.0 [V]"));
+        assert!(rep.clean, "info only");
+        let rep = lint_model("m", &model(true));
+        let f = rep
+            .findings
+            .iter()
+            .find(|f| f.code == "inherited_std_default")
+            .expect("finding");
+        assert!(!f.message.contains("frequency"), "{}", f.message);
+    }
 
     #[test]
     fn lint_flags_duplicate_part_shape_and_passes_after_extracting_base() {

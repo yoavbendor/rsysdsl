@@ -2,6 +2,9 @@
 
 use sysml_dsl::prelude::*;
 
+/// sysml-std library package. Abstract natural bases declare units with no placeholder defaults;
+/// concrete physical reference bodies (`StarBody`, `DeepSpaceSink`, `ThermodynamicParcel`) carry
+/// physical reference defaults (`rsysdsl lint` reports inherited ones as `inherited_std_default`).
 #[sysml::package(library, name = "SysmlStdNatural")]
 #[sysml::import("ScalarValues::*")]
 #[sysml::import("SI::*")]
@@ -14,11 +17,11 @@ pub mod sysml_std_natural {
     #[sysml::part(abstract)]
     #[derive(Debug, Clone, Copy)]
     pub struct NaturalBody {
-        #[sysml::attr(default = 1.0e24, unit = "kg")]
+        #[sysml::attr(unit = "kg")]
         pub mass: Quantity<f64>,
-        #[sysml::attr(default = 1.0e6, unit = "m")]
+        #[sysml::attr(unit = "m")]
         pub radius: Quantity<f64>,
-        #[sysml::attr(default = 288.0, unit = "K")]
+        #[sysml::attr(unit = "K")]
         pub surface_temperature: Quantity<f64>,
     }
 
@@ -38,11 +41,11 @@ pub mod sysml_std_natural {
     #[sysml::specializes(NaturalBody)]
     #[derive(Debug, Clone, Copy)]
     pub struct PlanetaryBody {
-        #[sysml::attr(default = 1.496e11, unit = "m")]
+        #[sysml::attr(unit = "m")]
         pub orbital_radius: Quantity<f64>,
-        #[sysml::attr(default = 3.15576e7, unit = "s")]
+        #[sysml::attr(unit = "s")]
         pub orbital_period: Quantity<f64>,
-        #[sysml::attr(default = 0.30)]
+        #[sysml::attr(dimensionless)]
         pub bond_albedo: f64,
         #[sysml::port]
         pub radiation_in: Conjugated<RadiativePort>,
@@ -78,9 +81,9 @@ pub mod sysml_std_natural {
     #[sysml::part(abstract)]
     #[derive(Debug, Clone, Copy)]
     pub struct FluidReservoir {
-        #[sysml::attr(default = 1.0e15, unit = "kg")]
+        #[sysml::attr(unit = "kg")]
         pub stored_mass: Quantity<f64>,
-        #[sysml::attr(default = 288.0, unit = "K")]
+        #[sysml::attr(unit = "K")]
         pub temperature: Quantity<f64>,
         #[sysml::port]
         pub inflow: Conjugated<FluidPort>,
@@ -97,13 +100,13 @@ pub mod sysml_std_natural {
     #[sysml::specializes(FluidReservoir)]
     #[derive(Debug, Clone, Copy)]
     pub struct HydrologicReservoir {
-        #[sysml::attr(default = 0.0, unit = "kg/s")]
+        #[sysml::attr(unit = "kg/s")]
         pub evaporation_rate: Quantity<f64>,
-        #[sysml::attr(default = 0.0, unit = "kg/s")]
+        #[sysml::attr(unit = "kg/s")]
         pub precipitation_rate: Quantity<f64>,
-        #[sysml::attr(default = 0.0, unit = "kg/s")]
+        #[sysml::attr(unit = "kg/s")]
         pub runoff_rate: Quantity<f64>,
-        #[sysml::attr(default = 0.0, unit = "W")]
+        #[sysml::attr(unit = "W")]
         pub latent_heat_flux: Quantity<f64>,
     }
 

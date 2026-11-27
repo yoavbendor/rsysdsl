@@ -218,6 +218,8 @@ pub struct KvArgs {
     pub flags: Vec<String>,
     pub strings: Vec<(String, String)>,
     pub paths: Vec<(String, Path)>,
+    /// Source spans of string-literal values (for precise diagnostics, e.g. `unit = "..."`).
+    pub str_spans: Vec<(String, proc_macro2::Span)>,
 }
 
 impl Parse for KvArgs {
@@ -241,6 +243,7 @@ impl Parse for KvArgs {
                 let _eq: Token![=] = input.parse()?;
                 if input.peek(syn::LitStr) {
                     let s: syn::LitStr = input.parse()?;
+                    out.str_spans.push((key_str.clone(), s.span()));
                     out.strings.push((key_str, s.value()));
                 } else if input.peek(syn::LitBool) {
                     let b: syn::LitBool = input.parse()?;
@@ -276,6 +279,14 @@ impl KvArgs {
             .iter()
             .find(|(k, _)| k == name)
             .map(|(_, v)| v.clone())
+    }
+
+    /// Span of the string literal bound to `name`, if any.
+    pub fn get_str_span(&self, name: &str) -> Option<proc_macro2::Span> {
+        self.str_spans
+            .iter()
+            .find(|(k, _)| k == name)
+            .map(|(_, sp)| *sp)
     }
 
     pub fn get_all_str(&self, name: &str) -> Vec<String> {
@@ -367,6 +378,7 @@ pub fn strip_sysml_attrs(attrs: Vec<Attribute>) -> Vec<Attribute> {
         "independent",
         "asil_decompose",
         "no_std_reflect",
+        "tbd",
     ];
     attrs
         .into_iter()
@@ -440,13 +452,31 @@ pub fn build_attr_usage_tokens(
     let doc = extract_doc(attrs);
     let doc_tok = quote_opt_str(&doc);
     let mut kv = KvArgs::default();
+    let mut attr_span = syn::spanned::Spanned::span(field_ty);
     for attr in attrs {
         if is_sysml_attr(attr, "attr") {
+            attr_span = syn::spanned::Spanned::span(attr);
             if let Meta::List(_) = &attr.meta {
                 kv = attr.parse_args()?;
             }
         }
     }
+    crate::units_check::require_unit_decl(&kv, field_name_rust, field_ty, attr_span)?;
+    if kv.get_str("tbd_value").is_some() {
+        if let Some(key) = ["default", "value", "expr"].into_iter().find(|k| kv.get_str(k).is_some()) {
+            return Err(syn::Error::new(
+                kv.get_str_span(key).unwrap_or(attr_span),
+                format!(
+                    "attribute `{field_name_rust}` has both `tbd_value` and `{key}`\n\
+                     help: `tbd_value = \"reason\"` means the value is not in the source yet: remove `{key} = ...`, \
+                     or remove `tbd_value` if the source states the value"
+                ),
+            ));
+        }
+    }
+    let mut tbd_marks = crate::tbd::attr_marks(&kv, attr_span)?;
+    tbd_marks.extend(crate::tbd::extract_tbd_marks(attrs)?);
+    let tbd_tok = crate::tbd::quote_marks(&tbd_marks);
     let name_override = extract_sysml_name_override(attrs)?.or_else(|| kv.get_str("name"));
     let mut redefines = kv.get_all_str("redefines");
     if redefines.is_empty() && kv.has_flag("redefines") {
@@ -454,6 +484,7 @@ pub fn build_attr_usage_tokens(
     }
     let subsets = kv.get_all_str("subsets");
     let is_keywordless = kv.has_flag("keywordless");
+    let is_evidence = kv.has_flag("evidence");
     let is_anonymous_redef = kv.has_flag("anonymous")
         || (!redefines.is_empty() && name_override.is_none() && kv.get_str("keep_name").is_none())
         || (is_keywordless && !subsets.is_empty() && name_override.is_none() && kv.get_str("keep_name").is_none());
@@ -499,6 +530,7 @@ pub fn build_attr_usage_tokens(
         .or_else(|| kv.get_str("default"))
         .or_else(|| kv.get_str("expr"));
     let unit = kv.get_str("unit");
+    crate::units_check::validate_unit_kv(&kv)?;
 
     let name_tok = quote_opt_str(&attr_name);
     let ty_tok = quote_opt_str(&type_name);
@@ -524,6 +556,8 @@ pub fn build_attr_usage_tokens(
             doc: #doc_tok,
             is_keywordless: #is_keywordless,
             nested_attributes: ::std::vec![],
+            is_evidence: #is_evidence,
+            tbd: #tbd_tok,
         }
     })
 }
@@ -573,8 +607,21 @@ pub fn build_auto_default_impl(item: &syn::ItemStruct) -> syn::Result<TokenStrea
         }
         let raw_val = kv.get_str("value").or_else(|| kv.get_str("default"));
         let unit = kv.get_str("unit").unwrap_or_default();
+        let is_float = is_quantity_type(&field.ty)
+            || is_prim_ident(&field.ty, "f64")
+            || is_prim_ident(&field.ty, "f32");
 
-        let init_expr = if let Some(val_str) = raw_val {
+        let unknown_value = kv.has_flag("evidence") || kv.get_str("tbd_value").is_some();
+        let init_expr = if raw_val.is_none() && unknown_value && is_float {
+            // Unmeasured evidence and `tbd_value` parameters are NaN: every comparison is
+            // false, so `evaluate()` cannot pass until a real value is supplied.
+            has_any_literal_default = true;
+            if is_quantity_type(&field.ty) {
+                quote!(::sysml_dsl::core_contracts::Quantity::new(f64::NAN, #unit))
+            } else {
+                quote!(f64::NAN as _)
+            }
+        } else if let Some(val_str) = raw_val {
             let trimmed = val_str.trim();
             if is_quantity_type(&field.ty) {
                 if let Ok(num) = trimmed.parse::<f64>() {

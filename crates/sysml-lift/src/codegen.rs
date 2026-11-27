@@ -510,6 +510,7 @@ fn emit_rust_item_def(i: &ItemDef, out: &mut String) {
     } else {
         let _ = writeln!(out, "    #[sysml::item]");
     }
+    emit_rust_tbd_attrs(&i.tbd, "    ", out);
     if rname != i.name {
         let _ = writeln!(out, "    #[sysml::name = \"{}\"]", escape_rust_str(&i.name));
     }
@@ -562,6 +563,7 @@ fn emit_rust_port_def(p: &PortDef, out: &mut String) {
     } else {
         let _ = writeln!(out, "    #[sysml::port]");
     }
+    emit_rust_tbd_attrs(&p.tbd, "    ", out);
     if rname != p.name {
         let _ = writeln!(out, "    #[sysml::name = \"{}\"]", escape_rust_str(&p.name));
     }
@@ -614,6 +616,7 @@ fn emit_rust_interface_def(i: &InterfaceDef, out: &mut String) {
     let rname = to_pascal_ident(&i.name);
     emit_doc_comments(&i.doc, "    ", out);
     let _ = writeln!(out, "    #[sysml::interface]");
+    emit_rust_tbd_attrs(&i.tbd, "    ", out);
     if rname != i.name {
         let _ = writeln!(out, "    #[sysml::name = \"{}\"]", escape_rust_str(&i.name));
     }
@@ -755,6 +758,7 @@ fn emit_rust_state_def(s: &StateDef, out: &mut String) {
     } else {
         let _ = writeln!(out, "    #[sysml::state]");
     }
+    emit_rust_tbd_attrs(&s.tbd, "    ", out);
     if rname != s.name {
         let _ = writeln!(out, "    #[sysml::name = \"{}\"]", escape_rust_str(&s.name));
     }
@@ -807,6 +811,7 @@ fn emit_rust_requirement_def(r: &RequirementDef, out: &mut String) {
     } else {
         let _ = writeln!(out, "    #[sysml::requirement({})]", args.join(", "));
     }
+    emit_rust_tbd_attrs(&r.tbd, "    ", out);
     if rname != r.name {
         let _ = writeln!(out, "    #[sysml::name = \"{}\"]", escape_rust_str(&r.name));
     }
@@ -956,6 +961,7 @@ fn emit_rust_part_def(
     } else {
         let _ = writeln!(out, "    #[sysml::part({})]", part_flags.join(", "));
     }
+    emit_rust_tbd_attrs(&p.tbd, "    ", out);
     if rname != p.name {
         let _ = writeln!(out, "    #[sysml::name = \"{}\"]", escape_rust_str(&p.name));
     }
@@ -1043,6 +1049,9 @@ fn emit_rust_part_def(
             parts.push(format!("to = {to_rust}"));
             parts.push(format!("from_sysml = \"{}\"", escape_rust_str(from)));
             parts.push(format!("to_sysml = \"{}\"", escape_rust_str(to)));
+            if let Some(m) = conn.tbd.first() {
+                parts.push(format!("tbd = \"{}\"", escape_rust_str(&m.reason)));
+            }
             let _ = writeln!(out, "    #[sysml::connect({})]", parts.join(", "));
         }
     }
@@ -1124,6 +1133,7 @@ fn emit_rust_part_def(
             "Vec<()>".to_string()
         };
         let _ = writeln!(out, "        #[sysml::part({})]", opts.join(", "));
+        emit_rust_tbd_attrs(&sub.tbd, "        ", out);
         let _ = writeln!(out, "        pub {fname}: {rty},");
     }
     for port in &p.ports {
@@ -1139,6 +1149,7 @@ fn emit_rust_part_def(
             "        #[sysml::port(name = \"{}\")]",
             escape_rust_str(&port.name)
         );
+        emit_rust_tbd_attrs(&port.tbd, "        ", out);
         let _ = writeln!(out, "        pub {fname}: {rty},");
     }
     for it in &p.items {
@@ -1267,6 +1278,9 @@ fn emit_rust_analysis_params(params: &[AnalysisParam], out: &mut String) {
         }
         if let Some(unit) = &p.unit {
             opts.push(format!("unit = \"{}\"", escape_rust_str(unit)));
+            if !is_checked_si_unit(unit) {
+                opts.push(format!("custom_unit = \"{LIFTED_CUSTOM_UNIT_REASON}\""));
+            }
         }
         let _ = writeln!(out, "        #[sysml::{attr_name}({})]", opts.join(", "));
         let _ = writeln!(out, "        pub {fname}: f64,");
@@ -1394,10 +1408,32 @@ fn emit_rust_attr_field(a: &AttributeUsage, used: &mut BTreeSet<String>, out: &m
             ValueKind::Bound => opts.push(format!("value = \"{}\"", escape_rust_str(val))),
         }
     }
+    let mark = |k: TbdKind| a.tbd.iter().find(|m| m.kind == k);
     if let Some(unit) = &a.unit {
         opts.push(format!("unit = \"{}\"", escape_rust_str(unit)));
+        if !is_checked_si_unit(unit) {
+            let reason = mark(TbdKind::CustomUnit)
+                .map(|m| m.reason.as_str())
+                .unwrap_or(LIFTED_CUSTOM_UNIT_REASON);
+            opts.push(format!("custom_unit = \"{}\"", escape_rust_str(reason)));
+        }
+    } else if let Some(m) = mark(TbdKind::Unit) {
+        opts.push(format!("tbd_unit = \"{}\"", escape_rust_str(&m.reason)));
+    } else if lifted_attr_needs_dimensionless(a) {
+        // SysML `Real` / `Integer` values without a unit are pure numbers.
+        opts.push("dimensionless".to_string());
+    }
+    if let Some(m) = mark(TbdKind::Value) {
+        opts.push(format!("tbd_value = \"{}\"", escape_rust_str(&m.reason)));
+    }
+    if let Some(m) = a.tbd.iter().find(|m| m.kind != TbdKind::Element) {
+        if let Some(o) = &m.owner {
+            opts.push(format!("tbd_owner = \"{}\"", escape_rust_str(o)));
+        }
+        opts.push(format!("tbd_resolve_by = \"{}\"", m.resolve_by.as_str()));
     }
     emit_doc_comments(&a.doc, "        ", out);
+    emit_rust_tbd_attrs(&a.tbd, "        ", out);
     if opts.is_empty() {
         let _ = writeln!(out, "        #[sysml::attr]");
     } else {
@@ -1439,4 +1475,44 @@ fn unique_ident(base: &str, used: &mut BTreeSet<String>) -> String {
         }
         i += 1;
     }
+}
+
+/// `#[sysml::tbd(reason = "...", owner = "...", resolve_by = "...")]` for each element TBD.
+fn emit_rust_tbd_attrs(marks: &[TbdMark], indent: &str, out: &mut String) {
+    for m in marks.iter().filter(|m| m.kind == TbdKind::Element) {
+        let mut args = vec![format!("reason = \"{}\"", escape_rust_str(&m.reason))];
+        if let Some(o) = &m.owner {
+            args.push(format!("owner = \"{}\"", escape_rust_str(o)));
+        }
+        args.push(format!("resolve_by = \"{}\"", m.resolve_by.as_str()));
+        let _ = writeln!(out, "{indent}#[sysml::tbd({})]", args.join(", "));
+    }
+}
+
+/// Reason recorded on lifted attributes whose unit is outside the checked SI table.
+const LIFTED_CUSTOM_UNIT_REASON: &str = "unit defined in source corpus";
+
+/// A lifted numeric attribute without a unit (and without a SysML type or ISQ subsetting that
+/// carries one) must say `dimensionless` to satisfy the DSL's unit-declaration rule.
+fn lifted_attr_needs_dimensionless(a: &AttributeUsage) -> bool {
+    if a.subsets.iter().any(|s| s.contains("ISQ::")) {
+        return false;
+    }
+    match a.type_name.as_deref() {
+        None => true,
+        Some(t) => matches!(
+            t.rsplit("::").next().unwrap_or(t),
+            "Real" | "Integer" | "Natural" | "Rational" | "Number" | "Positive" | "NumericalValue"
+        ),
+    }
+}
+
+/// `true` if `unit` is accepted by the DSL's closed, OMG-resolvable SI unit table. Otherwise the
+/// lifted attribute is marked `custom_unit` (a unit defined by the source model or another
+/// library, e.g. `'%'`, `kN`, `SI::kg`), which opts out of the compile-time unit/dimension checks.
+fn is_checked_si_unit(unit: &str) -> bool {
+    matches!(
+        sysml_core::units::check_unit(unit),
+        sysml_core::units::UnitCheck::Ok(_)
+    )
 }

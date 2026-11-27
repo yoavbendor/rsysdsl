@@ -38,6 +38,7 @@ pub fn expand_item(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
     }
     let spec_names: Vec<String> = specializes_paths.iter().map(path_to_sysml_string).collect();
 
+    let field_unit_fn = crate::units_check::field_unit_fn(&item.ident, &item.fields)?;
     let mut attr_tokens = Vec::new();
     if let Fields::Named(fields) = &mut item.fields {
         for field in &mut fields.named {
@@ -47,6 +48,7 @@ pub fn expand_item(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
         }
     }
 
+    let def_tbd_tok = crate::tbd::tbd_vec_tokens(&item.attrs)?;
     item.attrs = strip_sysml_attrs(std::mem::take(&mut item.attrs));
     let ident = &item.ident;
     let doc_tok = quote_opt_str(&doc);
@@ -65,6 +67,8 @@ pub fn expand_item(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
             const SYSML_NAME: &'static str = #sysml_name;
         }
 
+        #field_unit_fn
+
         #rcfg
         impl ::sysml_dsl::ir::SysmlItem for #ident {
             fn item_def() -> ::sysml_dsl::ir::ItemDef {
@@ -74,6 +78,7 @@ pub fn expand_item(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
                     doc: #doc_tok,
                     specializes: #spec_tok,
                     attributes: ::std::vec![#(#attr_tokens),*],
+                    tbd: #def_tbd_tok,
                 }
             }
         }
@@ -103,6 +108,7 @@ pub fn expand_enum_def(args: TokenStream, mut item: ItemEnum) -> syn::Result<Tok
         v.attrs = strip_sysml_attrs(std::mem::take(&mut v.attrs));
     }
 
+    crate::tbd::reject_tbd(&item.attrs, "enum_def")?;
     item.attrs = strip_sysml_attrs(std::mem::take(&mut item.attrs));
     let ident = &item.ident;
     let doc_tok = quote_opt_str(&doc);
@@ -157,6 +163,8 @@ pub fn expand_port(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
     let mut item_type_checks = Vec::new();
     let mut all_inout = true;
     let mut has_any_item = false;
+    let mut declared_field_names: Vec<String> = Vec::new();
+    let mut redef_checks = Vec::new();
 
     if let Fields::Named(fields) = &mut item.fields {
         for field in &mut fields.named {
@@ -176,11 +184,53 @@ pub fn expand_port(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
                 .iter()
                 .any(|a| is_sysml_attr(a, "inout") || is_sysml_attr(a, "inout_item") || is_sysml_attr(a, "inout_param"));
             let is_attr = field.attrs.iter().any(|a| is_sysml_attr(a, "attr"));
+            declared_field_names.push(fname_rust.clone());
+            declared_field_names.push(fname_sysml.clone());
 
             if is_attr {
                 attr_tokens.push(build_attr_usage_tokens(&fname_rust, &field.ty, &field.attrs)?);
             } else {
                 has_any_item = true;
+                // `#[sysml::out_item(redefines)]` / `#[sysml::out_item(redefines = "reading")]`
+                let mut ikv = KvArgs::default();
+                for a in &field.attrs {
+                    let is_dir_attr = [
+                        "in_item", "out_item", "inout_item", "in", "out", "inout", "in_param",
+                        "out_param", "inout_param",
+                    ]
+                    .iter()
+                    .any(|k| is_sysml_attr(a, k));
+                    if is_dir_attr {
+                        if let syn::Meta::List(_) = &a.meta {
+                            ikv = a.parse_args()?;
+                        }
+                    }
+                }
+                let mut redefs = ikv.get_all_str("redefines");
+                if redefs.is_empty() && ikv.has_flag("redefines") {
+                    redefs.push(fname_sysml.clone());
+                }
+                if !redefs.is_empty() && specializes_paths.is_empty() {
+                    return Err(syn::Error::new_spanned(
+                        &field.ident,
+                        "`redefines` on a port item needs `#[sysml::specializes(BasePort)]` on the port",
+                    ));
+                }
+                for r in &redefs {
+                    if !r.contains("::") && !r.contains('.') {
+                        let r_str = r.as_str();
+                        let ancestor_checks = specializes_paths
+                            .iter()
+                            .map(|base_path| quote!(#base_path::__sysml_has_field(#r_str)));
+                        redef_checks.push(quote! {
+                            const _: () = assert!(
+                                #(#ancestor_checks)||*,
+                                concat!("`redefines` target item `", #r_str, "` does not exist on any specialized ancestor port")
+                            );
+                        });
+                    }
+                }
+                let redefs_tok = quote_vec_str(&redefs);
                 let dir_tok = if is_in {
                     all_inout = false;
                     quote!(::std::option::Option::Some(::sysml_dsl::ir::Direction::In))
@@ -204,6 +254,7 @@ pub fn expand_port(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
                         type_name: ::std::string::String::from(#ty_name),
                         multiplicity: #mult_tok,
                         subsets: ::std::vec![],
+                        redefines: #redefs_tok,
                         doc: ::std::option::Option::None,
                     }
                 });
@@ -212,8 +263,17 @@ pub fn expand_port(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
         }
     }
 
+    let own_field_checks = declared_field_names
+        .iter()
+        .map(|n| quote!(::sysml_dsl::core_contracts::const_str_eq(name, #n)));
+    let parent_field_checks = specializes_paths
+        .iter()
+        .map(|base| quote!(#base::__sysml_has_field(name)));
+    let has_field_expr = quote!(false #(|| #own_field_checks)* #(|| #parent_field_checks)*);
+
     let is_symmetric = explicit_symmetric || (has_any_item && all_inout);
 
+    let def_tbd_tok = crate::tbd::tbd_vec_tokens(&item.attrs)?;
     item.attrs = strip_sysml_attrs(std::mem::take(&mut item.attrs));
     let ident = &item.ident;
     let doc_tok = quote_opt_str(&doc);
@@ -238,6 +298,14 @@ pub fn expand_port(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
     Ok(quote! {
         #item
 
+        impl #ident {
+            #[doc(hidden)]
+            #[allow(dead_code)]
+            pub const fn __sysml_has_field(name: &str) -> bool {
+                #has_field_expr
+            }
+        }
+
         impl ::sysml_dsl::core_contracts::SysmlPortCore for #ident {
             type Conjugate = ::sysml_dsl::core_contracts::Conjugated<#ident>;
             const SYSML_NAME: &'static str = #sysml_name;
@@ -254,6 +322,7 @@ pub fn expand_port(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
                     is_symmetric: #is_symmetric,
                     items: ::std::vec![#(#item_tokens),*],
                     attributes: ::std::vec![#(#attr_tokens),*],
+                    tbd: #def_tbd_tok,
                 }
             }
         }
@@ -266,6 +335,7 @@ pub fn expand_port(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
         };
 
         #(#spec_impls)*
+        #(#redef_checks)*
     })
 }
 
@@ -370,7 +440,7 @@ pub fn expand_interface(args: TokenStream, mut item: ItemStruct) -> syn::Result<
         }
     }
 
-    let (end_a_tok, end_b_tok, ends_check_tok) = if end_types.len() == 2 {
+    let (end_a_tok, end_b_tok, ends_check_tok, has_ends_tok) = if end_types.len() == 2 {
         let end_a = &end_types[0];
         let end_b = &end_types[1];
         (
@@ -381,21 +451,48 @@ pub fn expand_interface(args: TokenStream, mut item: ItemStruct) -> syn::Result<
                     ::sysml_dsl::core_contracts::assert_interface_ends_core::<#end_a, #end_b>();
                 };
             },
+            quote!(true),
         )
     } else if end_types.is_empty() && !specializes_paths.is_empty() {
         let base = &specializes_paths[0];
+        let ident_str = item.ident.to_string();
+        let concrete_check = if is_abstract {
+            quote!()
+        } else {
+            let msg = format!(
+                "concrete #[sysml::interface] `{ident_str}` inherits no `end` ports from its abstract base interface; declare two #[sysml::end] port fields"
+            );
+            quote! {
+                const _: () = assert!(
+                    <#base as ::sysml_dsl::core_contracts::SysmlInterfaceCore>::HAS_ENDS,
+                    #msg
+                );
+            }
+        };
         (
             quote!(<#base as ::sysml_dsl::core_contracts::SysmlInterfaceCore>::EndA),
             quote!(<#base as ::sysml_dsl::core_contracts::SysmlInterfaceCore>::EndB),
+            concrete_check,
+            quote!(<#base as ::sysml_dsl::core_contracts::SysmlInterfaceCore>::HAS_ENDS),
+        )
+    } else if end_types.is_empty() && is_abstract {
+        // Pure taxonomy base (`#[sysml::interface(abstract)] pub struct EnergyChannel {}`):
+        // emits `abstract interface def EnergyChannel;` and carries placeholder ends that
+        // connect to nothing, so only specializations declaring real ends can be connected.
+        (
+            quote!(::sysml_dsl::core_contracts::NoInterfaceEnds),
+            quote!(::sysml_dsl::core_contracts::NoInterfaceEnds),
             quote!(),
+            quote!(false),
         )
     } else {
         return Err(syn::Error::new_spanned(
             &item.ident,
-            "#[sysml::interface] struct must declare two `end` port fields (or inherit them via #[sysml::specializes(BaseInterface)])",
+            "#[sysml::interface] struct must declare two `end` port fields (or inherit them via #[sysml::specializes(BaseInterface)]); only an `#[sysml::interface(abstract)]` classification base may declare none",
         ));
     };
 
+    let def_tbd_tok = crate::tbd::tbd_vec_tokens(&item.attrs)?;
     item.attrs = strip_sysml_attrs(std::mem::take(&mut item.attrs));
     let ident = &item.ident;
     let doc_tok = quote_opt_str(&doc);
@@ -433,6 +530,7 @@ pub fn expand_interface(args: TokenStream, mut item: ItemStruct) -> syn::Result<
             type EndA = #end_a_tok;
             type EndB = #end_b_tok;
             const SYSML_NAME: &'static str = #sysml_name;
+            const HAS_ENDS: bool = #has_ends_tok;
         }
 
         #rcfg
@@ -445,6 +543,7 @@ pub fn expand_interface(args: TokenStream, mut item: ItemStruct) -> syn::Result<
                     specializes: #spec_tok,
                     attributes: ::std::vec![#(#attr_tokens),*],
                     ends: ::std::vec![#(#end_tokens),*],
+                    tbd: #def_tbd_tok,
                 }
             }
         }
@@ -507,6 +606,7 @@ pub fn expand_connection(args: TokenStream, mut item: ItemStruct) -> syn::Result
         }
     }
 
+    crate::tbd::reject_tbd(&item.attrs, "connection")?;
     item.attrs = strip_sysml_attrs(std::mem::take(&mut item.attrs));
     let ident = &item.ident;
     let doc_tok = quote_opt_str(&doc);

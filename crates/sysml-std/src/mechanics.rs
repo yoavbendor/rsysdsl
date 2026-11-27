@@ -2,6 +2,10 @@
 
 use sysml_dsl::prelude::*;
 
+/// sysml-std library package. Abstract mechanical bases declare units with no placeholder
+/// defaults; concrete standard parts carry generic library defaults that specializing models
+/// should redefine when their source specifies values (`rsysdsl lint` reports inherited ones
+/// as `inherited_std_default`).
 #[sysml::package(library, name = "SysmlStdMechanics")]
 #[sysml::import("ScalarValues::*")]
 #[sysml::import("SI::*")]
@@ -17,11 +21,11 @@ pub mod sysml_std_mechanics {
     #[sysml::part(abstract)]
     #[derive(Debug, Clone, Copy)]
     pub struct PhysicalComponent {
-        #[sysml::attr(default = 1.0, unit = "kg")]
+        #[sysml::attr(unit = "kg")]
         pub mass: Quantity<f64>,
-        #[sysml::attr(default = 0.0, unit = "W")]
+        #[sysml::attr(unit = "W")]
         pub heat_dissipation: Quantity<f64>,
-        #[sysml::attr(default = 30.0)]
+        #[sysml::attr(dimensionless)]
         pub noise_level_db: f64,
         #[sysml::port]
         pub heat_out: ThermalPort,
@@ -34,7 +38,7 @@ pub mod sysml_std_mechanics {
     #[sysml::specializes(PhysicalComponent)]
     #[derive(Debug, Clone, Copy)]
     pub struct StructuralFrame {
-        #[sysml::attr(default = 500.0, unit = "N")]
+        #[sysml::attr(unit = "N")]
         pub max_load: Quantity<f64>,
     }
 
@@ -43,9 +47,9 @@ pub mod sysml_std_mechanics {
     #[sysml::specializes(StructuralFrame)]
     #[derive(Debug, Clone, Copy)]
     pub struct ThermalEnclosure {
-        #[sysml::attr(default = 2.0)]
+        #[sysml::attr(unit = "W/K")]
         pub thermal_conductance_w_per_k: f64,
-        #[sysml::attr(default = 12.0)]
+        #[sysml::attr(dimensionless)]
         pub acoustic_attenuation_db: f64,
         #[sysml::port]
         pub heat_in: Conjugated<ThermalPort>,
@@ -56,7 +60,7 @@ pub mod sysml_std_mechanics {
     #[sysml::specializes(PhysicalComponent)]
     #[derive(Debug, Clone, Copy)]
     pub struct RadiativeConduit {
-        #[sysml::attr(default = 0.96)]
+        #[sysml::attr(dimensionless)]
         pub transmission_efficiency: f64,
         #[sysml::port]
         pub radiation_in: Conjugated<RadiativePort>,
@@ -69,9 +73,9 @@ pub mod sysml_std_mechanics {
     #[sysml::specializes(PhysicalComponent)]
     #[derive(Debug, Clone, Copy)]
     pub struct FrictionBrake {
-        #[sysml::attr(default = 800.0, unit = "N")]
+        #[sysml::attr(unit = "N")]
         pub max_braking_force: Quantity<f64>,
-        #[sysml::attr(default = 1500.0, unit = "W")]
+        #[sysml::attr(unit = "W")]
         pub thermal_capacity_power: Quantity<f64>,
         #[sysml::port]
         pub actuation_in: Conjugated<HmiInputPort>,
@@ -82,9 +86,9 @@ pub mod sysml_std_mechanics {
     #[sysml::specializes(PhysicalComponent)]
     #[derive(Debug, Clone, Copy)]
     pub struct RotatingWheel {
-        #[sysml::attr(default = 0.34, unit = "m")]
+        #[sysml::attr(unit = "m")]
         pub wheel_radius: Quantity<f64>,
-        #[sysml::attr(default = 0.004)]
+        #[sysml::attr(dimensionless)]
         pub rolling_resistance_coeff: f64,
         #[sysml::port]
         pub drive_in: Conjugated<MechanicalPowerPort>,
@@ -106,11 +110,11 @@ pub mod sysml_std_mechanics {
     #[sysml::specializes(PhysicalComponent)]
     #[derive(Debug, Clone, Copy)]
     pub struct ElectricMotor {
-        #[sysml::attr(default = 300.0, unit = "W")]
+        #[sysml::attr(unit = "W")]
         pub rated_power: Quantity<f64>,
-        #[sysml::attr(default = 0.85)]
+        #[sysml::attr(dimensionless)]
         pub efficiency: f64,
-        #[sysml::attr(default = 50.0, unit = "Hz")]
+        #[sysml::attr(unit = "Hz")]
         pub rated_rotation_freq: Quantity<f64>,
         #[sysml::port]
         pub power_in: Conjugated<ElectricalPowerPort>,
@@ -125,7 +129,7 @@ pub mod sysml_std_mechanics {
     #[sysml::specializes(ElectricMotor)]
     #[derive(Debug, Clone, Copy)]
     pub struct BrushlessDcMotor {
-        #[sysml::attr(redefines = "efficiency", default = 0.88)]
+        #[sysml::attr(dimensionless, redefines = "efficiency", default = 0.88)]
         pub efficiency: f64,
     }
 
@@ -134,9 +138,9 @@ pub mod sysml_std_mechanics {
     #[sysml::specializes(PhysicalComponent)]
     #[derive(Debug, Clone, Copy)]
     pub struct MechanicalTransmission {
-        #[sysml::attr(default = 1.0)]
+        #[sysml::attr(dimensionless)]
         pub gear_ratio: f64,
-        #[sysml::attr(default = 0.94)]
+        #[sysml::attr(dimensionless)]
         pub efficiency: f64,
         #[sysml::port]
         pub mech_in: Conjugated<MechanicalPowerPort>,
@@ -149,9 +153,9 @@ pub mod sysml_std_mechanics {
     #[sysml::specializes(PhysicalComponent)]
     #[derive(Debug, Clone, Copy)]
     pub struct FluidPump {
-        #[sysml::attr(default = 0.25, unit = "kg/s")]
+        #[sysml::attr(unit = "kg/s")]
         pub flow_rate: Quantity<f64>,
-        #[sysml::attr(default = 60.0, unit = "W")]
+        #[sysml::attr(unit = "W")]
         pub rated_power: Quantity<f64>,
         #[sysml::port]
         pub power_in: Conjugated<ElectricalPowerPort>,

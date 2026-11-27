@@ -12,9 +12,11 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use sysml_ir::{
-    Model, Package, PackageMember, RequirementDef, RequirementUsage, VerificationReport,
+    Model, Package, PackageMember, RequirementDef, RequirementUsage, TbdPhase, VerificationReport,
     VerificationStatus,
 };
+
+use crate::tbd::{collect_tbd_ledger, overdue_at, TbdEntry};
 
 use crate::emit::emit_model;
 use crate::validate::{discover_omg_stdlib, validate_sysml_units_with_lib};
@@ -38,8 +40,58 @@ pub struct AuditReport {
     pub satisfied_requirements: usize,
     pub orphan_requirements: Vec<String>,
     pub unverified_constrained_requirements: Vec<String>,
+    /// Requirements whose constraint compares two attributes holding the same model value
+    /// (a "measured" value copied from the limit). Reported as `hollow-requirement` warnings;
+    /// they do not fail the audit (inventing a different number would be worse): mark the
+    /// measured attribute `evidence` and supply it from a verification case.
+    #[serde(default)]
+    pub hollow_requirements: Vec<String>,
     pub total_calcs: usize,
     pub findings: Vec<AuditFinding>,
+    /// Number of TBD markers (escape hatches) in the model.
+    #[serde(default)]
+    pub tbd_count: usize,
+    /// Every TBD marker: element, kind (unit|value|element|channel|custom_unit), reason,
+    /// owner, resolve_by.
+    #[serde(default)]
+    pub tbd_ledger: Vec<TbdEntry>,
+    /// Design maturity the model is audited at (`--maturity`, default `concept`).
+    #[serde(default = "default_maturity")]
+    pub maturity: TbdPhase,
+    /// TBDs due at or before `maturity` (`resolve_by <= maturity`); fail the audit in `--strict`.
+    #[serde(default)]
+    pub overdue_tbds: Vec<TbdEntry>,
+}
+
+fn default_maturity() -> TbdPhase {
+    TbdPhase::Concept
+}
+
+/// Apply the S7 maturity rule: every TBD whose `resolve_by` is at or before `maturity` is
+/// overdue. Overdue TBDs are `tbd-overdue` findings (errors that fail the audit in `strict`
+/// mode, warnings otherwise). `release` therefore requires zero TBDs; the default `concept`
+/// only rejects TBDs that had to be resolved by the concept phase.
+pub fn apply_maturity(report: &mut AuditReport, maturity: TbdPhase, strict: bool) {
+    report.findings.retain(|f| f.rule != "tbd-overdue");
+    report.maturity = maturity;
+    report.overdue_tbds = overdue_at(&report.tbd_ledger, maturity);
+    for e in &report.overdue_tbds {
+        report.findings.push(AuditFinding {
+            rule: "tbd-overdue".to_string(),
+            severity: if strict { "error" } else { "warning" }.to_string(),
+            element: e.element.clone(),
+            message: format!(
+                "{} TBD due by `{}` is still open at maturity `{}`: {}",
+                e.kind.as_str(),
+                e.resolve_by.as_str(),
+                maturity.as_str(),
+                e.reason
+            ),
+        });
+    }
+    if strict && !report.overdue_tbds.is_empty() {
+        report.ok = false;
+    }
 }
 
 /// Audit a `sysml_ir::Model` without loading the OMG Standard Library (fast path).
@@ -187,6 +239,26 @@ fn build_audit_report(
         }
     }
 
+    let mut hollow_requirements = Vec::new();
+    for (req_name, rdef) in &req_defs {
+        let ev = crate::evidence::analyze_requirement(rdef);
+        if ev.hollow_comparisons.is_empty() {
+            continue;
+        }
+        let req_id = rdef.short_name.as_deref().unwrap_or(req_name.as_str());
+        let label = format!("{req_id} ({req_name})");
+        hollow_requirements.push(label.clone());
+        findings.push(AuditFinding {
+            rule: "hollow-requirement".to_string(),
+            severity: "warning".to_string(),
+            element: label,
+            message: format!(
+                "constraint operands hold the same model value ({}): the measured value looks copied from the limit. Mark it `#[sysml::attr(..., evidence)]` without a default and let a verification case supply it",
+                ev.hollow_comparisons.join("; ")
+            ),
+        });
+    }
+
     let total_requirements = req_defs.len();
     let satisfied_requirements = total_requirements.saturating_sub(orphan_requirements.len());
     let strict_ok = !strict || val.warning_count == 0;
@@ -195,7 +267,8 @@ fn build_audit_report(
         && orphan_requirements.is_empty()
         && unverified_constrained_requirements.is_empty();
 
-    AuditReport {
+    let tbd_ledger = collect_tbd_ledger(model);
+    let mut report = AuditReport {
         ok,
         stdlib_loaded: val.stdlib_loaded,
         validation_ok: val.valid,
@@ -205,9 +278,16 @@ fn build_audit_report(
         satisfied_requirements,
         orphan_requirements,
         unverified_constrained_requirements,
+        hollow_requirements,
         total_calcs,
         findings,
-    }
+        tbd_count: tbd_ledger.len(),
+        tbd_ledger,
+        maturity: TbdPhase::Concept,
+        overdue_tbds: Vec::new(),
+    };
+    apply_maturity(&mut report, TbdPhase::Concept, strict);
+    report
 }
 
 fn collect_pkg<'a>(

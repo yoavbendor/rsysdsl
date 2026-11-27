@@ -41,12 +41,28 @@ pub mod vehicle_arch {
         pub frame: SpeedSignal,
     }
 
+    /// Abstract classification base for every arrow type (no ends needed). Classifying
+    /// interfaces under it clears the `unclassified_interfaces` lint.
+    #[sysml::interface(abstract)]
+    pub struct VehicleChannel {}
+
     #[sysml::interface]
+    #[sysml::specializes(VehicleChannel)]
     pub struct SpeedLink {
         #[sysml::end]
         pub tx: SpeedPort,
         #[sysml::end]
         pub rx: Conjugated<SpeedPort>,
+    }
+
+    /// Symmetric bus: both ends use the same (symmetric) port type.
+    #[sysml::interface]
+    #[sysml::specializes(VehicleChannel)]
+    pub struct CanLink {
+        #[sysml::end]
+        pub a: CanBusPort,
+        #[sysml::end]
+        pub b: CanBusPort,
     }
 
     #[sysml::part]
@@ -75,7 +91,7 @@ pub mod vehicle_arch {
     /// Top-level Visio context assembly.
     #[sysml::part]
     #[sysml::connect(interface = SpeedLink, name = "wheelToEcu", from = wheel.speed_out, to = ecu.speed_in)]
-    #[sysml::connect(name = "ecuToGateway", from = ecu.can, to = gateway.can)]
+    #[sysml::connect(interface = CanLink, name = "ecuToGateway", from = ecu.can, to = gateway.can)]
     #[derive(Debug, Clone, Copy)]
     pub struct VehicleContext {
         #[sysml::part]
@@ -88,6 +104,37 @@ pub mod vehicle_arch {
 }
 ```
 
+### Connecting to an inherited port
+
+`#[sysml::connect]` checks `from` / `to` against the fields of the Rust struct, and a child struct does not contain its parent's fields. To wire a port declared on an abstract parent, **redeclare it on the child as `#[sysml::port(redefines)]` with the same field name and type** (the SysML becomes `port :>> powerOut : PowerPort;`, so no duplicate-member warning):
+
+```rust
+#[sysml::part(abstract)]
+#[derive(Debug, Clone, Copy)]
+pub struct PowerSourceBase {
+    #[sysml::port]
+    pub power_out: PowerPort,
+}
+
+#[sysml::part]
+#[sysml::specializes(PowerSourceBase)]
+#[derive(Debug, Clone, Copy)]
+pub struct Mains {
+    #[sysml::port(redefines)] // required to use `mains.power_out` in a connect
+    pub power_out: PowerPort,
+}
+
+#[sysml::part]
+#[sysml::connect(interface = PowerLink, name = "mainsToLoad", from = mains.power_out, to = load.power_in)]
+#[derive(Debug, Clone, Copy)]
+pub struct Appliance {
+    #[sysml::part]
+    pub mains: Mains,
+    #[sysml::part]
+    pub load: Load, // has `#[sysml::port] pub power_in: Conjugated<PowerPort>`
+}
+```
+
 ---
 
 ## Pattern 2: Requirements, Provenance & Compiled Constraints
@@ -95,7 +142,7 @@ pub mod vehicle_arch {
 Record document provenance in `#[sysml::rationale("Source: ...")]` (requires `#[sysml::import("ModelingMetadata::*")]`) and express quantitative bounds in `#[sysml::require_constraint(...)]` (compiles into both SysML `require constraint` and Rust `EvaluableRequirement::evaluate(&self)`).
 
 ```rust
-#[sysml::package(name = "Requirements")]
+#[sysml::package(name = "PowerRequirements")]
 #[sysml::import("ScalarValues::*")]
 #[sysml::import("SI::*")]
 #[sysml::import("ModelingMetadata::*")]
@@ -108,17 +155,46 @@ pub mod requirements {
     #[sysml::require_constraint(delivered_power_w >= min_power_w)]
     #[derive(Debug, Clone, Copy)]
     pub struct MinimumPowerOutput {
+        /// Spec LIMIT (from the source document).
         #[sysml::attr(default = 120.0, unit = "W")]
         pub min_power_w: Quantity<f64>,
-        #[sysml::attr(default = 150.0, unit = "W")]
+        /// EVIDENCE (measured / achieved): not in the spec, so NO default. It is NaN until a
+        /// verification case (test or sysml-sim monitor) sets it, so `evaluate()` is false on
+        /// `Default`. Never copy the limit here: the audit reports that as `hollow-requirement`.
+        #[sysml::attr(unit = "W", evidence)]
         pub delivered_power_w: Quantity<f64>,
     }
 }
 
-// Satisfy on the realizing part (compile-time checked ID!):
-// #[sysml::part]
-// #[sysml::satisfy(req = requirements::MinimumPowerOutput, id = "PWR-001")]
-// pub struct PowerSupplyUnit { ... }
+// In tests / a `<system>_sim` crate, supply the evidence explicitly:
+// let r = MinimumPowerOutput { delivered_power_w: Quantity::new(measured_w, "W"), ..Default::default() };
+// assert!(r.evaluate());
+// Only a `VerificationReport` verdict (e.g. from sysml-sim monitors, see examples/microwave_sim)
+// counts as verified in `trace-matrix`. Without a verdict it shows "no evidence supplied yet" (evidence
+// attribute has no default: honest) or "evidence is a model default (placeholder)" (it has one).
+
+// Satisfy on the realizing part (compile-time checked ID!). Never name a package like an OMG
+// library package (`Requirements`, `Parts`, `Ports`, `Items`, ...): it shadows the library.
+```
+
+**Cross-package `satisfy`** (requirements package above the subsystems package, as `rsysdsl new` scaffolds):
+- **SysML side: no import needed.** The emitter writes the qualified name (`satisfy requirement : PowerRequirements::MinimumPowerOutput;`); an extra `#[sysml::import("PowerRequirements::*")]` is harmless.
+- **Rust side: a `use` IS needed** in the satisfying module, or `req = MinimumPowerOutput` does not resolve (`cannot find type`). Either `use super::requirements::*;` or a path `req = super::requirements::MinimumPowerOutput`.
+
+```rust
+#[sysml::package(name = "PowerSubsystems")]
+pub mod subsystems {
+    use super::requirements::*; // Rust needs this; SysML needs no import
+    use super::*;
+
+    #[sysml::part]
+    #[sysml::satisfy(req = MinimumPowerOutput, id = "PWR-001")]
+    #[derive(Debug, Clone, Copy)]
+    pub struct PowerSupplyUnit {
+        #[sysml::attr(default = 150.0, unit = "W")]
+        pub rated_power_w: Quantity<f64>,
+    }
+}
 ```
 
 ---
@@ -148,6 +224,8 @@ pub struct ControlModule {
 
 Guards reference `event.<field>` (from the `on = EventItem` struct) and `subject.<field>` (from the `subject = Part` struct). The exact same guard emits SysML `if ...` AND runs in `mode.step_with(&event, &subject)`.
 
+> **Ignored events are not errors in SysML — but `step_with` returns `Err` for them.** An event that matches no transition from the current state (wrong trigger, or every guard false) leaves the state unchanged. Use **`mode.dispatch_with(&event, &subject)`** (or `dispatch_event(&event)` for a machine without `subject`), which returns `StepOutcome::Moved(new_state)` or `StepOutcome::Ignored`. Use `step_with` / `step_event` (`Result<State, _>`, `Err` = no transition matched) only when an unmatched event should fail the test. `StepOutcome` is in `sysml_dsl::prelude`.
+
 ```rust
 #[sysml::item]
 #[derive(Debug, Clone, Copy, Default)]
@@ -174,6 +252,76 @@ pub enum PlantMode {
     )]
     Operating,
     SafeShutdown,
+}
+
+// Driving it (tests or a separate sim crate). Both take `&mut self`:
+// - `dispatch_with` -> `StepOutcome::Moved(state)` | `StepOutcome::Ignored` (normal no-op);
+// - `step_with`     -> `Result<PlantMode, _>`, where `Err` means "no transition matched"
+//   (`TransitionError`, or `NoStdTransitionError` in a `#![no_std]` model).
+#[cfg(test)]
+#[test]
+fn plant_shuts_down_on_overtemp() {
+    let plant = ThermalPlant::default();
+    let mut mode = PlantMode::Operating;
+    let normal = ThermalAlert { measured_temp: 300.0 };
+    assert_eq!(mode.dispatch_with(&normal, &plant), StepOutcome::Ignored); // guard false
+    assert_eq!(mode, PlantMode::Operating);
+    let alert = ThermalAlert { measured_temp: 360.0 };
+    assert_eq!(mode.dispatch_with(&alert, &plant), StepOutcome::Moved(PlantMode::SafeShutdown));
+}
+```
+
+**What a guard may contain** (the same expression is emitted as SysML and compiled as Rust):
+- operands: `event.<field>`, `subject.<field>`, numeric / `true` / `false` literals; numeric fields
+  are `f64` or `Quantity<f64>`, flags are plain `bool` fields (emitted as `Boolean`);
+- operators: `+ - * /`, unary `-`, `< <= > >= == !=`, `!` (-> `not`), `&&` (-> `and`), `||` (-> `or`),
+  parentheses, and `if c { a } else { b }`;
+- not allowed: method or function calls, qualified paths (`Self::X`), `as` casts. Dimensions are checked: `event.temp_k > subject.max_power_w` is a compile error.
+
+**Field-less events** are fine for pure triggers (button presses, timeouts): declare
+`pub struct ResetPressed {}` with `#[sysml::item]` + `#[derive(Debug, Clone, Copy, Default)]`, use it as
+`on = ResetPressed` with or without a `subject.*` guard, and dispatch it as `mode.dispatch_with(&ResetPressed {}, &subject)`.
+
+```rust
+#[sysml::item]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ResetPressed {}
+
+#[sysml::item]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DoorStatus {
+    pub door_open: bool,
+    pub child_lock: bool,
+    #[sysml::attr(unit = "K")]
+    pub cavity_temp_k: f64,
+}
+
+#[sysml::part]
+#[derive(Debug, Clone, Copy)]
+pub struct Heater {
+    #[sysml::attr(default = 400.0, unit = "K")]
+    pub max_cavity_temp_k: Quantity<f64>,
+    #[sysml::attr(default = true)]
+    pub enabled: bool,
+}
+
+#[sysml::state(subject = Heater)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeaterMode {
+    #[sysml::initial]
+    #[sysml::transition(
+        on = DoorStatus,
+        guard = event.door_open || event.cavity_temp_k > subject.max_cavity_temp_k,
+        to = Stopped
+    )]
+    Heating,
+    #[sysml::transition(
+        on = DoorStatus,
+        guard = !event.door_open && !event.child_lock && subject.enabled == true,
+        to = Heating
+    )]
+    #[sysml::transition(on = ResetPressed, to = Heating)]
+    Stopped,
 }
 ```
 
@@ -257,3 +405,109 @@ pub struct SafetyController {
 ## Pattern 7: Bare-Metal Ferrocene `#![no_std]` Model
 
 Add `no_std` to `#[sysml::package(no_std, name = "...")]`, set `sysml-dsl = { path = "../../crates/sysml-dsl", default-features = false }` in `Cargo.toml` with `reflect = ["sysml-dsl/reflect"]`, and gate `extern crate std;` behind `#[cfg(any(test, feature = "reflect"))]`. See [`examples/embedded_flight_controller/`](../../../examples/embedded_flight_controller/) for a complete working example.
+
+---
+
+## Pattern 8: Gradual Design with TBDs (never invent, never hide)
+
+When the source leaves something open, write a **TBD with a reason** instead of a number, a guessed unit or a comment. Every TBD is emitted as `@TbdMetadata::TBD { category; reason; owner; resolveBy; }`, listed by `rsysdsl tbd`, counted in `audit` / `trace-matrix` / `lint`, and must be resolved by its `resolve_by` phase (`concept < preliminary < detailed < release`, default `detailed`).
+
+| Gap in the source | Write |
+| --- | --- |
+| Parameter exists, value not given | `#[sysml::attr(unit = "W", tbd_value = "reason")]` (no `default`; `Default` is NaN) |
+| Value given, unit not given | `#[sysml::attr(default = 0.8, tbd_unit = "reason")]` |
+| Unit outside the SI table (prefer exact SI conversion first, e.g. `2400 rpm` -> `40.0` `Hz`) | `#[sysml::attr(default = 2400.0, unit = "rpm", custom_unit = "reason")]` (emitted via auto-generated `CustomUnitMetadata` + `@TBD`) |
+| Pure number (count, ratio, flag) | `#[sysml::attr(default = 4, dimensionless)]` (not a TBD) |
+| Inherited sysml-std default the source does not give | `#[sysml::attr(redefines = "nominalVoltage", tbd_value = "reason", unit = "V")]` |
+| Element itself open (part, port, item, interface, requirement, state, field) | `#[sysml::tbd(reason = "...", owner = "...", resolve_by = "preliminary")]` |
+| "Some link between A and B, protocol TBD" | `#[sysml::connect(tbd = "reason", name = "...", from = a.p, to = b.q)]` (no `interface`) |
+| Transition trigger / target open | `#[sysml::transition(on = Evt, to = Next, tbd = "reason")]` |
+
+```rust
+#[sysml::package(name = "GradualDesign")]
+#[sysml::import("ScalarValues::*")]
+#[sysml::import("SI::*")]
+#[sysml::import("SysmlStdPower::*")]
+pub mod gradual_design {
+    use super::*;
+    use sysml_std::prelude::*;
+
+    #[sysml::item]
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct Telemetry {
+        #[sysml::attr(unit = "K")]
+        pub temp_k: f64,
+    }
+
+    #[sysml::port]
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct TelemetryPort {
+        #[sysml::out_item]
+        pub telemetry: Telemetry,
+    }
+
+    /// GD-001: The pump shall deliver at least <flow> (value not in the spec yet).
+    #[sysml::requirement(id = "GD-001")]
+    #[sysml::require_constraint(measured_flow >= min_flow)]
+    #[derive(Debug, Clone, Copy)]
+    pub struct PumpFlow {
+        #[sysml::attr(unit = "m^3/s", tbd_value = "spec section 4 gives no minimum flow", tbd_owner = "hydraulics")]
+        pub min_flow: Quantity<f64>,
+        #[sysml::attr(unit = "m^3/s", evidence)]
+        pub measured_flow: Quantity<f64>,
+    }
+
+    /// Mains supply named in the spec; its voltage is not.
+    #[sysml::part]
+    #[sysml::specializes(AcMainsSupply)]
+    #[derive(Debug, Clone, Copy)]
+    pub struct Mains {
+        #[sysml::attr(redefines = "nominalVoltage", tbd_value = "spec names the supply, not its voltage", unit = "V")]
+        pub nominal_voltage: Quantity<f64>,
+    }
+
+    #[sysml::part]
+    #[sysml::tbd(reason = "pump supplier not selected", owner = "procurement", resolve_by = "preliminary")]
+    #[sysml::satisfy(req = PumpFlow, id = "GD-001")]
+    #[derive(Debug, Clone, Copy)]
+    pub struct Pump {
+        #[sysml::attr(default = 4, dimensionless)]
+        pub impeller_blades: i64,
+        #[sysml::attr(default = 0.8, tbd_unit = "datasheet table 2 gives no unit")]
+        pub loss_coefficient: f64,
+        #[sysml::port]
+        pub telemetry_out: TelemetryPort,
+    }
+
+    #[sysml::part]
+    #[derive(Debug, Clone, Copy)]
+    pub struct Controller {
+        #[sysml::port]
+        pub telemetry_in: TelemetryPort,
+    }
+
+    /// Context: the telemetry link exists, its protocol does not yet (port polarity unchecked).
+    #[sysml::part]
+    #[sysml::connect(tbd = "fieldbus not chosen", name = "telemetryLink", from = pump.telemetry_out, to = controller.telemetry_in)]
+    #[derive(Debug, Clone, Copy)]
+    pub struct Plant {
+        #[sysml::part]
+        pub mains: Mains,
+        #[sysml::part]
+        pub pump: Pump,
+        #[sysml::part]
+        pub controller: Controller,
+    }
+}
+```
+
+Check and gate the debt:
+
+```bash
+rsysdsl tbd --files target/my_system.sysml --format markdown          # the ledger
+rsysdsl audit --files target/my_system.sysml --stdlib --strict --maturity preliminary
+# fails while any TBD with resolve_by <= preliminary is open; `--maturity release` allows none
+rsysdsl tbd --files target/my_system.sysml --baseline examples/my_system/tbd-baseline.json --check
+# ratchet: fails if the TBD count rose; raise the baseline (--write-baseline) only in the same
+# commit that adds the TBD, on purpose
+```

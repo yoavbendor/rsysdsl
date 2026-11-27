@@ -10,6 +10,7 @@
 pub mod quantity;
 pub mod safety;
 pub mod traits;
+pub mod units;
 
 pub use quantity::Quantity;
 pub use safety::{
@@ -20,7 +21,7 @@ pub use traits::{
     assert_action_core, assert_calc_core, assert_interface_connect_core, assert_interface_core,
     assert_interface_ends_core, assert_item_core, assert_part_core, assert_port_core,
     assert_ports_connect_core, assert_requirement_core, assert_specializes, assert_state_core,
-    const_str_eq, Conjugated, EvaluableRequirement, NoStdTransitionError, Performs,
+    const_str_eq, Conjugated, EvaluableRequirement, NoInterfaceEnds, NoStdTransitionError, Performs, StepOutcome,
     PortConnectable, Satisfies, Specializes, SymmetricPort, SysmlActionCore, SysmlCalcCore,
     SysmlEnumCore, SysmlInterfaceCore, SysmlItemCore, SysmlPartCore, SysmlPortCore,
     SysmlRequirementCore, SysmlStateCore, ToScalar, Verifies,

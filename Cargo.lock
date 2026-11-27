@@ -69,6 +69,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sysml-ir",
+ "sysml-sim",
 ]
 
 [[package]]
@@ -321,6 +322,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "microwave-sim"
+version = "0.1.0"
+dependencies = [
+ "microwave",
+ "serde_json",
+ "sysml-dsl",
+ "sysml-ir",
+ "sysml-sim",
+ "sysml-std",
+]
+
+[[package]]
 name = "num-bigint"
 version = "0.4.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -546,11 +559,15 @@ dependencies = [
  "apollo11-sim",
  "clap",
  "embedded-flight-controller",
+ "microwave",
+ "microwave-sim",
  "serde",
  "serde_json",
  "sysml-emit",
  "sysml-ir",
  "sysml-lift",
+ "sysml-sim",
+ "sysml-std",
  "tempfile",
 ]
 
@@ -565,8 +582,11 @@ dependencies = [
 name = "sysml-dsl"
 version = "0.1.0"
 dependencies = [
+ "serde_json",
  "sysml-core",
+ "sysml-emit",
  "sysml-ir",
+ "sysml-lift",
  "sysml-macros",
  "trybuild",
 ]
@@ -577,6 +597,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "sysml-core",
  "sysml-ir",
  "sysmlv2-model",
  "sysmlv2-syntax",
@@ -599,6 +620,7 @@ dependencies = [
  "apollo11-sim",
  "serde",
  "serde_json",
+ "sysml-core",
  "sysml-emit",
  "sysml-ir",
  "sysmlv2-syntax",
@@ -612,6 +634,16 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+ "sysml-core",
+]
+
+[[package]]
+name = "sysml-sim"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sysml-ir",
 ]
 
 [[package]]

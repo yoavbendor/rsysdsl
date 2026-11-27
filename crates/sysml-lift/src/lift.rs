@@ -88,6 +88,14 @@ pub fn lift_sysml_units(units: &[(String, String)]) -> LiftReport {
 
         for member in &parsed.unit.members {
             match &member.kind {
+                // Auto-generated emitter metadata/custom-unit libraries are regenerated on emit;
+                // `@TBD` usages are lifted into `tbd` fields and `CustomUnitMetadata::` prefixes
+                // are stripped back to the raw custom unit symbol.
+                ast::MemberKind::Package(pkg)
+                    if pkg.id.name.as_ref().is_some_and(|n| {
+                        n.value == TBD_METADATA_PACKAGE
+                            || n.value == CUSTOM_UNIT_METADATA_PACKAGE
+                    }) => {}
                 ast::MemberKind::Package(pkg) => {
                     packages.push(ctx.lift_package(file_name, &lines, pkg));
                 }
@@ -270,6 +278,7 @@ impl LifterCtx {
                     is_symmetric: false,
                     items: Vec::new(),
                     attributes: Vec::new(),
+                    tbd: Vec::new(),
                 };
                 if let Some(body) = &def.body {
                     for m in body {
@@ -284,6 +293,9 @@ impl LifterCtx {
                             ast::MemberKind::Usage(u) if u.kind == ast::UsageKind::Attribute => {
                                 self.stats.attributes += 1;
                                 pd.attributes.push(lift_attribute_usage(u));
+                            }
+                            ast::MemberKind::Usage(u) if is_tbd_metadata(u) => {
+                                pd.tbd.extend(extract_tbd_mark(u));
                             }
                             other => {
                                 self.record_unsupported(
@@ -314,6 +326,7 @@ impl LifterCtx {
                     specializes: specs,
                     attributes: Vec::new(),
                     ends: Vec::new(),
+                    tbd: Vec::new(),
                 };
                 if let Some(body) = &def.body {
                     for m in body {
@@ -341,6 +354,9 @@ impl LifterCtx {
                                         u.declaration.multiplicity.as_deref(),
                                     ),
                                 });
+                            }
+                            ast::MemberKind::Usage(u) if is_tbd_metadata(u) => {
+                                id.tbd.extend(extract_tbd_mark(u));
                             }
                             other => {
                                 self.record_unsupported(
@@ -421,6 +437,7 @@ impl LifterCtx {
                     doc: None,
                     specializes: specs,
                     attributes: Vec::new(),
+                    tbd: Vec::new(),
                 };
                 if let Some(body) = &def.body {
                     for m in body {
@@ -430,6 +447,9 @@ impl LifterCtx {
                             ast::MemberKind::Usage(u) if u.kind == ast::UsageKind::Attribute => {
                                 self.stats.attributes += 1;
                                 it.attributes.push(lift_attribute_usage(u));
+                            }
+                            ast::MemberKind::Usage(u) if is_tbd_metadata(u) => {
+                                it.tbd.extend(extract_tbd_mark(u));
                             }
                             other => {
                                 self.record_unsupported(
@@ -614,6 +634,15 @@ impl LifterCtx {
                 };
                 if let Some(body) = &def.body {
                     for m in body {
+                        // `entry; then <state>;` names the initial sub-state.
+                        if let ast::MemberKind::Usage(u) = &m.kind {
+                            if u.kind == ast::UsageKind::Succession {
+                                if let ast::UsageDetail::Succession { target, .. } = &u.detail {
+                                    sd.initial_state = Some(target_ref_to_string(&target.target));
+                                    continue;
+                                }
+                            }
+                        }
                         self.lift_state_member(
                             file,
                             pkg_name,
@@ -626,6 +655,7 @@ impl LifterCtx {
                             &mut sd.exit_action,
                             &mut sd.states,
                             &mut sd.transitions,
+                            &mut sd.tbd,
                         );
                     }
                 }
@@ -646,6 +676,7 @@ impl LifterCtx {
                     require_constraints: Vec::new(),
                     assume_constraints: Vec::new(),
                     refinements: Vec::new(),
+                    tbd: Vec::new(),
                 };
                 if let Some(body) = &def.body {
                     for m in body {
@@ -683,7 +714,9 @@ impl LifterCtx {
                             }
                             ast::MemberKind::Usage(u) if u.kind == ast::UsageKind::Metadata => {
                                 // Extract `@Rationale { text = "..."; }` or `@SafetyGoal { ... }`
-                                if let Some(txt) = extract_rationale_text(u) {
+                                if let Some(mark) = extract_tbd_mark(u) {
+                                    rd.tbd.push(mark);
+                                } else if let Some(txt) = extract_rationale_text(u) {
                                     rd.rationale = Some(txt);
                                 } else if let Some(sg) = extract_safety_goal_meta(u) {
                                     rd.safety_goal = Some(sg);
@@ -892,11 +925,7 @@ impl LifterCtx {
                             ast::ExprKind::Bracket { target, arg } => {
                                 let val_str = print_expr_source(target, Dialect::Sysml);
                                 let unit_raw = print_expr_source(arg, Dialect::Sysml);
-                                let unit_clean = unit_raw
-                                    .strip_prefix('\'')
-                                    .and_then(|s| s.strip_suffix('\''))
-                                    .unwrap_or(&unit_raw)
-                                    .to_string();
+                                let unit_clean = clean_lifted_unit(&unit_raw);
                                 (Some(val_str), Some(unit_clean))
                             }
                             _ => (Some(print_expr_source(&fv.expr, Dialect::Sysml)), None),
@@ -1137,7 +1166,9 @@ impl LifterCtx {
                     LastMemberKind::Other
                 }
                 ast::UsageKind::Metadata => {
-                    if let Some(fmea) = extract_fmea_meta(u) {
+                    if let Some(mark) = extract_tbd_mark(u) {
+                        pd.tbd.push(mark);
+                    } else if let Some(fmea) = extract_fmea_meta(u) {
                         pd.fmea.push(fmea);
                     } else if let Some(decomp) = extract_asil_decomp_meta(u) {
                         pd.asil_decompositions.push(decomp);
@@ -1389,6 +1420,7 @@ impl LifterCtx {
             connections: Vec::new(),
             requirements: Vec::new(),
             portions: Vec::new(),
+            tbd: Vec::new(),
         };
 
         if let Some(body) = &u.body {
@@ -1415,6 +1447,11 @@ impl LifterCtx {
                                 kind,
                                 sub,
                             ));
+                            last_kind = LastMemberKind::Other;
+                            continue;
+                        }
+                        if is_tbd_metadata(sub) {
+                            pu.tbd.extend(extract_tbd_mark(sub));
                             last_kind = LastMemberKind::Other;
                             continue;
                         }
@@ -1553,6 +1590,7 @@ impl LifterCtx {
         exit_action: &mut Option<ActionUsage>,
         states: &mut Vec<StateUsage>,
         transitions: &mut Vec<Transition>,
+        tbd: &mut Vec<TbdMark>,
     ) {
         let line = lines.line_col(m.span.start).line as usize;
         match &m.kind {
@@ -1575,6 +1613,9 @@ impl LifterCtx {
                     self.stats.transitions += 1;
                     transitions.push(tr);
                 }
+            }
+            ast::MemberKind::Usage(u) if is_tbd_metadata(u) => {
+                tbd.extend(extract_tbd_mark(u));
             }
             other => {
                 self.record_unsupported(
@@ -1627,6 +1668,7 @@ impl LifterCtx {
                     &mut su.exit_action,
                     &mut su.states,
                     &mut su.transitions,
+                    &mut su.tbd,
                 );
             }
         }
@@ -1844,6 +1886,15 @@ fn lift_attribute_usage(u: &ast::Usage) -> AttributeUsage {
             }
         }
     }
+    // `doc /* [evidence] ... */` marks an evidence attribute (see `EVIDENCE_DOC_TAG`).
+    let mut is_evidence = false;
+    if let Some(d) = &doc {
+        if let Some(rest) = d.trim_start().strip_prefix(sysml_ir::EVIDENCE_DOC_TAG) {
+            is_evidence = true;
+            let rest = rest.trim();
+            doc = if rest.is_empty() { None } else { Some(rest.to_string()) };
+        }
+    }
     let (value_kind, value, unit) = if let Some(fv) = &u.value {
         let vk = match fv.kind {
             ast::ValueKind::Bound => ValueKind::Bound,
@@ -1855,11 +1906,7 @@ fn lift_attribute_usage(u: &ast::Usage) -> AttributeUsage {
             ast::ExprKind::Bracket { target, arg } => {
                 let val_str = print_expr_source(target, Dialect::Sysml);
                 let unit_raw = print_expr_source(arg, Dialect::Sysml);
-                let unit_clean = unit_raw
-                    .strip_prefix('\'')
-                    .and_then(|s| s.strip_suffix('\''))
-                    .unwrap_or(&unit_raw)
-                    .to_string();
+                let unit_clean = clean_lifted_unit(&unit_raw);
                 (vk, Some(val_str), Some(unit_clean))
             }
             _ => (vk, Some(print_expr_source(&fv.expr, Dialect::Sysml)), None),
@@ -1883,11 +1930,28 @@ fn lift_attribute_usage(u: &ast::Usage) -> AttributeUsage {
         doc,
         is_keywordless: false,
         nested_attributes,
+        is_evidence,
+        tbd: body_tbd_marks(u),
     }
 }
 
+fn clean_lifted_unit(raw: &str) -> String {
+    let s = raw.trim();
+    let prefix = format!("{CUSTOM_UNIT_METADATA_PACKAGE}::");
+    let s = s.strip_prefix(&prefix).unwrap_or(s);
+    s.strip_prefix('\'')
+        .and_then(|inner| inner.strip_suffix('\''))
+        .unwrap_or(s)
+        .to_string()
+}
+
 fn lift_directed_item(u: &ast::Usage) -> Option<DirectedItem> {
-    let name = u.declaration.id.name.as_ref()?.value.clone();
+    let redefines = all_redefines(&u.declaration);
+    // `out item :>> reading : T;` has no own name: it takes the redefined feature's name.
+    let name = match u.declaration.id.name.as_ref() {
+        Some(n) => n.value.clone(),
+        None => redefines.first()?.clone(),
+    };
     let (ty, _) = first_typed_by(&u.declaration);
     let mut doc = None;
     if let Some(body) = &u.body {
@@ -1903,6 +1967,7 @@ fn lift_directed_item(u: &ast::Usage) -> Option<DirectedItem> {
         type_name: ty.unwrap_or_default(),
         multiplicity: lift_multiplicity(u.declaration.multiplicity.as_deref()),
         subsets: all_subsets(&u.declaration),
+        redefines,
         doc,
     })
 }
@@ -1936,6 +2001,7 @@ fn lift_port_usage(u: &ast::Usage) -> PortUsage {
         multiplicity: lift_multiplicity(u.declaration.multiplicity.as_deref()),
         redefines,
         doc,
+        tbd: body_tbd_marks(u),
     }
 }
 
@@ -1973,6 +2039,7 @@ fn lift_connection_usage(u: &ast::Usage) -> ConnectionUsage {
         from,
         to,
         doc: None,
+        tbd: body_tbd_marks(u),
     }
 }
 
@@ -2087,6 +2154,7 @@ fn lift_transition(u: &ast::Usage) -> Option<Transition> {
             effect: effect_str,
             target: dst,
             doc,
+            tbd: body_tbd_marks(u),
         });
     }
     None
@@ -2161,6 +2229,50 @@ fn extract_constraint_expr(u: &ast::Usage) -> Option<String> {
         }
     }
     None
+}
+
+/// `true` for an `@TbdMetadata::TBD { ... }` (or `@TBD { ... }`) metadata usage.
+fn is_tbd_metadata(u: &ast::Usage) -> bool {
+    if u.kind != ast::UsageKind::Metadata {
+        return false;
+    }
+    let (ty, _) = first_typed_by(&u.declaration);
+    ty.as_deref()
+        .and_then(|t| t.rsplit("::").next())
+        .is_some_and(|simple| simple == TBD_METADATA_DEF)
+}
+
+/// Lift `@TbdMetadata::TBD { category = "..."; reason = "..."; owner = "..."; resolveBy = "..."; }`.
+fn extract_tbd_mark(u: &ast::Usage) -> Option<TbdMark> {
+    if !is_tbd_metadata(u) {
+        return None;
+    }
+    let f = extract_metadata_fields(u);
+    Some(TbdMark {
+        kind: f
+            .get("category")
+            .and_then(|k| TbdKind::parse(k))
+            .unwrap_or_default(),
+        reason: f.get("reason").cloned().unwrap_or_default(),
+        owner: f.get("owner").cloned().filter(|o| !o.is_empty()),
+        resolve_by: f
+            .get("resolveBy")
+            .and_then(|p| TbdPhase::parse(p))
+            .unwrap_or_default(),
+    })
+}
+
+/// TBD marks among the body members of a usage (attribute, port, connection, transition, ...).
+fn body_tbd_marks(u: &ast::Usage) -> Vec<TbdMark> {
+    let mut out = Vec::new();
+    if let Some(body) = &u.body {
+        for m in body {
+            if let ast::MemberKind::Usage(sub) = &m.kind {
+                out.extend(extract_tbd_mark(sub));
+            }
+        }
+    }
+    out
 }
 
 fn extract_rationale_text(u: &ast::Usage) -> Option<String> {

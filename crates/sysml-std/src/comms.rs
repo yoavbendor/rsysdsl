@@ -3,6 +3,9 @@
 
 use sysml_dsl::prelude::*;
 
+/// sysml-std library package. Abstract and generic channels declare units with no placeholder
+/// defaults; concrete protocol channels (UART, I2C, SPI, CAN-FD, Ethernet) carry normative
+/// nominal defaults. `rsysdsl lint` lists any inherited concrete defaults as `inherited_std_default`.
 #[sysml::package(library, name = "SysmlStdComms")]
 #[sysml::import("ScalarValues::*")]
 #[sysml::import("SI::*")]
@@ -17,9 +20,9 @@ pub mod sysml_std_comms {
     #[sysml::interface(abstract)]
     #[derive(Debug, Clone, Copy)]
     pub struct InfoChannel {
-        #[sysml::attr(default = 1000.0, unit = "Hz")]
+        #[sysml::attr(unit = "Hz")]
         pub symbol_rate: Quantity<f64>,
-        #[sysml::attr(default = 0.01, unit = "s")]
+        #[sysml::attr(unit = "s")]
         pub max_latency: Quantity<f64>,
         #[sysml::end]
         pub tx: InfoPort,
@@ -32,10 +35,6 @@ pub mod sysml_std_comms {
     #[sysml::specializes(InfoChannel)]
     #[derive(Debug, Clone, Copy)]
     pub struct CommandChannel {
-        #[sysml::attr(redefines = "symbolRate", default = 10000.0, unit = "Hz")]
-        pub symbol_rate: Quantity<f64>,
-        #[sysml::attr(redefines = "maxLatency", default = 0.005, unit = "s")]
-        pub max_latency: Quantity<f64>,
         #[sysml::end]
         pub tx: CommandPort,
         #[sysml::end]
@@ -47,10 +46,6 @@ pub mod sysml_std_comms {
     #[sysml::specializes(InfoChannel)]
     #[derive(Debug, Clone, Copy)]
     pub struct TelemetryChannel {
-        #[sysml::attr(redefines = "symbolRate", default = 10000.0, unit = "Hz")]
-        pub symbol_rate: Quantity<f64>,
-        #[sysml::attr(redefines = "maxLatency", default = 0.005, unit = "s")]
-        pub max_latency: Quantity<f64>,
         #[sysml::end]
         pub tx: TelemetryPort,
         #[sysml::end]
@@ -61,9 +56,9 @@ pub mod sysml_std_comms {
     #[sysml::interface(abstract)]
     #[derive(Debug, Clone, Copy)]
     pub struct DigitalBusChannel {
-        #[sysml::attr(default = 100000.0, unit = "Hz")]
+        #[sysml::attr(unit = "Hz")]
         pub bit_rate: Quantity<f64>,
-        #[sysml::attr(default = 0.01, unit = "s")]
+        #[sysml::attr(unit = "s")]
         pub max_latency: Quantity<f64>,
         #[sysml::end]
         pub endpoint_a: DataBusPort,
@@ -131,10 +126,6 @@ pub mod sysml_std_comms {
     #[sysml::specializes(InfoChannel)]
     #[derive(Debug, Clone, Copy)]
     pub struct HmiInputChannel {
-        #[sysml::attr(redefines = "symbolRate", default = 20.0, unit = "Hz")]
-        pub symbol_rate: Quantity<f64>,
-        #[sysml::attr(redefines = "maxLatency", default = 0.05, unit = "s")]
-        pub max_latency: Quantity<f64>,
         #[sysml::end]
         pub operator: HmiInputPort,
         #[sysml::end]
@@ -146,10 +137,6 @@ pub mod sysml_std_comms {
     #[sysml::specializes(InfoChannel)]
     #[derive(Debug, Clone, Copy)]
     pub struct HmiFeedbackChannel {
-        #[sysml::attr(redefines = "symbolRate", default = 60.0, unit = "Hz")]
-        pub symbol_rate: Quantity<f64>,
-        #[sysml::attr(redefines = "maxLatency", default = 0.05, unit = "s")]
-        pub max_latency: Quantity<f64>,
         #[sysml::end]
         pub panel: HmiFeedbackPort,
         #[sysml::end]

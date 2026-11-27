@@ -111,6 +111,7 @@ fn expand_calc_struct(args: TokenStream, mut st: ItemStruct) -> syn::Result<Toke
         }
     }
 
+    crate::tbd::reject_tbd(&st.attrs, "calc")?;
     st.attrs = strip_sysml_attrs(std::mem::take(&mut st.attrs));
     let ident = &st.ident;
     let doc_tok = quote_opt_str(&doc);
@@ -305,6 +306,7 @@ fn expand_calc_fn(args: TokenStream, mut func: ItemFn) -> syn::Result<TokenStrea
         }
     });
 
+    crate::tbd::reject_tbd(&func.attrs, "calc")?;
     func.attrs = strip_sysml_attrs(std::mem::take(&mut func.attrs));
     let marker_ident = format_ident!("__sysml_calc_marker_{}", fn_ident);
     let doc_tok = quote_opt_str(&doc);
