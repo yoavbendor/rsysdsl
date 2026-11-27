@@ -424,13 +424,32 @@ fn emit_directed_item(it: &DirectedItem, level: usize, out: &mut String) {
         .as_ref()
         .map(|m| m.render())
         .unwrap_or_default();
-    let _ = write!(
-        out,
-        "{ind}{dir}item {}{mult}",
-        escape_sysml_name(&it.name),
-    );
+    let same_name_redef = it.redefines.len() == 1 && it.redefines[0] == it.name;
+    if same_name_redef {
+        // `out item :>> reading : NarrowerReading;` (redefines the inherited `reading`).
+        let _ = write!(
+            out,
+            "{ind}{dir}item :>> {}{mult}",
+            escape_sysml_name(&it.name),
+        );
+    } else {
+        let _ = write!(
+            out,
+            "{ind}{dir}item {}{mult}",
+            escape_sysml_name(&it.name),
+        );
+    }
     if !it.type_name.is_empty() {
         let _ = write!(out, " : {}", format_qualified(&it.type_name));
+    }
+    if !same_name_redef && !it.redefines.is_empty() {
+        let joined = it
+            .redefines
+            .iter()
+            .map(|r| format_ref(r))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let _ = write!(out, " :>> {joined}");
     }
     if !it.subsets.is_empty() {
         let joined = it

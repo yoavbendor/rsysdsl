@@ -1,0 +1,5 @@
+error[E0080]: evaluation panicked: `redefines` target item `sample` does not exist on any specialized ancestor port
+  --> tests/ui/bad_item_redefines.rs:15:1
+   |
+15 | #[sysml::port]
+   | ^^^^^^^^^^^^^^ evaluation of `_` failed here

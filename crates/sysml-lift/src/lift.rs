@@ -1887,7 +1887,12 @@ fn lift_attribute_usage(u: &ast::Usage) -> AttributeUsage {
 }
 
 fn lift_directed_item(u: &ast::Usage) -> Option<DirectedItem> {
-    let name = u.declaration.id.name.as_ref()?.value.clone();
+    let redefines = all_redefines(&u.declaration);
+    // `out item :>> reading : T;` has no own name: it takes the redefined feature's name.
+    let name = match u.declaration.id.name.as_ref() {
+        Some(n) => n.value.clone(),
+        None => redefines.first()?.clone(),
+    };
     let (ty, _) = first_typed_by(&u.declaration);
     let mut doc = None;
     if let Some(body) = &u.body {
@@ -1903,6 +1908,7 @@ fn lift_directed_item(u: &ast::Usage) -> Option<DirectedItem> {
         type_name: ty.unwrap_or_default(),
         multiplicity: lift_multiplicity(u.declaration.multiplicity.as_deref()),
         subsets: all_subsets(&u.declaration),
+        redefines,
         doc,
     })
 }

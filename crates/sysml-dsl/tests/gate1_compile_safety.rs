@@ -37,6 +37,7 @@ fn gate1_compile_time_safety() {
     t.pass("tests/ui/valid_hierarchy.rs");
     t.compile_fail("tests/ui/bad_redefines_field.rs");
     t.compile_fail("tests/ui/bad_interface_no_ends.rs");
+    t.compile_fail("tests/ui/bad_item_redefines.rs");
     t.compile_fail("tests/ui/bad_variation_member.rs");
     // S1: compile-time unit & dimension safety
     t.compile_fail("tests/ui/bad_unit_symbol.rs");

@@ -615,6 +615,7 @@ pub fn expand_part(args: TokenStream, mut item: ItemStruct) -> syn::Result<Token
                         type_name: ::std::string::String::from(#ty_name),
                         multiplicity: #mult_tok,
                         subsets: #subsets_tok,
+                        redefines: ::std::vec![],
                         doc: #fdoc_tok,
                     }
                 });

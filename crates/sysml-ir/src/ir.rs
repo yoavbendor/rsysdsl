@@ -363,6 +363,10 @@ pub struct DirectedItem {
     pub multiplicity: Option<Multiplicity>,
     #[serde(default)]
     pub subsets: Vec<String>,
+    /// Inherited item features this one redefines (`:>>`), e.g. when a port specializing a
+    /// library port narrows the type of an inherited `out item`.
+    #[serde(default)]
+    pub redefines: Vec<String>,
     #[serde(default)]
     pub doc: Option<String>,
 }
