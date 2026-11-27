@@ -405,3 +405,109 @@ pub struct SafetyController {
 ## Pattern 7: Bare-Metal Ferrocene `#![no_std]` Model
 
 Add `no_std` to `#[sysml::package(no_std, name = "...")]`, set `sysml-dsl = { path = "../../crates/sysml-dsl", default-features = false }` in `Cargo.toml` with `reflect = ["sysml-dsl/reflect"]`, and gate `extern crate std;` behind `#[cfg(any(test, feature = "reflect"))]`. See [`examples/embedded_flight_controller/`](../../../examples/embedded_flight_controller/) for a complete working example.
+
+---
+
+## Pattern 8: Gradual Design with TBDs (never invent, never hide)
+
+When the source leaves something open, write a **TBD with a reason** instead of a number, a guessed unit or a comment. Every TBD is emitted as `@TbdMetadata::TBD { category; reason; owner; resolveBy; }`, listed by `rsysdsl tbd`, counted in `audit` / `trace-matrix` / `lint`, and must be resolved by its `resolve_by` phase (`concept < preliminary < detailed < release`, default `detailed`).
+
+| Gap in the source | Write |
+| --- | --- |
+| Parameter exists, value not given | `#[sysml::attr(unit = "W", tbd_value = "reason")]` (no `default`; `Default` is NaN) |
+| Value given, unit not given | `#[sysml::attr(default = 0.8, tbd_unit = "reason")]` |
+| Unit outside the SI table (model / library defined) | `#[sysml::attr(unit = "rpm", custom_unit = "reason")]` |
+| Pure number (count, ratio, flag) | `#[sysml::attr(default = 4, dimensionless)]` (not a TBD) |
+| Inherited sysml-std default the source does not give | `#[sysml::attr(redefines = "nominalVoltage", tbd_value = "reason", unit = "V")]` |
+| Element itself open (part, port, item, interface, requirement, state, field) | `#[sysml::tbd(reason = "...", owner = "...", resolve_by = "preliminary")]` |
+| "Some link between A and B, protocol TBD" | `#[sysml::connect(tbd = "reason", name = "...", from = a.p, to = b.q)]` (no `interface`) |
+| Transition trigger / target open | `#[sysml::transition(on = Evt, to = Next, tbd = "reason")]` |
+
+```rust
+#[sysml::package(name = "GradualDesign")]
+#[sysml::import("ScalarValues::*")]
+#[sysml::import("SI::*")]
+#[sysml::import("SysmlStdPower::*")]
+pub mod gradual_design {
+    use super::*;
+    use sysml_std::prelude::*;
+
+    #[sysml::item]
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct Telemetry {
+        #[sysml::attr(unit = "K")]
+        pub temp_k: f64,
+    }
+
+    #[sysml::port]
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct TelemetryPort {
+        #[sysml::out_item]
+        pub telemetry: Telemetry,
+    }
+
+    /// GD-001: The pump shall deliver at least <flow> (value not in the spec yet).
+    #[sysml::requirement(id = "GD-001")]
+    #[sysml::require_constraint(measured_flow >= min_flow)]
+    #[derive(Debug, Clone, Copy)]
+    pub struct PumpFlow {
+        #[sysml::attr(unit = "m^3/s", tbd_value = "spec section 4 gives no minimum flow", tbd_owner = "hydraulics")]
+        pub min_flow: Quantity<f64>,
+        #[sysml::attr(unit = "m^3/s", evidence)]
+        pub measured_flow: Quantity<f64>,
+    }
+
+    /// Mains supply named in the spec; its voltage is not.
+    #[sysml::part]
+    #[sysml::specializes(AcMainsSupply)]
+    #[derive(Debug, Clone, Copy)]
+    pub struct Mains {
+        #[sysml::attr(redefines = "nominalVoltage", tbd_value = "spec names the supply, not its voltage", unit = "V")]
+        pub nominal_voltage: Quantity<f64>,
+    }
+
+    #[sysml::part]
+    #[sysml::tbd(reason = "pump supplier not selected", owner = "procurement", resolve_by = "preliminary")]
+    #[sysml::satisfy(req = PumpFlow, id = "GD-001")]
+    #[derive(Debug, Clone, Copy)]
+    pub struct Pump {
+        #[sysml::attr(default = 4, dimensionless)]
+        pub impeller_blades: i64,
+        #[sysml::attr(default = 0.8, tbd_unit = "datasheet table 2 gives no unit")]
+        pub loss_coefficient: f64,
+        #[sysml::port]
+        pub telemetry_out: TelemetryPort,
+    }
+
+    #[sysml::part]
+    #[derive(Debug, Clone, Copy)]
+    pub struct Controller {
+        #[sysml::port]
+        pub telemetry_in: TelemetryPort,
+    }
+
+    /// Context: the telemetry link exists, its protocol does not yet (port polarity unchecked).
+    #[sysml::part]
+    #[sysml::connect(tbd = "fieldbus not chosen", name = "telemetryLink", from = pump.telemetry_out, to = controller.telemetry_in)]
+    #[derive(Debug, Clone, Copy)]
+    pub struct Plant {
+        #[sysml::part]
+        pub mains: Mains,
+        #[sysml::part]
+        pub pump: Pump,
+        #[sysml::part]
+        pub controller: Controller,
+    }
+}
+```
+
+Check and gate the debt:
+
+```bash
+rsysdsl tbd --files target/my_system.sysml --format markdown          # the ledger
+rsysdsl audit --files target/my_system.sysml --stdlib --strict --maturity preliminary
+# fails while any TBD with resolve_by <= preliminary is open; `--maturity release` allows none
+rsysdsl tbd --files target/my_system.sysml --baseline examples/my_system/tbd-baseline.json --check
+# ratchet: fails if the TBD count rose; raise the baseline (--write-baseline) only in the same
+# commit that adds the TBD, on purpose
+```

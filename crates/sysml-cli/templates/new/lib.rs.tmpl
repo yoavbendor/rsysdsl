@@ -18,7 +18,14 @@
 //! {{EMIT_CMD}}
 //! rsysdsl audit --files target/{{SNAKE}}.sysml --stdlib --strict --pretty
 //! rsysdsl lint --files target/{{SNAKE}}.sysml --strict --format markdown
+//! rsysdsl tbd --files target/{{SNAKE}}.sysml --format markdown
 //! ```
+//!
+//! Gaps in the source are TBDs, never invented values: `tbd_value = "reason"` (value not
+//! given), `tbd_unit = "reason"` (unit not given), `#[sysml::tbd(reason = "...")]` (element
+//! open), `#[sysml::connect(tbd = "reason", ...)]` (link whose protocol is open). Each is
+//! emitted as `@TBD`, listed by `rsysdsl tbd`, and must be resolved by its `resolve_by` phase
+//! (`rsysdsl audit --maturity <phase> --strict`).
 
 use sysml_dsl::prelude::*;
 
@@ -90,31 +97,35 @@ pub mod types {
 /// Layer 2: requirements with explicit document provenance.
 #[sysml::package(name = "{{PASCAL}}Requirements")]
 #[sysml::import("ModelingMetadata::*")]
+#[sysml::import("ScalarValues::*")]
+#[sysml::import("SI::*")]
 pub mod requirements {
     use super::*;
 
     // TODO(requirements): add one `#[sysml::requirement(id = "...")]` per requirement in
     // your source document HERE, each with `#[sysml::rationale("Source: <doc>, <section>")]`.
-    // Never invent thresholds: add a `require_constraint` only when the document gives the
-    // limit. Once it does, the shape is (add `#[sysml::import("ScalarValues::*")]` and
-    // `#[sysml::import("SI::*")]` to this package):
-    //
-    //     #[sysml::require_constraint(measured_x <= max_x)]
-    //     pub struct ... {
-    //         /// LIMIT, copied from the source document (cite it in the rationale).
-    //         #[sysml::attr(default = <value from the document>, unit = "s")]
-    //         pub max_x: Quantity<f64>,
-    //         /// EVIDENCE: no default; a test / verification case supplies it.
-    //         #[sysml::attr(unit = "s", evidence)]
-    //         pub measured_x: Quantity<f64>,
-    //     }
+    // Never invent thresholds. A limit the document gives is `default = <value>`; a limit it
+    // does not give (yet) is `tbd_value = "reason"` (no number, counted TBD). The measured
+    // side is `evidence` without a default (a test / verification case supplies it).
 
     /// PLACEHOLDER requirement: replace this text with the "shall" sentence from your
     /// source document (it is emitted as the requirement's `doc`), or delete it.
     #[sysml::requirement(id = "SYS-REQ-001")]
     #[sysml::rationale("Source: TODO — replace with document reference")]
-    #[derive(Debug, Clone, Copy, Default)]
-    pub struct PlaceholderRequirement {}
+    #[sysml::tbd(
+        reason = "scaffold placeholder: replace with a requirement from the source document",
+        resolve_by = "preliminary"
+    )]
+    #[sysml::require_constraint(measured_response_time <= max_response_time)]
+    #[derive(Debug, Clone, Copy)]
+    pub struct PlaceholderRequirement {
+        /// LIMIT: not in any source yet, so no number (`default = <value>` once it is).
+        #[sysml::attr(unit = "s", tbd_value = "limit not stated yet: copy it from the source document")]
+        pub max_response_time: Quantity<f64>,
+        /// EVIDENCE: no default; a test / verification case supplies it.
+        #[sysml::attr(unit = "s", evidence)]
+        pub measured_response_time: Quantity<f64>,
+    }
 }
 
 /// Layer 3: reusable subsystem blueprints (`part def`), typed by layer-1 ports and satisfying
@@ -235,5 +246,13 @@ mod tests {
         let sysml = emit_model(&build_model());
         assert!(sysml.contains("requirement def <'SYS-REQ-001'> PlaceholderRequirement"));
         assert!(sysml.contains("satisfy requirement"));
+    }
+
+    #[test]
+    fn placeholder_gaps_are_tbds_not_numbers() {
+        // No limit, no evidence: the placeholder requirement cannot pass.
+        assert!(!requirements::PlaceholderRequirement::default().evaluate());
+        let tbds = sysml_emit::collect_tbd_ledger(&build_model());
+        assert_eq!(tbds.len(), 2, "{tbds:#?}");
     }
 }

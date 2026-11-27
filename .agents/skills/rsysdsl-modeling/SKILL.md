@@ -38,6 +38,7 @@ Use this skill to incrementally build and validate **System as Code** models in 
 - [ ] Every requirement is satisfied by at least one part via `#[sysml::satisfy(req = ..., id = "...")]`.
 - [ ] `rsysdsl audit --files <out.sysml> --stdlib --strict` reports `orphan_requirements: []`.
 - [ ] `rsysdsl trace-matrix --files <out.sysml> --format markdown` generated and reviewed.
+- [ ] Every gap in the source is a TBD with a reason (`tbd_value` / `tbd_unit` / `#[sysml::tbd]` / `connect(tbd = ...)`, PATTERNS Pattern 8), never an invented number or unit; `rsysdsl tbd --files <out.sysml> --format markdown` reviewed.
 
 ### Phase 3: Behavior, Modes & Parametric Budgets
 - [ ] Functions modeled as `#[sysml::action]` and allocated via `#[sysml::perform(...)]`.

@@ -15,7 +15,7 @@ You are authoring a **System as Code** model in **`rsysdsl`** — a strongly typ
    - Use `#[sysml::transition(on = Event, guard = expr, to = State)]` for guarded transitions.
    - Use `#[sysml::calc] pub fn ...` for pure calculations.
    - Put physics loops, test harnesses, or fault injectors in a separate `<system>_sim` crate (or `#[cfg(test)]`).
-3. **Never invent requirements, thresholds, or limits** that are not in the user's diagram or documents. If a value is unknown, mark it clearly in `///` doc or omit the constraint until the source document specifies it. This includes numbers inherited from `sysml-std` parents (library placeholders such as 50 Hz mains or 48 MHz MCU clock): redefine those your source specifies; `rsysdsl lint` lists the rest as `inherited_std_default`.
+3. **Never invent requirements, thresholds, limits or units** that are not in the user's diagram or documents. A gap is a **TBD with a written reason**, not a comment or a guess: `tbd_value = "reason"` (value not given, no `default`), `tbd_unit = "reason"` (unit not given), `#[sysml::tbd(reason = "...")]` (element open), `#[sysml::connect(tbd = "reason", ...)]` (link whose protocol is open). This includes numbers inherited from `sysml-std` parents (library placeholders such as 50 Hz mains or 48 MHz MCU clock): redefine those your source specifies, blank the ones it leaves open with `redefines = "...", tbd_value = "reason"`; `rsysdsl lint` lists the rest as `inherited_std_default`. Every TBD is emitted as `@TBD`, listed by `rsysdsl tbd`, and must be resolved by its `resolve_by` phase (`concept < preliminary < detailed < release`, default `detailed`): `rsysdsl audit --strict --maturity <phase>` fails on any TBD due at or before that phase (`release` = zero TBDs). Never add a TBD where the source gives the value, and never raise a `tbd-baseline.json` except deliberately, in the same commit as the new TBD.
 4. **Never finish without running the verification loop** (`cargo test` -> emit `.sysml` -> `rsysdsl audit --files ... --stdlib --strict`).
 
 ---
@@ -57,6 +57,9 @@ rsysdsl trace-matrix --files target/my_system.sysml --format markdown
 # 6. Check architecture & hierarchy smells (duplicate parts, unclassified interfaces, flat assemblies)
 rsysdsl lint --files target/my_system.sysml --strict --format markdown
 
+# 6b. List open TBDs (gaps in the source); gate them by phase with `audit --maturity <phase>`
+rsysdsl tbd --files target/my_system.sysml --format markdown
+
 # 7. Generate a standalone interactive offline HTML viewer (opens directly in Chrome/Edge; 0 VS Code extensions or internet)
 rsysdsl view target/my_system.sysml --view interconnection -o target/my_system.html
 ```
@@ -78,8 +81,9 @@ You do **NOT** need to write raw SysML v2 textual syntax. Prefer specializing fr
 | **Logical -> Physical Allocation** | `#[sysml::allocate(name = "fnToHw", from = logical, to = hw)]` | Placed on parent assembly; `rustc` checks both dotted paths. |
 | **Arrow Payload** (signal/fluid/power) | `#[sysml::item] pub struct TempReading { ... }` | Derive `Debug, Clone, Copy, Default`. Prefer `SysmlStdFlows::*`. |
 | **Arrow Endpoint** (Port) | `#[sysml::port]` with `#[sysml::out_item]` / `#[sysml::in_item]` / `#[sysml::inout_item]` | Directed ports MUST connect `Port` <-> `Conjugated<Port>`. Use `#[sysml::port(symmetric)]` for bidirectional buses (CAN/I2C/Ethernet). |
-| **Arrow Between Boxes** | `#[sysml::interface]` + `#[sysml::connect(interface = Bus, name = "...", from = a.p_out, to = b.p_in)]` | Placed on the parent assembly struct; `rustc` checks field names and port compatibility! |
-| **Parameter / Property** | `#[sysml::attr(default = 50.0, unit = "W")] pub power: Quantity<f64>` | Use base SI units (`s`, `m`, `kg`, `N`, `W`, `V`, `A`, `K`, `Hz`, `Pa`, `J`); composites in ASCII (`m/s`, `m^3/s`, `N*m`, `J/(kg*K)`). Unknown / non-OMG units (`kN`, `ms`, `%`) and dimension-mismatched constraints/guards are compile errors. |
+| **Arrow Between Boxes** | `#[sysml::interface]` + `#[sysml::connect(interface = Bus, name = "...", from = a.p_out, to = b.p_in)]` | Placed on the parent assembly struct; `rustc` checks field names and port compatibility! Protocol not in the source: `#[sysml::connect(tbd = "reason", name = "...", from = ..., to = ...)]` (TBD channel, ports unchecked). |
+| **Parameter / Property** | `#[sysml::attr(default = 50.0, unit = "W")] pub power: Quantity<f64>` | Every numeric attribute declares exactly one of `unit = "..."`, `dimensionless` (counts, ratios, flags), `tbd_unit = "reason"`, `custom_unit = "reason"` (with `unit`). Use base SI units (`s`, `m`, `kg`, `N`, `W`, `V`, `A`, `K`, `Hz`, `Pa`, `J`); composites in ASCII (`m/s`, `m^3/s`, `N*m`, `J/(kg*K)`). Unknown / non-OMG units (`kN`, `ms`, `%`) and dimension-mismatched constraints/guards are compile errors. |
+| **Gap in the source (TBD)** | `#[sysml::attr(unit = "W", tbd_value = "reason")]`, `#[sysml::tbd(reason = "...", owner = "...", resolve_by = "preliminary")]` | Counted debt, never a hidden guess: `rsysdsl tbd --files ...` lists it, `audit --maturity` gates it, `tbd --baseline ... --check` ratchets it. See PATTERNS Pattern 8. |
 | **Requirement + Provenance** | `#[sysml::requirement(id = "REQ-001")]` + `#[sysml::rationale("Source: Doc §3.2")]` + `#[sysml::require_constraint(...)]` | Link every requirement via `#[sysml::satisfy(req = MyReq, id = "REQ-001")]` on a part (0 orphans!), also across packages. Limits get `default = <spec value>`; measured values get `#[sysml::attr(unit = "...", evidence)]` with **no default** (never copy the limit). |
 | **Function / Behavior** | `#[sysml::action]` + `#[sysml::perform(name: ActionTy)]` on a part | Allocates functions to logical/physical parts. |
 | **Operating Modes / Faults** | `#[sysml::state(subject = Assembly)] pub enum Mode { ... }` | Variants = states; `#[sysml::initial]` marks start; `#[sysml::transition(on = Evt, guard = ..., to = Target)]`. |
