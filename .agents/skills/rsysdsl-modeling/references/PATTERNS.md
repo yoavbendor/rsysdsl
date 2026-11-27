@@ -116,9 +116,9 @@ pub mod requirements {
 }
 
 // Satisfy on the realizing part (compile-time checked ID!).
-// If the requirement lives in another package, the satisfying package ALSO needs
-// `#[sysml::import("Requirements::*")]` (the SysML package name), otherwise rustc passes
-// but the strict audit fails with `unresolved reference 'MinimumPowerOutput'`.
+// Cross-package works as-is: if the requirement lives in another package, the emitter writes
+// the qualified name (`satisfy requirement : Requirements::MinimumPowerOutput;`), so no extra
+// `#[sysml::import("Requirements::*")]` is needed on the satisfying package (it is harmless).
 // #[sysml::part]
 // #[sysml::satisfy(req = requirements::MinimumPowerOutput, id = "PWR-001")]
 // pub struct PowerSupplyUnit { ... }

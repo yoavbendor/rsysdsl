@@ -5,6 +5,7 @@
 pub mod audit;
 pub mod emit;
 pub mod lint;
+pub mod resolve;
 pub mod safety_report;
 pub mod trace;
 #[cfg(feature = "validate")]
@@ -17,6 +18,7 @@ pub use audit::{
     AuditReport,
 };
 pub use emit::{emit_model, emit_package, escape_sysml_name, iso26262_metadata_package};
+pub use resolve::qualify_requirement_refs;
 pub use lint::{
     lint_model, render_lint_markdown, LintFinding, LintReport, LintSeverity, LintSummary,
 };

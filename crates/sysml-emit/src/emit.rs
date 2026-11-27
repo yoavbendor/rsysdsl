@@ -133,7 +133,12 @@ fn sanitize_doc(doc: &str) -> String {
 }
 
 /// Emit a complete `Model` (one or more packages) into deterministic OMG SysML v2 text.
+///
+/// Requirement references in `satisfy` / `verify` that point into another package the owning
+/// package does not import are emitted fully qualified (`satisfy OtherPkg::Req;`), so a
+/// cross-package `#[sysml::satisfy]` resolves without a manual `#[sysml::import]`.
 pub fn emit_model(model: &Model) -> String {
+    let model = crate::resolve::qualify_requirement_refs(model);
     let mut out = String::new();
     for (i, pkg) in model.packages.iter().enumerate() {
         if i > 0 {
