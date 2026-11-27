@@ -30,8 +30,14 @@ Scaffold every new system with `rsysdsl new`. It generates a compiling crate wit
 cargo install --path crates/sysml-cli
 
 # 1. Scaffold examples/my_system (package `my-system`); refuses to overwrite an existing directory.
+#    WARNING: without --dir this writes INTO THIS REPO's examples/ and edits the root Cargo.toml.
 #    Options: --dir <path>, --no-workspace (standalone crate, not added to root Cargo.toml members)
 rsysdsl new my_system
+# Standalone model outside the repo: `rsysdsl new my_system --no-workspace --dir ../my_system`.
+#   Its Cargo.toml has its own [workspace] and ABSOLUTE path deps (sysml-dsl, sysml-std, sysml-emit)
+#   on this checkout (update them if the checkout moves). It is not a workspace member, so `-p`
+#   does not work: run steps 2-3 inside the crate (`cd ../my_system && cargo test`) or with
+#   `--manifest-path ../my_system/Cargo.toml`; the JSON printed by `rsysdsl new` lists the exact commands.
 # Alternative: copy the single-package starter template (examples/starter_model/), add
 # "examples/my_system" to root Cargo.toml members, and rename the package in Cargo.toml + src/bin/emit.rs
 

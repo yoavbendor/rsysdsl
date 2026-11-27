@@ -14,8 +14,8 @@
 //! Verify after every change (`rsysdsl` = `cargo install --path crates/sysml-cli` in the rsysdsl
 //! repo, or run it there as `cargo run -q -p sysml-cli -- ...`):
 //! ```text
-//! cargo test -p {{KEBAB}}
-//! cargo run -q -p {{KEBAB}} --bin emit -- -o target/{{SNAKE}}.sysml
+//! {{TEST_CMD}}
+//! {{EMIT_CMD}}
 //! rsysdsl audit --files target/{{SNAKE}}.sysml --stdlib --strict --pretty
 //! rsysdsl lint --files target/{{SNAKE}}.sysml --strict --format markdown
 //! ```
@@ -190,14 +190,19 @@ pub mod context {
     }
 }
 
-/// Assemble all `#[sysml::package]` modules (in layer order) into one `sysml_ir::Model`.
+/// Assemble the sysml-std library packages plus all `#[sysml::package]` modules (in layer
+/// order) into one `sysml_ir::Model`. Specialize sysml-std bases (`use sysml_std::prelude::*;`
+/// and `#[sysml::import("SysmlStdPower::*")]` etc.) instead of reinventing them; emit with
+/// `--omit-std` to keep the library packages out of the `.sysml` file.
 pub fn build_model() -> Model {
-    Model::new(vec![
+    let mut packages = sysml_std::std_packages();
+    packages.extend([
         types::sysml_package(),
         requirements::sysml_package(),
         subsystems::sysml_package(),
         context::sysml_package(),
-    ])
+    ]);
+    Model::new(packages)
 }
 
 #[cfg(test)]

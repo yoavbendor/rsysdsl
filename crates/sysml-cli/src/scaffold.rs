@@ -87,8 +87,31 @@ pub fn derive_names(name: &str) -> Result<ScaffoldNames, String> {
     })
 }
 
-fn render(template: &str, names: &ScaffoldNames) -> String {
+/// Verify commands written into the generated `lib.rs` header, relative to the directory the
+/// author runs them from (the workspace root, or the crate itself when standalone).
+fn local_verify_cmds(names: &ScaffoldNames, no_workspace: bool) -> (String, String) {
+    let out = format!("target/{}.sysml", names.snake);
+    if no_workspace {
+        (
+            "cargo test            # run inside this crate's directory".to_string(),
+            format!("cargo run -q --bin emit -- -o {out} --omit-std"),
+        )
+    } else {
+        (
+            format!("cargo test -p {}", names.kebab),
+            format!(
+                "cargo run -q -p {} --bin emit -- -o {out} --omit-std",
+                names.kebab
+            ),
+        )
+    }
+}
+
+fn render(template: &str, names: &ScaffoldNames, no_workspace: bool) -> String {
+    let (test_cmd, emit_cmd) = local_verify_cmds(names, no_workspace);
     template
+        .replace("{{TEST_CMD}}", &test_cmd)
+        .replace("{{EMIT_CMD}}", &emit_cmd)
         .replace("{{PASCAL}}", &names.pascal)
         .replace("{{SNAKE}}", &names.snake)
         .replace("{{KEBAB}}", &names.kebab)
@@ -106,6 +129,7 @@ description = "{pascal} system model (scaffolded by `rsysdsl new`)"
 
 [dependencies]
 sysml-dsl = {{ workspace = true }}
+sysml-std = {{ workspace = true }}
 sysml-emit = {{ workspace = true }}
 "#,
         kebab = names.kebab,
@@ -133,13 +157,17 @@ description = "{pascal} system model (scaffolded by `rsysdsl new --no-workspace`
 # delete this `[workspace]` table and add the crate path to that workspace's `members`.
 [workspace]
 
+# Absolute path dependencies on the rsysdsl checkout that ran `rsysdsl new`; update them if
+# that checkout moves.
 [dependencies]
 sysml-dsl = {{ path = "{dsl}" }}
+sysml-std = {{ path = "{std}" }}
 sysml-emit = {{ path = "{emit}" }}
 "#,
         kebab = names.kebab,
         pascal = names.pascal,
         dsl = dep("sysml-dsl"),
+        std = dep("sysml-std"),
         emit = dep("sysml-emit"),
     )
 }
@@ -315,10 +343,10 @@ pub fn scaffold(
     };
     let files: Vec<(PathBuf, String)> = vec![
         (target.join("Cargo.toml"), cargo_toml),
-        (target.join("src/lib.rs"), render(LIB_TEMPLATE, &names)),
+        (target.join("src/lib.rs"), render(LIB_TEMPLATE, &names, no_workspace)),
         (
             target.join("src/bin/emit.rs"),
-            render(EMIT_TEMPLATE, &names),
+            render(EMIT_TEMPLATE, &names, no_workspace),
         ),
     ];
     for (path, content) in &files {
@@ -347,14 +375,17 @@ pub fn scaffold(
             .to_string();
         (
             format!("cargo test --manifest-path {manifest}"),
-            format!("cargo run -q --manifest-path {manifest} --bin emit -- -o {out}"),
+            format!("cargo run -q --manifest-path {manifest} --bin emit -- -o {out} --omit-std"),
             out,
         )
     } else {
         let out = format!("target/{}.sysml", names.snake);
         (
             format!("cargo test -p {}", names.kebab),
-            format!("cargo run -q -p {} --bin emit -- -o {out}", names.kebab),
+            format!(
+                "cargo run -q -p {} --bin emit -- -o {out} --omit-std",
+                names.kebab
+            ),
             out,
         )
     };

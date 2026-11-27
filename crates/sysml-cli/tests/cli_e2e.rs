@@ -643,6 +643,10 @@ fn cli_new_scaffolds_layered_crate_and_refuses_overwrite() {
         "standalone crate must declare its own workspace"
     );
     assert!(cargo.contains("sysml-dsl = { path = "));
+    assert!(
+        cargo.contains("sysml-std = { path = "),
+        "standalone crate must depend on sysml-std"
+    );
 
     let lib = std::fs::read_to_string(dir.join("src/lib.rs")).unwrap();
     for needle in [
@@ -655,6 +659,8 @@ fn cli_new_scaffolds_layered_crate_and_refuses_overwrite() {
         "#[sysml::connect(",
         "Source: TODO — replace with document reference",
         "audit_model_with_stdlib(\"pump_station\"",
+        "sysml_std::std_packages()",
+        "cargo test            # run inside this crate's directory",
     ] {
         assert!(lib.contains(needle), "lib.rs missing `{needle}`");
     }
@@ -675,6 +681,14 @@ fn cli_new_scaffolds_layered_crate_and_refuses_overwrite() {
         lib[pos("Subsystems")..pos("Context")].contains("#[sysml::satisfy("),
         "a subsystem part must satisfy the placeholder requirement"
     );
+
+    assert!(!lib.contains("cargo test -p"), "standalone crate cannot use `-p`");
+    for step in val["next_steps"].as_array().unwrap() {
+        assert!(
+            !step.as_str().unwrap().contains(" -p "),
+            "standalone next step uses `-p`: {step}"
+        );
+    }
 
     let emit = std::fs::read_to_string(dir.join("src/bin/emit.rs")).unwrap();
     assert!(emit.contains("pump_station::build_model()"));
