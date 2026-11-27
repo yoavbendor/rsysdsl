@@ -47,6 +47,20 @@ pub trait SysmlInterfaceCore: 'static {
     type EndA: SysmlPortCore;
     type EndB: SysmlPortCore;
     const SYSML_NAME: &'static str;
+    /// `false` for an abstract classification interface that declares no `end` ports
+    /// (its `EndA`/`EndB` are [`NoInterfaceEnds`]). Concrete specializations must declare ends.
+    const HAS_ENDS: bool = true;
+}
+
+/// Placeholder end type of an abstract `#[sysml::interface(abstract)]` that declares no `end`
+/// fields (a pure taxonomy base). It connects to nothing, so such an interface can only be
+/// used through a specialization that declares its own two `#[sysml::end]` ports.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct NoInterfaceEnds;
+
+impl SysmlPortCore for NoInterfaceEnds {
+    type Conjugate = NoInterfaceEnds;
+    const SYSML_NAME: &'static str = "NoInterfaceEnds";
 }
 
 /// Zero-alloc compile-time marker trait for SysML `item def` types.

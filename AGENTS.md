@@ -105,7 +105,7 @@ Always build the system in **compiling, auditable increments** — never try to 
    - **Gate:** `cargo test` + `emit` + `rsysdsl audit --files ... --stdlib --strict` -> **0 errors, 0 warnings**.
 2. **Phase 1.5 — Refactor & Generalize (`rsysdsl lint`):**
    - Run `rsysdsl lint --files target/my_system.sysml --strict --format markdown`.
-   - Refactor copy-paste parts into `#[sysml::part(abstract)]` parents + `#[sysml::specializes]` + `#[sysml::variation]`, classify custom interfaces under `InfoChannel`/`DigitalBusChannel`, and break flat >10-part God-assemblies into domain subsystems (`Power`, `Electronics`, `Mechanics`, `HMI`).
+   - Refactor copy-paste parts into `#[sysml::part(abstract)]` parents + `#[sysml::specializes]` + `#[sysml::variation]`, classify custom interfaces under an end-less abstract base (`#[sysml::interface(abstract)] pub struct EnergyChannel {}` + `#[sysml::specializes(EnergyChannel)]`; never strip interfaces from connects), and break flat >10-part God-assemblies into domain subsystems (`Power`, `Electronics`, `Mechanics`, `HMI`).
    - **Gate:** `rsysdsl lint --strict` -> **CLEAN (0 warnings)**.
 3. **Phase 2 — Requirements & Document Provenance:**
    - Add a `Requirements` package with `#[sysml::requirement(id = "...")]`.

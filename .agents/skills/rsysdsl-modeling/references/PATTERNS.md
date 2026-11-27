@@ -41,12 +41,28 @@ pub mod vehicle_arch {
         pub frame: SpeedSignal,
     }
 
+    /// Abstract classification base for every arrow type (no ends needed). Classifying
+    /// interfaces under it clears the `unclassified_interfaces` lint.
+    #[sysml::interface(abstract)]
+    pub struct VehicleChannel {}
+
     #[sysml::interface]
+    #[sysml::specializes(VehicleChannel)]
     pub struct SpeedLink {
         #[sysml::end]
         pub tx: SpeedPort,
         #[sysml::end]
         pub rx: Conjugated<SpeedPort>,
+    }
+
+    /// Symmetric bus: both ends use the same (symmetric) port type.
+    #[sysml::interface]
+    #[sysml::specializes(VehicleChannel)]
+    pub struct CanLink {
+        #[sysml::end]
+        pub a: CanBusPort,
+        #[sysml::end]
+        pub b: CanBusPort,
     }
 
     #[sysml::part]
@@ -75,7 +91,7 @@ pub mod vehicle_arch {
     /// Top-level Visio context assembly.
     #[sysml::part]
     #[sysml::connect(interface = SpeedLink, name = "wheelToEcu", from = wheel.speed_out, to = ecu.speed_in)]
-    #[sysml::connect(name = "ecuToGateway", from = ecu.can, to = gateway.can)]
+    #[sysml::connect(interface = CanLink, name = "ecuToGateway", from = ecu.can, to = gateway.can)]
     #[derive(Debug, Clone, Copy)]
     pub struct VehicleContext {
         #[sysml::part]

@@ -373,7 +373,7 @@ pub fn expand_interface(args: TokenStream, mut item: ItemStruct) -> syn::Result<
         }
     }
 
-    let (end_a_tok, end_b_tok, ends_check_tok) = if end_types.len() == 2 {
+    let (end_a_tok, end_b_tok, ends_check_tok, has_ends_tok) = if end_types.len() == 2 {
         let end_a = &end_types[0];
         let end_b = &end_types[1];
         (
@@ -384,18 +384,44 @@ pub fn expand_interface(args: TokenStream, mut item: ItemStruct) -> syn::Result<
                     ::sysml_dsl::core_contracts::assert_interface_ends_core::<#end_a, #end_b>();
                 };
             },
+            quote!(true),
         )
     } else if end_types.is_empty() && !specializes_paths.is_empty() {
         let base = &specializes_paths[0];
+        let ident_str = item.ident.to_string();
+        let concrete_check = if is_abstract {
+            quote!()
+        } else {
+            let msg = format!(
+                "concrete #[sysml::interface] `{ident_str}` inherits no `end` ports from its abstract base interface; declare two #[sysml::end] port fields"
+            );
+            quote! {
+                const _: () = assert!(
+                    <#base as ::sysml_dsl::core_contracts::SysmlInterfaceCore>::HAS_ENDS,
+                    #msg
+                );
+            }
+        };
         (
             quote!(<#base as ::sysml_dsl::core_contracts::SysmlInterfaceCore>::EndA),
             quote!(<#base as ::sysml_dsl::core_contracts::SysmlInterfaceCore>::EndB),
+            concrete_check,
+            quote!(<#base as ::sysml_dsl::core_contracts::SysmlInterfaceCore>::HAS_ENDS),
+        )
+    } else if end_types.is_empty() && is_abstract {
+        // Pure taxonomy base (`#[sysml::interface(abstract)] pub struct EnergyChannel {}`):
+        // emits `abstract interface def EnergyChannel;` and carries placeholder ends that
+        // connect to nothing, so only specializations declaring real ends can be connected.
+        (
+            quote!(::sysml_dsl::core_contracts::NoInterfaceEnds),
+            quote!(::sysml_dsl::core_contracts::NoInterfaceEnds),
             quote!(),
+            quote!(false),
         )
     } else {
         return Err(syn::Error::new_spanned(
             &item.ident,
-            "#[sysml::interface] struct must declare two `end` port fields (or inherit them via #[sysml::specializes(BaseInterface)])",
+            "#[sysml::interface] struct must declare two `end` port fields (or inherit them via #[sysml::specializes(BaseInterface)]); only an `#[sysml::interface(abstract)]` classification base may declare none",
         ));
     };
 
@@ -436,6 +462,7 @@ pub fn expand_interface(args: TokenStream, mut item: ItemStruct) -> syn::Result<
             type EndA = #end_a_tok;
             type EndB = #end_b_tok;
             const SYSML_NAME: &'static str = #sysml_name;
+            const HAS_ENDS: bool = #has_ends_tok;
         }
 
         #rcfg

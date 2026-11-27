@@ -6,6 +6,9 @@
 //!   >= 3 identical port/attribute names -> extract an `abstract` base part.
 //! - `unclassified_interfaces`: 3+ concrete `InterfaceDef`s with no `specializes`
 //!   parent -> specialize a shared channel base (e.g. `InfoChannel` / `EnergyChannel`).
+//! - `untyped_connections`: `connect` usages with no interface/connection type in a model that
+//!   otherwise declares or uses typed interfaces (deleting the interface is never the fix for
+//!   `unclassified_interfaces`; classify it under an abstract base instead).
 //! - `flat_god_assembly`: a `PartDef` owning > 10 direct child parts with zero
 //!   intermediate subsystem decomposition.
 //! - `missing_physical_unit`: numeric `Real` attribute carrying a literal value without
@@ -210,8 +213,49 @@ pub fn lint_model(model_name: impl Into<String>, model: &Model) -> LintReport {
                 names.len(),
                 names.join(", ")
             ),
-            suggestion: "Specialize a shared abstract interface (e.g. `sysml_std::comms::InfoChannel` or `sysml_std::flows::ThermalLink` / `ElectricalLink`) so protocols/channels form a clean taxonomy.".to_string(),
+            suggestion: "Keep the interfaces and classify them: declare an end-less abstract base `#[sysml::interface(abstract)] pub struct EnergyChannel {}` (or reuse a sysml-std channel such as `InfoChannel` / `ThermalLink` / `ElectricalLink` when its port types match) and add `#[sysml::specializes(EnergyChannel)]` to each concrete interface. Do NOT remove interface types from `#[sysml::connect]` (that triggers `untyped_connections`).".to_string(),
         });
+    }
+
+    // 2b. Untyped connections in a model that otherwise uses typed interfaces.
+    let model_uses_typed_ifaces = interfaces
+        .iter()
+        .any(|(_, is_lib, i)| !*is_lib && !i.is_abstract)
+        || parts.iter().any(|(_, is_lib, p)| {
+            !*is_lib && p.connections.iter().any(|c| c.type_name.is_some())
+        });
+    if model_uses_typed_ifaces {
+        for (pkg_name, is_lib, p) in &parts {
+            if *is_lib {
+                continue;
+            }
+            let untyped: Vec<String> = p
+                .connections
+                .iter()
+                .filter(|c| c.type_name.is_none())
+                .map(|c| match (&c.name, &c.from, &c.to) {
+                    (Some(n), _, _) => n.clone(),
+                    (None, Some(f), Some(t)) => format!("{f} -> {t}"),
+                    _ => "<anonymous>".to_string(),
+                })
+                .collect();
+            if untyped.is_empty() {
+                continue;
+            }
+            findings.push(LintFinding {
+                code: "untyped_connections".to_string(),
+                severity: LintSeverity::Warning,
+                package: pkg_name.clone(),
+                element: format!("{} ({})", p.name, untyped.join(", ")),
+                message: format!(
+                    "Part `{}` has {} connection(s) with no interface type ({}) while the model uses typed interfaces.",
+                    p.name,
+                    untyped.len(),
+                    untyped.join(", ")
+                ),
+                suggestion: "Type every arrow: add `interface = SomeLink` to each `#[sysml::connect(...)]` (declare `#[sysml::interface]` defs with two `#[sysml::end]` ports, classified under an abstract base).".to_string(),
+            });
+        }
     }
 
     // 3. Flat God-assembly (> 10 direct child parts where none are composite subsystems)
@@ -439,6 +483,49 @@ fn is_dimensionless_name(name: &str) -> bool {
 mod tests {
     use super::*;
     use sysml_ir::{AttributeUsage, Model, Package, PackageMember, PartDef, PortUsage};
+
+    #[test]
+    fn lint_flags_untyped_connections_when_model_uses_interfaces() {
+        use sysml_ir::{ConnectionUsage, InterfaceDef};
+        let conn = |name: &str, ty: Option<&str>| ConnectionUsage {
+            name: Some(name.into()),
+            type_name: ty.map(Into::into),
+            from: Some("a.p".into()),
+            to: Some("b.p".into()),
+            ..Default::default()
+        };
+        let model = |conns: Vec<ConnectionUsage>, with_iface: bool| {
+            let mut members = vec![PackageMember::PartDef(PartDef {
+                name: "Ctx".into(),
+                connections: conns,
+                ..Default::default()
+            })];
+            if with_iface {
+                members.push(PackageMember::InterfaceDef(InterfaceDef {
+                    name: "Link".into(),
+                    ..Default::default()
+                }));
+            }
+            Model::new(vec![Package {
+                name: "M".into(),
+                members,
+                ..Default::default()
+            }])
+        };
+        // Mixed typed + untyped -> warning.
+        let rep = lint_model("m", &model(vec![conn("a", Some("Link")), conn("b", None)], true));
+        assert!(rep.findings.iter().any(|f| f.code == "untyped_connections"));
+        assert!(!rep.clean);
+        // Interface defs left behind but stripped from the connects -> still a warning.
+        let rep = lint_model("m", &model(vec![conn("b", None)], true));
+        assert!(rep.findings.iter().any(|f| f.code == "untyped_connections"));
+        // Fully typed -> clean.
+        let rep = lint_model("m", &model(vec![conn("a", Some("Link"))], true));
+        assert!(rep.clean);
+        // No interfaces at all (early skeleton) -> no finding.
+        let rep = lint_model("m", &model(vec![conn("b", None)], false));
+        assert!(rep.clean);
+    }
 
     #[test]
     fn lint_flags_duplicate_part_shape_and_passes_after_extracting_base() {

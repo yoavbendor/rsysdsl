@@ -16,6 +16,8 @@
 | `cannot call unmodeled function '...' inside #[sysml::calc]` | Calling stdlib/external Rust fn in a modeled calc | Replace with arithmetic (`+`, `-`, `*`, `/`) or call another `#[sysml::calc]` function. |
 | `the trait bound 'AsilD: AsilDecomposable<AsilB, AsilA>' is not satisfied` | Illegal ISO 26262-9 ASIL decomposition (rank sum < parent) | Use a legal pair from ISO 26262-9 Table 1 (e.g., `AsilD -> (AsilB, AsilB)` or `(AsilC, AsilA)`). |
 | `the trait bound 'PartA: IndependentFrom<PartB>' is not satisfied` | Missing freedom-from-interference witness for `#[sysml::asil_decompose]` | Add `#[sysml::independent(PartB)]` on `PartA` (and `#[sysml::independent(PartA)]` on `PartB`). |
+| `#[sysml::interface] struct must declare two 'end' port fields ...` | Concrete interface with no / one `#[sysml::end]` field | Declare exactly two `#[sysml::end]` port fields. Only an `#[sysml::interface(abstract)]` classification base may declare none. |
+| `evaluation panicked: concrete #[sysml::interface] 'X' inherits no 'end' ports from its abstract base interface` | Concrete interface specializes an end-less abstract base and declares no ends itself | Add two `#[sysml::end]` port fields to `X`. |
 | `the trait bound 'MyItem: Default' is not satisfied` | A `#[sysml::item]` used inside a `#[sysml::port]` lacks `Default` | Add `#[derive(Debug, Clone, Copy, Default)]` to `MyItem`. |
 | `` unknown unit symbol `kgs` in #[sysml::attr(unit = ...)]; did you mean `kg` or `kg/s`? `` | Unit string is not in the closed SI table (`sysml_core::units::UNITS`) | Use the suggested symbol, or compose OMG atoms with `*`, `/`, `^`, `( )` (e.g. `"m^3/s"`, `"J/(kg*K)"`). For a unit your own model / another library defines, add the `custom_unit` flag (skips unit + dimension checks). |
 | `` unit symbol `kN` (kilonewton) is not defined in the OMG SysML v2 `SI` library; ... help: use `N` instead `` | Prefixed / non-SI symbol (`kN`, `ms`, `kPa`, `rpm`, `%`, `degC`, ...) that the strict audit cannot resolve | Use the `help:` spelling and convert the value (`45.0 kN` -> `45000.0` with `unit = "N"`; `50 ms` -> `0.050` with `unit = "s"`; `%` -> drop `unit`, store a 0..1 fraction). |
@@ -33,6 +35,17 @@
 | `unresolved reference 'Rationale'` | Used `#[sysml::rationale(...)]` without importing `ModelingMetadata::*` | Add `#[sysml::import("ModelingMetadata::*")]` on that package. |
 | `unresolved reference 'SafetyGoal'` / `'FMEA'` / `'AsilDecomposition'` | Used ISO 26262 macros without `ISO26262Metadata` | Include `sysml_emit::iso26262_metadata_package()` in `Model::new(...)` and add `#[sysml::import("ISO26262Metadata::*")]` to the package. |
 | `unused private import` warning | Imported `SI::*`, `ISQ::*`, or `ModelingMetadata::*` in a package that doesn't reference it | Remove unused `#[sysml::import(...)]` attributes from that package. |
+
+---
+
+## 2b. `rsysdsl lint --strict` Findings -> Fix
+
+| Lint code | Cause | Exact Fix |
+| --- | --- | --- |
+| `unclassified_interfaces` | 3+ concrete `#[sysml::interface]`s with no parent | **Keep the interfaces** and classify them. Smallest working pattern: `#[sysml::interface(abstract)] pub struct EnergyChannel {}` (no `end` fields needed), then `#[sysml::specializes(EnergyChannel)]` on each concrete interface, which keeps its own two `#[sysml::end]` ports. Reuse a sysml-std base (`InfoChannel`, `ThermalLink`, `ElectricalLink`, `DigitalBusChannel`) only when its end port types match yours. |
+| `untyped_connections` | A `#[sysml::connect(...)]` without `interface = ...` in a model that declares or uses typed interfaces (typically interfaces stripped to silence `unclassified_interfaces`) | Add `interface = SomeLink` to the connect; declare the link with two `#[sysml::end]` ports (`Port` + `Conjugated<Port>`, or the same `#[sysml::port(symmetric)]` type on both ends for a bus). |
+| `duplicate_part_shape` | Two concrete parts share >= 3 port/attribute names with no common ancestor | Extract an `#[sysml::part(abstract)]` base with the shared features and `#[sysml::specializes(Base)]` both. |
+| `flat_god_assembly` | A part owns > 10 leaf parts directly | Group them into domain subsystem parts (Power, Electronics, Mechanics, HMI). |
 
 ---
 
