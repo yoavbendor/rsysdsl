@@ -88,7 +88,7 @@ fi
 "$RSYSDSL" view "${OMG_VEHICLE_FILES[@]}" --view general --title "OMG Canonical Vehicle / Car (General)" -o "$OUT_DIR/omg-vehicle.html" > /dev/null
 "$RSYSDSL" view "${OMG_VEHICLE_FILES[@]}" --view interconnection --title "OMG Canonical Vehicle / Car (IBD)" -o "$OUT_DIR/omg-vehicle-ibd.html" > /dev/null
 
-echo "[6/6] OMG Canonical Camera..." >&2
+echo "[6/9] OMG Canonical Camera..." >&2
 mapfile -d '' OMG_CAMERA_FILES < <(find tests/fixtures/omg-camera -maxdepth 1 -type f -name '*.sysml' -print0 | LC_ALL=C sort -z)
 if [[ ${#OMG_CAMERA_FILES[@]} -eq 0 ]]; then
   echo "error: no OMG Camera fixture files found" >&2
@@ -97,6 +97,24 @@ fi
 "$RSYSDSL" validate --stdlib --strict "${OMG_CAMERA_FILES[@]}" > "$OUT_DIR/data/omg-camera-validate.json"
 "$RSYSDSL" roundtrip-check "${OMG_CAMERA_FILES[@]}" --reemitted-out "$OUT_DIR/sysml/omg_camera_reemitted.sysml" > "$OUT_DIR/data/omg-camera-roundtrip.json"
 "$RSYSDSL" view "${OMG_CAMERA_FILES[@]}" --view general --title "OMG Canonical Camera (General)" -o "$OUT_DIR/omg-camera.html" > /dev/null
+
+echo "[7/9] Microwave Oven (FMEA Fault Injection + Live Sim Trace)..." >&2
+"$RSYSDSL" emit --model microwave --raw > "$OUT_DIR/sysml/microwave.sysml"
+"$RSYSDSL" audit --model microwave --stdlib --strict > "$OUT_DIR/data/microwave-audit.json"
+"$RSYSDSL" verify --scenario mw-door-open --trace "$OUT_DIR/data/microwave-trace.json" > /dev/null
+"$RSYSDSL" view --model microwave --view interconnection --trace "$OUT_DIR/data/microwave-trace.json" --title "Microwave Oven (IBD + Live Sim Trace)" -o "$OUT_DIR/microwave-sim.html" > /dev/null
+
+echo "[8/9] Dishwasher (Hybrid Thermal/Fluidic ODE + Live Sim Trace)..." >&2
+"$RSYSDSL" emit --model dishwasher --raw > "$OUT_DIR/sysml/dishwasher.sysml"
+"$RSYSDSL" audit --model dishwasher --stdlib --strict --verify > "$OUT_DIR/data/dishwasher-audit.json"
+"$RSYSDSL" verify --scenario dw-door-open --trace "$OUT_DIR/data/dishwasher-trace.json" > /dev/null
+"$RSYSDSL" view --model dishwasher --view interconnection --trace "$OUT_DIR/data/dishwasher-trace.json" --title "Dishwasher (IBD + Live Sim Trace)" -o "$OUT_DIR/dishwasher-sim.html" > /dev/null
+
+echo "[9/9] Cordless Power Tools Family (5Ah Battery Discharge + Live Sim Trace)..." >&2
+"$RSYSDSL" emit --model power-tools-family --raw > "$OUT_DIR/sysml/power_tools_family.sysml"
+"$RSYSDSL" audit --model power-tools-family --stdlib --strict --verify > "$OUT_DIR/data/power-tools-audit.json"
+"$RSYSDSL" verify --scenario tool-5ah --trace "$OUT_DIR/data/power-tools-trace.json" > /dev/null
+"$RSYSDSL" view --model power-tools-family --view interconnection --trace "$OUT_DIR/data/power-tools-trace.json" --title "Power Tools Family (IBD + Live Sim Trace)" -o "$OUT_DIR/power-tools-sim.html" > /dev/null
 
 GIT_SHA="$(git rev-parse --short HEAD 2>/dev/null || echo 'unknown')"
 BUILD_UTC="$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
@@ -133,6 +151,9 @@ veh_val = load_json("omg-vehicle-validate.json")
 veh_rt = load_json("omg-vehicle-roundtrip.json")
 cam_val = load_json("omg-camera-validate.json")
 cam_rt = load_json("omg-camera-roundtrip.json")
+mw_audit = load_json("microwave-audit.json")
+dw_audit = load_json("dishwasher-audit.json")
+pt_audit = load_json("power-tools-audit.json")
 
 total_rt_facts = (
     a11_rt["roundtrip"]["total_original_facts"]
@@ -145,6 +166,9 @@ total_stdlib_errors = (
     + a11_rust_audit["validation_errors"]
     + veh_val["error_count"]
     + cam_val["error_count"]
+    + mw_audit["validation_errors"]
+    + dw_audit["validation_errors"]
+    + pt_audit["validation_errors"]
 )
 total_stdlib_warnings = (
     starter_audit["validation_warnings"]
@@ -152,6 +176,9 @@ total_stdlib_warnings = (
     + a11_rust_audit["validation_warnings"]
     + veh_val["warning_count"]
     + cam_val["warning_count"]
+    + mw_audit["validation_warnings"]
+    + dw_audit["validation_warnings"]
+    + pt_audit["validation_warnings"]
 )
 
 BASE_CSS = """
@@ -402,6 +429,63 @@ cards = [
             ("Round-Trip JSON", "data/omg-camera-roundtrip.json", False),
         ],
     },
+    {
+        "tag": "07 · FMEA Fault Injection + Live Sim Trace",
+        "title": "Microwave Oven",
+        "desc": "Dual-interlock safety cutoff (< 20 ms FTTI) with mid-cook door-open fault injection, interactive SVG trace scrubber, and strict OMG stdlib audit.",
+        "ok": mw_audit["ok"] and mw_audit["validation_warnings"] == 0,
+        "status": "VERIFIED + SIM TRACE" if (mw_audit["ok"] and mw_audit["validation_warnings"] == 0) else "CHECK",
+        "metrics": [
+            ("OMG Stdlib", f"{mw_audit['validation_errors']} err / {mw_audit['validation_warnings']} warn"),
+            ("Requirements", f"{mw_audit['satisfied_requirements']}/{mw_audit['total_requirements']} satisfied"),
+            ("Scenario", "mw-door-open (t=45 s)"),
+            ("Sim Playback", "Interactive SVG Trace"),
+        ],
+        "links": [
+            ("Open IBD + Sim Trace", "microwave-sim.html", True),
+            ("Raw .sysml", "sysml/microwave.sysml", False),
+            ("Trace JSON", "data/microwave-trace.json", False),
+            ("Audit JSON", "data/microwave-audit.json", False),
+        ],
+    },
+    {
+        "tag": "08 · Hybrid Thermal/Fluidic ODE + Live Sim Trace",
+        "title": "Dishwasher",
+        "desc": "RK4 tub water mass & thermal balance across Fill -> WashHeat -> Rinse -> Dry -> Drain with mid-wash door-open pause and interactive trace playback.",
+        "ok": dw_audit["ok"] and dw_audit["validation_warnings"] == 0,
+        "status": "VERIFIED + SIM TRACE" if (dw_audit["ok"] and dw_audit["validation_warnings"] == 0) else "CHECK",
+        "metrics": [
+            ("OMG Stdlib", f"{dw_audit['validation_errors']} err / {dw_audit['validation_warnings']} warn"),
+            ("Requirements", f"{dw_audit['satisfied_requirements']}/{dw_audit['total_requirements']} satisfied"),
+            ("Scenario", "dw-door-open (t=400 s)"),
+            ("Sim Playback", "Interactive SVG Trace"),
+        ],
+        "links": [
+            ("Open IBD + Sim Trace", "dishwasher-sim.html", True),
+            ("Raw .sysml", "sysml/dishwasher.sysml", False),
+            ("Trace JSON", "data/dishwasher-trace.json", False),
+            ("Audit JSON", "data/dishwasher-audit.json", False),
+        ],
+    },
+    {
+        "tag": "09 · Product-Line Variants + Live Sim Trace",
+        "title": "Cordless Power Tools Family",
+        "desc": "18V 5Ah vs 2Ah battery pack discharge & motor thermal ODE with sub-step ZeroCrossing cutoff detection and interactive trace playback.",
+        "ok": pt_audit["ok"] and pt_audit["validation_warnings"] == 0,
+        "status": "VERIFIED + SIM TRACE" if (pt_audit["ok"] and pt_audit["validation_warnings"] == 0) else "CHECK",
+        "metrics": [
+            ("OMG Stdlib", f"{pt_audit['validation_errors']} err / {pt_audit['validation_warnings']} warn"),
+            ("Requirements", f"{pt_audit['satisfied_requirements']}/{pt_audit['total_requirements']} satisfied"),
+            ("Scenario", "tool-5ah (550 W load)"),
+            ("Sim Playback", "Interactive SVG Trace"),
+        ],
+        "links": [
+            ("Open IBD + Sim Trace", "power-tools-sim.html", True),
+            ("Raw .sysml", "sysml/power_tools_family.sysml", False),
+            ("Trace JSON", "data/power-tools-trace.json", False),
+            ("Audit JSON", "data/power-tools-audit.json", False),
+        ],
+    },
 ]
 
 card_html = []
@@ -464,7 +548,7 @@ index_html = f"""<!doctype html>
     </main>
     <footer>
       <span>Generated by scripts/build-pages-site.sh · Zero external CDN dependencies</span>
-      <span>6 verified models · 9 interactive diagram views</span>
+      <span>9 verified models · 12 interactive diagram views (3 with live simulation traces)</span>
     </footer>
   </div>
 </body>

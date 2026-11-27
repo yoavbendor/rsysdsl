@@ -26,6 +26,12 @@ VIEWER_PAGES = [
     "omg-camera.html",
 ]
 
+SIM_VIEWER_PAGES = [
+    "microwave-sim.html",
+    "dishwasher-sim.html",
+    "power-tools-sim.html",
+]
+
 
 def detect_chromium_executable() -> str | None:
     for candidate in (
@@ -50,13 +56,17 @@ def main() -> int:
         launch_kwargs["executable_path"] = exe
 
     failures = 0
-    all_pages = [(p, False) for p in PORTAL_PAGES] + [(p, True) for p in VIEWER_PAGES]
+    all_pages = (
+        [(p, False, False) for p in PORTAL_PAGES]
+        + [(p, True, False) for p in VIEWER_PAGES]
+        + [(p, True, True) for p in SIM_VIEWER_PAGES]
+    )
 
     with sync_playwright() as pw:
         browser = pw.chromium.launch(**launch_kwargs)
         try:
             context = browser.new_context(viewport={"width": 1440, "height": 900})
-            for rel, is_viewer in all_pages:
+            for rel, is_viewer, is_sim in all_pages:
                 path = site_dir / rel
                 if not path.is_file():
                     print(f"FAIL  {rel:24s} missing file: {path}")
@@ -86,15 +96,35 @@ def main() -> int:
                                 shapeCount += svg.querySelectorAll('rect, path, circle, polygon, line, ellipse').length;
                                 textCount += svg.querySelectorAll('text, tspan').length;
                             }
+                            const drawer = document.getElementById('rsysdsl-trace-drawer');
+                            const cards = document.querySelectorAll('#rsysdsl-trace-grid .rst-card').length;
+                            const scrubber = document.getElementById('rsysdsl-trace-scrubber');
+                            let scrubbedTime = '';
+                            if (scrubber) {
+                                scrubber.value = scrubber.max;
+                                scrubber.dispatchEvent(new Event('input', { bubbles: true }));
+                                const lbl = document.getElementById('rst-time-lbl');
+                                scrubbedTime = lbl ? lbl.textContent.trim() : '';
+                            }
                             return {
                                 svgCount: svgs.length,
                                 shapeCount,
                                 textCount,
+                                hasDrawer: Boolean(drawer),
+                                traceCards: cards,
+                                scrubbedTime,
                             };
                         }"""
                     )
                 else:
-                    metrics = {"svgCount": 0, "shapeCount": 0, "textCount": 0}
+                    metrics = {
+                        "svgCount": 0,
+                        "shapeCount": 0,
+                        "textCount": 0,
+                        "hasDrawer": False,
+                        "traceCards": 0,
+                        "scrubbedTime": "",
+                    }
 
                 page.close()
 
@@ -106,9 +136,22 @@ def main() -> int:
                         and metrics["shapeCount"] > 0
                         and metrics["textCount"] > 0
                     )
+                if is_sim:
+                    ok = (
+                        ok
+                        and metrics["hasDrawer"]
+                        and metrics["traceCards"] > 0
+                        and metrics["scrubbedTime"] != ""
+                    )
 
                 status = "PASS" if ok else "FAIL"
-                if is_viewer:
+                if is_sim:
+                    detail = (
+                        f"svgs={metrics['svgCount']} trace_cards={metrics['traceCards']} "
+                        f"end={metrics['scrubbedTime']} pageerrors={len(page_errors)} "
+                        f"console_errors={len(console_errors)}"
+                    )
+                elif is_viewer:
                     detail = (
                         f"svgs={metrics['svgCount']} shapes={metrics['shapeCount']} "
                         f"texts={metrics['textCount']} pageerrors={len(page_errors)} "
