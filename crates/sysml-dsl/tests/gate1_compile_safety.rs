@@ -48,6 +48,10 @@ fn gate1_compile_time_safety() {
     t.compile_fail("tests/ui/bad_bare_custom_unit.rs");
     // S7.2: `tbd_value` and a default are mutually exclusive
     t.compile_fail("tests/ui/bad_tbd_value_with_default.rs");
+    // S7.3: #[sysml::tbd] needs a reason and a known phase, and is never dropped silently
+    t.compile_fail("tests/ui/bad_tbd_marker.rs");
+    t.compile_fail("tests/ui/bad_tbd_no_reason.rs");
+    t.compile_fail("tests/ui/bad_tbd_on_action.rs");
     t.compile_fail("tests/ui/bad_unit_not_in_omg.rs");
     t.compile_fail("tests/ui/bad_constraint_dimension.rs");
     t.compile_fail("tests/ui/bad_guard_dimension.rs");

@@ -1,0 +1,6 @@
+error: unknown TBD phase `someday`
+       help: `resolve_by` must be one of concept, preliminary, detailed, release (default: detailed)
+ --> tests/ui/bad_tbd_marker.rs:5:61
+  |
+5 | #[sysml::tbd(reason = "supplier not selected", resolve_by = "someday")]
+  |                                                             ^^^^^^^^^

@@ -270,6 +270,7 @@ pub fn expand_action(args: TokenStream, mut item: ItemStruct) -> syn::Result<Tok
         }
     });
 
+    crate::tbd::reject_tbd(&item.attrs, "action")?;
     item.attrs = strip_sysml_attrs(std::mem::take(&mut item.attrs));
     let doc_tok = quote_opt_str(&doc);
     let spec_tok = quote_vec_str(&spec_names);

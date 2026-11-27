@@ -126,3 +126,18 @@ pub fn extract_tbd_marks(attrs: &[Attribute]) -> syn::Result<Vec<TokenStream>> {
 pub fn tbd_vec_tokens(attrs: &[Attribute]) -> syn::Result<TokenStream> {
     Ok(quote_marks(&extract_tbd_marks(attrs)?))
 }
+
+/// `#[sysml::tbd]` on an element kind that cannot carry it is an error (never silently dropped).
+pub fn reject_tbd(attrs: &[Attribute], kind: &str) -> syn::Result<()> {
+    if let Some(a) = attrs.iter().find(|a| is_sysml_attr(a, "tbd")) {
+        return Err(syn::Error::new(
+            a.span(),
+            format!(
+                "#[sysml::tbd] is not supported on #[sysml::{kind}]\n\
+                 help: put it on a part, port, item, interface, requirement or state (or a part / port field), \
+                 or use `tbd = \"reason\"` on #[sysml::connect] / #[sysml::transition]"
+            ),
+        ));
+    }
+    Ok(())
+}

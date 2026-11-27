@@ -510,6 +510,7 @@ fn emit_rust_item_def(i: &ItemDef, out: &mut String) {
     } else {
         let _ = writeln!(out, "    #[sysml::item]");
     }
+    emit_rust_tbd_attrs(&i.tbd, "    ", out);
     if rname != i.name {
         let _ = writeln!(out, "    #[sysml::name = \"{}\"]", escape_rust_str(&i.name));
     }
@@ -562,6 +563,7 @@ fn emit_rust_port_def(p: &PortDef, out: &mut String) {
     } else {
         let _ = writeln!(out, "    #[sysml::port]");
     }
+    emit_rust_tbd_attrs(&p.tbd, "    ", out);
     if rname != p.name {
         let _ = writeln!(out, "    #[sysml::name = \"{}\"]", escape_rust_str(&p.name));
     }
@@ -614,6 +616,7 @@ fn emit_rust_interface_def(i: &InterfaceDef, out: &mut String) {
     let rname = to_pascal_ident(&i.name);
     emit_doc_comments(&i.doc, "    ", out);
     let _ = writeln!(out, "    #[sysml::interface]");
+    emit_rust_tbd_attrs(&i.tbd, "    ", out);
     if rname != i.name {
         let _ = writeln!(out, "    #[sysml::name = \"{}\"]", escape_rust_str(&i.name));
     }
@@ -755,6 +758,7 @@ fn emit_rust_state_def(s: &StateDef, out: &mut String) {
     } else {
         let _ = writeln!(out, "    #[sysml::state]");
     }
+    emit_rust_tbd_attrs(&s.tbd, "    ", out);
     if rname != s.name {
         let _ = writeln!(out, "    #[sysml::name = \"{}\"]", escape_rust_str(&s.name));
     }
@@ -807,6 +811,7 @@ fn emit_rust_requirement_def(r: &RequirementDef, out: &mut String) {
     } else {
         let _ = writeln!(out, "    #[sysml::requirement({})]", args.join(", "));
     }
+    emit_rust_tbd_attrs(&r.tbd, "    ", out);
     if rname != r.name {
         let _ = writeln!(out, "    #[sysml::name = \"{}\"]", escape_rust_str(&r.name));
     }
@@ -956,6 +961,7 @@ fn emit_rust_part_def(
     } else {
         let _ = writeln!(out, "    #[sysml::part({})]", part_flags.join(", "));
     }
+    emit_rust_tbd_attrs(&p.tbd, "    ", out);
     if rname != p.name {
         let _ = writeln!(out, "    #[sysml::name = \"{}\"]", escape_rust_str(&p.name));
     }
@@ -1124,6 +1130,7 @@ fn emit_rust_part_def(
             "Vec<()>".to_string()
         };
         let _ = writeln!(out, "        #[sysml::part({})]", opts.join(", "));
+        emit_rust_tbd_attrs(&sub.tbd, "        ", out);
         let _ = writeln!(out, "        pub {fname}: {rty},");
     }
     for port in &p.ports {
@@ -1139,6 +1146,7 @@ fn emit_rust_part_def(
             "        #[sysml::port(name = \"{}\")]",
             escape_rust_str(&port.name)
         );
+        emit_rust_tbd_attrs(&port.tbd, "        ", out);
         let _ = writeln!(out, "        pub {fname}: {rty},");
     }
     for it in &p.items {
@@ -1415,13 +1423,14 @@ fn emit_rust_attr_field(a: &AttributeUsage, used: &mut BTreeSet<String>, out: &m
     if let Some(m) = mark(TbdKind::Value) {
         opts.push(format!("tbd_value = \"{}\"", escape_rust_str(&m.reason)));
     }
-    if let Some(m) = a.tbd.first() {
+    if let Some(m) = a.tbd.iter().find(|m| m.kind != TbdKind::Element) {
         if let Some(o) = &m.owner {
             opts.push(format!("tbd_owner = \"{}\"", escape_rust_str(o)));
         }
         opts.push(format!("tbd_resolve_by = \"{}\"", m.resolve_by.as_str()));
     }
     emit_doc_comments(&a.doc, "        ", out);
+    emit_rust_tbd_attrs(&a.tbd, "        ", out);
     if opts.is_empty() {
         let _ = writeln!(out, "        #[sysml::attr]");
     } else {
@@ -1462,6 +1471,18 @@ fn unique_ident(base: &str, used: &mut BTreeSet<String>) -> String {
             return cand;
         }
         i += 1;
+    }
+}
+
+/// `#[sysml::tbd(reason = "...", owner = "...", resolve_by = "...")]` for each element TBD.
+fn emit_rust_tbd_attrs(marks: &[TbdMark], indent: &str, out: &mut String) {
+    for m in marks.iter().filter(|m| m.kind == TbdKind::Element) {
+        let mut args = vec![format!("reason = \"{}\"", escape_rust_str(&m.reason))];
+        if let Some(o) = &m.owner {
+            args.push(format!("owner = \"{}\"", escape_rust_str(o)));
+        }
+        args.push(format!("resolve_by = \"{}\"", m.resolve_by.as_str()));
+        let _ = writeln!(out, "{indent}#[sysml::tbd({})]", args.join(", "));
     }
 }
 

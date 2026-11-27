@@ -1,0 +1,6 @@
+error: #[sysml::tbd] is not supported on #[sysml::action]
+       help: put it on a part, port, item, interface, requirement or state (or a part / port field), or use `tbd = "reason"` on #[sysml::connect] / #[sysml::transition]
+ --> tests/ui/bad_tbd_on_action.rs:5:1
+  |
+5 | #[sysml::tbd(reason = "steps unknown")]
+  | ^

@@ -117,6 +117,7 @@ pub fn expand_analysis(args: TokenStream, mut item: ItemStruct) -> syn::Result<T
         }
     }
 
+    crate::tbd::reject_tbd(&item.attrs, "analysis")?;
     item.attrs = strip_sysml_attrs(std::mem::take(&mut item.attrs));
     let ident = &item.ident;
     let doc_tok = quote_opt_str(&doc);

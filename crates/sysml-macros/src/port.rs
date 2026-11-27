@@ -108,6 +108,7 @@ pub fn expand_enum_def(args: TokenStream, mut item: ItemEnum) -> syn::Result<Tok
         v.attrs = strip_sysml_attrs(std::mem::take(&mut v.attrs));
     }
 
+    crate::tbd::reject_tbd(&item.attrs, "enum_def")?;
     item.attrs = strip_sysml_attrs(std::mem::take(&mut item.attrs));
     let ident = &item.ident;
     let doc_tok = quote_opt_str(&doc);
@@ -605,6 +606,7 @@ pub fn expand_connection(args: TokenStream, mut item: ItemStruct) -> syn::Result
         }
     }
 
+    crate::tbd::reject_tbd(&item.attrs, "connection")?;
     item.attrs = strip_sysml_attrs(std::mem::take(&mut item.attrs));
     let ident = &item.ident;
     let doc_tok = quote_opt_str(&doc);

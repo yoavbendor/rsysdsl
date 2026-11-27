@@ -1,0 +1,6 @@
+error: #[sysml::tbd(...)] needs `reason = "..."`
+       help: e.g. #[sysml::tbd(reason = "supplier not selected yet", owner = "systems", resolve_by = "preliminary")]
+ --> tests/ui/bad_tbd_no_reason.rs:5:1
+  |
+5 | #[sysml::tbd(owner = "systems")]
+  | ^

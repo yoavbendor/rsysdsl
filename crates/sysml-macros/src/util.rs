@@ -474,7 +474,8 @@ pub fn build_attr_usage_tokens(
             ));
         }
     }
-    let tbd_marks = crate::tbd::attr_marks(&kv, attr_span)?;
+    let mut tbd_marks = crate::tbd::attr_marks(&kv, attr_span)?;
+    tbd_marks.extend(crate::tbd::extract_tbd_marks(attrs)?);
     let tbd_tok = crate::tbd::quote_marks(&tbd_marks);
     let name_override = extract_sysml_name_override(attrs)?.or_else(|| kv.get_str("name"));
     let mut redefines = kv.get_all_str("redefines");

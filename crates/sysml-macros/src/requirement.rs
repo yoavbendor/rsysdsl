@@ -380,6 +380,7 @@ pub fn expand_specification(args: TokenStream, mut item: ItemStruct) -> syn::Res
         });
     }
 
+    crate::tbd::reject_tbd(&item.attrs, "specification")?;
     item.attrs = strip_sysml_attrs(std::mem::take(&mut item.attrs));
     let ident = &item.ident;
     let doc_tok = quote_opt_str(&doc);
@@ -484,6 +485,7 @@ pub fn expand_verification(args: TokenStream, mut item: ItemStruct) -> syn::Resu
         });
     }
 
+    crate::tbd::reject_tbd(&item.attrs, "verification")?;
     item.attrs = strip_sysml_attrs(std::mem::take(&mut item.attrs));
     let doc_tok = quote_opt_str(&doc);
     let subj_tok = match subject {
