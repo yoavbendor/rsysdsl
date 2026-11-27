@@ -104,6 +104,37 @@ pub mod vehicle_arch {
 }
 ```
 
+### Connecting to an inherited port
+
+`#[sysml::connect]` checks `from` / `to` against the fields of the Rust struct, and a child struct does not contain its parent's fields. To wire a port declared on an abstract parent, **redeclare it on the child as `#[sysml::port(redefines)]` with the same field name and type** (the SysML becomes `port :>> powerOut : PowerPort;`, so no duplicate-member warning):
+
+```rust
+#[sysml::part(abstract)]
+#[derive(Debug, Clone, Copy)]
+pub struct PowerSourceBase {
+    #[sysml::port]
+    pub power_out: PowerPort,
+}
+
+#[sysml::part]
+#[sysml::specializes(PowerSourceBase)]
+#[derive(Debug, Clone, Copy)]
+pub struct Mains {
+    #[sysml::port(redefines)] // required to use `mains.power_out` in a connect
+    pub power_out: PowerPort,
+}
+
+#[sysml::part]
+#[sysml::connect(interface = PowerLink, name = "mainsToLoad", from = mains.power_out, to = load.power_in)]
+#[derive(Debug, Clone, Copy)]
+pub struct Appliance {
+    #[sysml::part]
+    pub mains: Mains,
+    #[sysml::part]
+    pub load: Load, // has `#[sysml::port] pub power_in: Conjugated<PowerPort>`
+}
+```
+
 ---
 
 ## Pattern 2: Requirements, Provenance & Compiled Constraints
@@ -142,13 +173,28 @@ pub mod requirements {
 // counts as verified in `trace-matrix`. Without a verdict it shows "no evidence supplied yet" (evidence
 // attribute has no default: honest) or "evidence is a model default (placeholder)" (it has one).
 
-// Satisfy on the realizing part (compile-time checked ID!).
-// Cross-package works as-is: if the requirement lives in another package, the emitter writes
-// the qualified name (`satisfy requirement : PowerRequirements::MinimumPowerOutput;`), so no extra
-// `#[sysml::import("PowerRequirements::*")]` is needed on the satisfying package (it is harmless). Never name a package like an OMG library package (`Requirements`, `Parts`, `Ports`, `Items`, ...): it shadows the library.
-// #[sysml::part]
-// #[sysml::satisfy(req = requirements::MinimumPowerOutput, id = "PWR-001")]
-// pub struct PowerSupplyUnit { ... }
+// Satisfy on the realizing part (compile-time checked ID!). Never name a package like an OMG
+// library package (`Requirements`, `Parts`, `Ports`, `Items`, ...): it shadows the library.
+```
+
+**Cross-package `satisfy`** (requirements package above the subsystems package, as `rsysdsl new` scaffolds):
+- **SysML side: no import needed.** The emitter writes the qualified name (`satisfy requirement : PowerRequirements::MinimumPowerOutput;`); an extra `#[sysml::import("PowerRequirements::*")]` is harmless.
+- **Rust side: a `use` IS needed** in the satisfying module, or `req = MinimumPowerOutput` does not resolve (`cannot find type`). Either `use super::requirements::*;` or a path `req = super::requirements::MinimumPowerOutput`.
+
+```rust
+#[sysml::package(name = "PowerSubsystems")]
+pub mod subsystems {
+    use super::requirements::*; // Rust needs this; SysML needs no import
+    use super::*;
+
+    #[sysml::part]
+    #[sysml::satisfy(req = MinimumPowerOutput, id = "PWR-001")]
+    #[derive(Debug, Clone, Copy)]
+    pub struct PowerSupplyUnit {
+        #[sysml::attr(default = 150.0, unit = "W")]
+        pub rated_power_w: Quantity<f64>,
+    }
+}
 ```
 
 ---
@@ -222,6 +268,60 @@ fn plant_shuts_down_on_overtemp() {
     assert_eq!(mode, PlantMode::Operating);
     let alert = ThermalAlert { measured_temp: 360.0 };
     assert_eq!(mode.dispatch_with(&alert, &plant), StepOutcome::Moved(PlantMode::SafeShutdown));
+}
+```
+
+**What a guard may contain** (the same expression is emitted as SysML and compiled as Rust):
+- operands: `event.<field>`, `subject.<field>`, numeric / `true` / `false` literals; numeric fields
+  are `f64` or `Quantity<f64>`, flags are plain `bool` fields (emitted as `Boolean`);
+- operators: `+ - * /`, unary `-`, `< <= > >= == !=`, `!` (-> `not`), `&&` (-> `and`), `||` (-> `or`),
+  parentheses, and `if c { a } else { b }`;
+- not allowed: method or function calls, qualified paths (`Self::X`), `as` casts. Dimensions are checked: `event.temp_k > subject.max_power_w` is a compile error.
+
+**Field-less events** are fine for pure triggers (button presses, timeouts): declare
+`pub struct ResetPressed {}` with `#[sysml::item]` + `#[derive(Debug, Clone, Copy, Default)]`, use it as
+`on = ResetPressed` with or without a `subject.*` guard, and dispatch it as `mode.dispatch_with(&ResetPressed {}, &subject)`.
+
+```rust
+#[sysml::item]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ResetPressed {}
+
+#[sysml::item]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DoorStatus {
+    pub door_open: bool,
+    pub child_lock: bool,
+    #[sysml::attr(unit = "K")]
+    pub cavity_temp_k: f64,
+}
+
+#[sysml::part]
+#[derive(Debug, Clone, Copy)]
+pub struct Heater {
+    #[sysml::attr(default = 400.0, unit = "K")]
+    pub max_cavity_temp_k: Quantity<f64>,
+    #[sysml::attr(default = true)]
+    pub enabled: bool,
+}
+
+#[sysml::state(subject = Heater)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeaterMode {
+    #[sysml::initial]
+    #[sysml::transition(
+        on = DoorStatus,
+        guard = event.door_open || event.cavity_temp_k > subject.max_cavity_temp_k,
+        to = Stopped
+    )]
+    Heating,
+    #[sysml::transition(
+        on = DoorStatus,
+        guard = !event.door_open && !event.child_lock && subject.enabled == true,
+        to = Heating
+    )]
+    #[sysml::transition(on = ResetPressed, to = Heating)]
+    Stopped,
 }
 ```
 
