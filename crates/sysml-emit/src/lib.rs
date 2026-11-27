@@ -4,6 +4,7 @@
 #[cfg(feature = "validate")]
 pub mod audit;
 pub mod emit;
+pub mod emit_cli;
 pub mod lint;
 pub mod resolve;
 pub mod safety_report;
@@ -17,6 +18,7 @@ pub use audit::{
     audit_model, audit_model_with_lib, audit_model_with_stdlib, audit_units_with_lib, AuditFinding,
     AuditReport,
 };
+pub use emit_cli::{emit_model_split_std, is_sysml_std_package};
 pub use emit::{emit_model, emit_package, escape_sysml_name, iso26262_metadata_package};
 pub use resolve::qualify_requirement_refs;
 pub use lint::{

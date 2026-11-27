@@ -13,6 +13,9 @@
 //!   intermediate subsystem decomposition.
 //! - `missing_physical_unit`: numeric `Real` attribute carrying a literal value without
 //!   an SI unit (excluding dimensionless counts/ratios/efficiencies/factors).
+//! - `inherited_std_default` (info): a model definition specializing a `sysml-std` element
+//!   inherits numeric library defaults (e.g. mains `frequency = 50 Hz`) without redefining
+//!   them. Library defaults are generic placeholders, not source-document values.
 //! - `unused_abstract_base`: an `abstract` part/interface/port with zero specializing
 //!   subtypes in the model (useful during refactoring; skipped for library packages).
 
@@ -51,7 +54,12 @@ pub struct LintSummary {
     pub classified_interfaces: usize,
     pub reuse_ratio_pct: f64,
     pub warning_count: usize,
+    /// Info-level smells (excludes `inherited_std_default`, counted separately below).
     pub info_count: usize,
+    /// Model definitions that inherit unredefined numeric sysml-std library defaults
+    /// (`inherited_std_default` findings; informational, never fails `--strict`).
+    #[serde(default)]
+    pub inherited_std_default_count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -326,9 +334,15 @@ pub fn lint_model(model_name: impl Into<String>, model: &Model) -> LintReport {
         }
     }
 
+    // 5. Numeric sysml-std defaults inherited without a redefinition.
+    findings.extend(inherited_std_defaults(model));
+
     for f in &findings {
         match f.severity {
             LintSeverity::Warning => summary.warning_count += 1,
+            LintSeverity::Info if f.code == "inherited_std_default" => {
+                summary.inherited_std_default_count += 1
+            }
             LintSeverity::Info => summary.info_count += 1,
         }
     }
@@ -363,15 +377,17 @@ pub fn render_lint_markdown(report: &LintReport) -> String {
     );
     let _ = writeln!(
         out,
-        "- **Findings:** {} warning(s), {} info(s)\n",
-        report.summary.warning_count, report.summary.info_count
+        "- **Findings:** {} warning(s), {} info(s), {} definition(s) inheriting sysml-std library defaults\n",
+        report.summary.warning_count,
+        report.summary.info_count,
+        report.summary.inherited_std_default_count
     );
 
     if report.findings.is_empty() {
         let _ = writeln!(out, "No architectural smells detected.");
     } else {
-        let _ = writeln!(out, "| Severity | Code | Package | Element | Suggestion |");
-        let _ = writeln!(out, "| --- | --- | --- | --- | --- |");
+        let _ = writeln!(out, "| Severity | Code | Package | Element | Finding | Suggestion |");
+        let _ = writeln!(out, "| --- | --- | --- | --- | --- | --- |");
         for f in &report.findings {
             let sev = match f.severity {
                 LintSeverity::Warning => "warning",
@@ -379,8 +395,12 @@ pub fn render_lint_markdown(report: &LintReport) -> String {
             };
             let _ = writeln!(
                 out,
-                "| {sev} | `{}` | `{}` | `{}` | {} |",
-                f.code, f.package, f.element, f.suggestion
+                "| {sev} | `{}` | `{}` | `{}` | {} | {} |",
+                f.code,
+                f.package,
+                f.element,
+                f.message.replace('|', "\\|"),
+                f.suggestion.replace('|', "\\|")
             );
         }
     }
@@ -405,6 +425,97 @@ fn collect_pkg<'a>(
             _ => {}
         }
     }
+}
+
+struct DefInfo<'a> {
+    package: String,
+    is_std: bool,
+    is_abstract: bool,
+    specializes: Vec<String>,
+    attributes: &'a [sysml_ir::AttributeUsage],
+}
+
+fn collect_defs<'a>(pkg: &'a Package, out: &mut BTreeMap<String, DefInfo<'a>>) {
+    let is_std = pkg.name.starts_with("SysmlStd");
+    for m in &pkg.members {
+        let (name, is_abstract, specializes, attributes) = match m {
+            PackageMember::Package(sub) => {
+                collect_defs(sub, out);
+                continue;
+            }
+            PackageMember::PartDef(p) => (&p.name, p.is_abstract, &p.specializes, &p.attributes),
+            PackageMember::ItemDef(i) => (&i.name, i.is_abstract, &i.specializes, &i.attributes),
+            PackageMember::PortDef(p) => (&p.name, p.is_abstract, &p.specializes, &p.attributes),
+            PackageMember::InterfaceDef(i) => {
+                (&i.name, i.is_abstract, &i.specializes, &i.attributes)
+            }
+            _ => continue,
+        };
+        out.entry(name.clone()).or_insert(DefInfo {
+            package: pkg.name.clone(),
+            is_std,
+            is_abstract,
+            specializes: specializes.iter().map(|s| simple_name(s).to_string()).collect(),
+            attributes: attributes.as_slice(),
+        });
+    }
+}
+
+/// `inherited_std_default`: for every concrete model definition that specializes a sysml-std
+/// element, list the numeric std attribute defaults it inherits without redefining them.
+fn inherited_std_defaults(model: &Model) -> Vec<LintFinding> {
+    let mut defs: BTreeMap<String, DefInfo> = BTreeMap::new();
+    for pkg in &model.packages {
+        collect_defs(pkg, &mut defs);
+    }
+    let mut findings = Vec::new();
+    for (name, d) in &defs {
+        if d.is_std || d.is_abstract {
+            continue;
+        }
+        // Names already given a value by a closer (model-side or more specific std) definition.
+        let mut resolved: BTreeSet<String> = BTreeSet::new();
+        let mut inherited: Vec<String> = Vec::new();
+        let mut visited: BTreeSet<String> = BTreeSet::new();
+        let mut queue: std::collections::VecDeque<String> = [name.clone()].into();
+        while let Some(cur) = queue.pop_front() {
+            if !visited.insert(cur.clone()) {
+                continue;
+            }
+            let Some(info) = defs.get(&cur) else { continue };
+            for a in info.attributes {
+                let mut names: Vec<String> = a.name.iter().cloned().collect();
+                names.extend(a.redefines.iter().map(|r| simple_name(r).to_string()));
+                let Some(primary) = names.first().cloned() else { continue };
+                if info.is_std && !resolved.contains(&primary) {
+                    if let Some(v) = a.value.as_deref().map(str::trim) {
+                        if v.parse::<f64>().is_ok() {
+                            let unit = a.unit.as_deref().map(|u| format!(" [{u}]")).unwrap_or_default();
+                            inherited.push(format!("{primary} = {v}{unit} (from {cur})"));
+                        }
+                    }
+                }
+                resolved.extend(names);
+            }
+            queue.extend(info.specializes.iter().cloned());
+        }
+        if inherited.is_empty() {
+            continue;
+        }
+        findings.push(LintFinding {
+            code: "inherited_std_default".to_string(),
+            severity: LintSeverity::Info,
+            package: d.package.clone(),
+            element: name.clone(),
+            message: format!(
+                "`{name}` inherits {} numeric sysml-std library default(s) it does not redefine: {}.",
+                inherited.len(),
+                inherited.join("; ")
+            ),
+            suggestion: "Library defaults are generic placeholders, not values from your source. Redefine each one your source document specifies (`#[sysml::attr(redefines = \"mainsFrequency\", default = ..., unit = \"Hz\")]`); leave the rest only if the value is genuinely irrelevant to the model.".to_string(),
+        });
+    }
+    findings
 }
 
 fn part_feature_signature(p: &PartDef) -> BTreeSet<String> {
@@ -525,6 +636,68 @@ mod tests {
         // No interfaces at all (early skeleton) -> no finding.
         let rep = lint_model("m", &model(vec![conn("b", None)], false));
         assert!(rep.clean);
+    }
+
+    #[test]
+    fn lint_lists_inherited_std_defaults_until_redefined() {
+        let attr = |name: Option<&str>, redef: Option<&str>, v: &str, u: &str| AttributeUsage {
+            name: name.map(Into::into),
+            redefines: redef.map(|r| vec![r.to_string()]).unwrap_or_default(),
+            type_name: Some("Real".into()),
+            value: Some(v.into()),
+            unit: Some(u.into()),
+            ..Default::default()
+        };
+        let std_pkg = Package {
+            name: "SysmlStdPower".into(),
+            is_library: true,
+            members: vec![PackageMember::PartDef(PartDef {
+                name: "AcMainsSupply".into(),
+                is_abstract: true,
+                attributes: vec![
+                    attr(Some("frequency"), None, "50.0", "Hz"),
+                    attr(Some("voltage"), None, "230.0", "V"),
+                ],
+                ..Default::default()
+            })],
+            ..Default::default()
+        };
+        let model = |redefine_freq: bool| {
+            let attrs = if redefine_freq {
+                vec![attr(None, Some("frequency"), "60.0", "Hz")]
+            } else {
+                vec![]
+            };
+            Model::new(vec![
+                std_pkg.clone(),
+                Package {
+                    name: "M".into(),
+                    members: vec![PackageMember::PartDef(PartDef {
+                        name: "Mains".into(),
+                        specializes: vec!["AcMainsSupply".into()],
+                        attributes: attrs,
+                        ..Default::default()
+                    })],
+                    ..Default::default()
+                },
+            ])
+        };
+        let rep = lint_model("m", &model(false));
+        let f = rep
+            .findings
+            .iter()
+            .find(|f| f.code == "inherited_std_default")
+            .expect("finding");
+        assert!(f.message.contains("frequency = 50.0 [Hz]"), "{}", f.message);
+        assert!(f.message.contains("voltage = 230.0 [V]"));
+        assert!(rep.clean, "info only");
+        let rep = lint_model("m", &model(true));
+        let f = rep
+            .findings
+            .iter()
+            .find(|f| f.code == "inherited_std_default")
+            .expect("finding");
+        assert!(!f.message.contains("frequency"), "{}", f.message);
     }
 
     #[test]

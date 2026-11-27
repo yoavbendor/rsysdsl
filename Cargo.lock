@@ -567,6 +567,7 @@ dependencies = [
  "sysml-ir",
  "sysml-lift",
  "sysml-sim",
+ "sysml-std",
  "tempfile",
 ]
 

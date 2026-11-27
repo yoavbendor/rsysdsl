@@ -3,6 +3,10 @@
 
 use sysml_dsl::prelude::*;
 
+/// sysml-std library package. Numeric attribute defaults here are generic LIBRARY DEFAULTS
+/// (placeholders), not values from any source document: a model that specializes these
+/// definitions must redefine every value its source specifies. `rsysdsl lint` lists the
+/// defaults a model still inherits as `inherited_std_default`.
 #[sysml::package(library, name = "SysmlStdComms")]
 #[sysml::import("ScalarValues::*")]
 #[sysml::import("SI::*")]

@@ -15,7 +15,7 @@ You are authoring a **System as Code** model in **`rsysdsl`** — a strongly typ
    - Use `#[sysml::transition(on = Event, guard = expr, to = State)]` for guarded transitions.
    - Use `#[sysml::calc] pub fn ...` for pure calculations.
    - Put physics loops, test harnesses, or fault injectors in a separate `<system>_sim` crate (or `#[cfg(test)]`).
-3. **Never invent requirements, thresholds, or limits** that are not in the user's diagram or documents. If a value is unknown, mark it clearly in `///` doc or omit the constraint until the source document specifies it.
+3. **Never invent requirements, thresholds, or limits** that are not in the user's diagram or documents. If a value is unknown, mark it clearly in `///` doc or omit the constraint until the source document specifies it. This includes numbers inherited from `sysml-std` parents (library placeholders such as 50 Hz mains or 48 MHz MCU clock): redefine those your source specifies; `rsysdsl lint` lists the rest as `inherited_std_default`.
 4. **Never finish without running the verification loop** (`cargo test` -> emit `.sysml` -> `rsysdsl audit --files ... --stdlib --strict`).
 
 ---
@@ -35,7 +35,8 @@ cargo run -q -p sysml-cli -- new my_system
 cargo test -p my-system
 
 # 3. Emit OMG-valid .sysml for VS Code SysML v2 / sysml-reactflow
-cargo run -q -p my-system --bin emit -- -o target/my_system.sysml
+#    (--omit-std keeps the sysml-std library packages out of the file; audit/lint/view load them)
+cargo run -q -p my-system --bin emit -- -o target/my_system.sysml --omit-std
 
 # 4. Strict 0-error / 0-warning OMG Standard Library audit + orphan requirement check
 cargo run -q -p sysml-cli -- audit --files target/my_system.sysml --stdlib --strict --pretty

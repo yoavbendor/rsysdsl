@@ -744,3 +744,46 @@ fn cli_new_scaffold_builds_audits_and_lints_clean() {
         String::from_utf8_lossy(&lint.stdout)
     );
 }
+
+#[test]
+fn cli_audit_and_lint_load_sysml_std_for_files_emitted_with_omit_std() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("microwave_no_std.sysml");
+    let (own, _std) = sysml_emit::emit_model_split_std(&microwave::build_model());
+    assert!(!own.contains("package SysmlStd"));
+    std::fs::write(&path, own).unwrap();
+
+    let audit_out = Command::new(bin_path())
+        .arg("audit")
+        .arg("--files")
+        .arg(&path)
+        .args(["--stdlib", "--strict"])
+        .output()
+        .expect("run rsysdsl audit");
+    assert_eq!(
+        audit_out.status.code(),
+        Some(0),
+        "stdout: {}",
+        String::from_utf8_lossy(&audit_out.stdout)
+    );
+    let val: serde_json::Value = serde_json::from_slice(&audit_out.stdout).unwrap();
+    assert_eq!(val["validation_errors"], 0);
+    assert_eq!(val["validation_warnings"], 0);
+
+    let lint_out = Command::new(bin_path())
+        .arg("lint")
+        .arg("--files")
+        .arg(&path)
+        .args(["--strict", "--format", "json"])
+        .output()
+        .expect("run rsysdsl lint");
+    assert_eq!(lint_out.status.code(), Some(0));
+    let lint: serde_json::Value = serde_json::from_slice(&lint_out.stdout).unwrap();
+    let findings = lint["findings"].as_array().unwrap();
+    assert!(
+        findings
+            .iter()
+            .any(|f| f["code"] == "inherited_std_default"),
+        "std defaults must be reported once std is auto-loaded: {lint}"
+    );
+}

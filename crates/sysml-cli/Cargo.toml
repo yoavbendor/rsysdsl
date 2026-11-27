@@ -14,6 +14,7 @@ path = "src/main.rs"
 sysml-ir = { workspace = true }
 sysml-emit = { workspace = true }
 sysml-lift = { workspace = true }
+sysml-std = { workspace = true }
 apollo11-model = { workspace = true }
 apollo11-sim = { workspace = true }
 sysml-sim = { workspace = true }

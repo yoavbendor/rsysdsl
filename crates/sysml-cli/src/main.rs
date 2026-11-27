@@ -348,6 +348,25 @@ fn read_units(files: &[PathBuf]) -> Result<Vec<(String, String)>, String> {
     Ok(units)
 }
 
+/// Name of the synthetic unit holding the sysml-std library when it is auto-loaded.
+const SYSML_STD_UNIT: &str = "<sysml-std>";
+
+/// Like [`read_units`], but when the files reference `SysmlStd*` packages without defining
+/// them (emitted with `emit --omit-std`), append the bundled sysml-std library as an extra
+/// unit so validation, lint and trace resolve it.
+fn read_units_with_std(files: &[PathBuf]) -> Result<Vec<(String, String)>, String> {
+    let mut units = read_units(files)?;
+    let references_std = units.iter().any(|(_, t)| t.contains("SysmlStd"));
+    let defines_std = units
+        .iter()
+        .any(|(_, t)| t.contains("library package SysmlStd") || t.contains("package SysmlStd"));
+    if references_std && !defines_std {
+        let std_model = sysml_ir::Model::new(sysml_std::std_packages());
+        units.push((SYSML_STD_UNIT.to_string(), sysml_emit::emit_model(&std_model)));
+    }
+    Ok(units)
+}
+
 fn resolve_lib_dir(stdlib: bool, lib: Option<PathBuf>) -> Result<Option<PathBuf>, String> {
     if let Some(dir) = lib {
         if !dir.is_dir() {
@@ -462,7 +481,7 @@ fn cmd_view(
     pretty: bool,
 ) -> ExitCode {
     let (default_title, default_out, model) = if !files.is_empty() {
-        let units = match read_units(files) {
+        let units = match read_units_with_std(files) {
             Ok(u) => u,
             Err(e) => {
                 eprintln!("error: {e}");
@@ -648,7 +667,7 @@ fn cmd_safety_report(
     pretty: bool,
 ) -> ExitCode {
     let (label, model) = if !files.is_empty() {
-        let units = match read_units(files) {
+        let units = match read_units_with_std(files) {
             Ok(u) => u,
             Err(e) => {
                 eprintln!("error: {e}");
@@ -717,7 +736,7 @@ fn cmd_lint(
     pretty: bool,
 ) -> ExitCode {
     let (label, model) = if !files.is_empty() {
-        let units = match read_units(files) {
+        let units = match read_units_with_std(files) {
             Ok(u) => u,
             Err(e) => {
                 eprintln!("error: {e}");
@@ -862,7 +881,7 @@ fn cmd_audit(
             eprintln!("error: `--verify` is only supported for executable built-in models, not `--files`");
             return ExitCode::from(2);
         }
-        let units = match read_units(files) {
+        let units = match read_units_with_std(files) {
             Ok(u) => u,
             Err(e) => {
                 eprintln!("error: {e}");
@@ -923,7 +942,7 @@ fn cmd_trace_matrix(
             eprintln!("error: `--verify` is only supported for executable built-in models, not `--files`");
             return ExitCode::from(2);
         }
-        let units = match read_units(files) {
+        let units = match read_units_with_std(files) {
             Ok(u) => u,
             Err(e) => {
                 eprintln!("error: {e}");
@@ -1225,7 +1244,7 @@ fn cmd_validate(
     strict: bool,
     pretty: bool,
 ) -> ExitCode {
-    let units = match read_units(files) {
+    let units = match read_units_with_std(files) {
         Ok(u) => u,
         Err(e) => {
             eprintln!("error: {e}");
