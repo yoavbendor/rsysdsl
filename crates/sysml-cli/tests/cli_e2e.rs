@@ -297,7 +297,7 @@ fn cli_trace_matrix_json_markdown_csv_and_sysml_files() {
     assert_eq!(csv_out.status.code(), Some(0));
     let csv = String::from_utf8(csv_out.stdout).unwrap();
     assert!(csv.starts_with(
-        "req_id,req_name,package,satisfied_by,allocated_functions,constraints,refines,verification_status,verification_scenario,evidence_source\n"
+        "req_id,req_name,package,satisfied_by,allocated_functions,constraints,refines,verification_status,verification_scenario,evidence_source,tbds\n"
     ));
     assert!(csv.contains("CLR-R050"));
 
@@ -813,4 +813,122 @@ fn cli_audit_and_lint_load_sysml_std_for_files_emitted_with_omit_std() {
             .any(|f| f["code"] == "inherited_std_default"),
         "std defaults must be reported once std is auto-loaded: {lint}"
     );
+}
+
+/// S7.5 fixture: three TBDs due at `preliminary`, `detailed` (default) and `release`.
+const TBD_FIXTURE: &str = r#"package TbdCli {
+    private import ScalarValues::*;
+    private import SI::*;
+    part def Pump {
+        @TbdMetadata::TBD {
+            category = "element";
+            reason = "supplier not selected";
+            owner = "systems";
+            resolveBy = "preliminary";
+        }
+        attribute ratedPower : Real {
+            @TbdMetadata::TBD {
+                category = "value";
+                reason = "datasheet pending";
+                resolveBy = "detailed";
+            }
+        }
+        attribute lossCoefficient : Real = 0.8 {
+            @TbdMetadata::TBD {
+                category = "unit";
+                reason = "table gives no unit";
+                resolveBy = "release";
+            }
+        }
+    }
+}
+
+library package TbdMetadata {
+    private import ScalarValues::*;
+    metadata def TBD {
+        attribute category : String;
+        attribute reason : String;
+        attribute owner : String;
+        attribute resolveBy : String;
+    }
+}
+"#;
+
+fn audit_exit(file: &Path, maturity: &str) -> (Option<i32>, serde_json::Value) {
+    let out = Command::new(bin_path())
+        .args(["audit", "--files"])
+        .arg(file)
+        .args(["--stdlib", "--strict", "--maturity", maturity])
+        .output()
+        .expect("run rsysdsl audit");
+    (out.status.code(), serde_json::from_slice(&out.stdout).unwrap())
+}
+
+#[test]
+fn cli_tbd_ledger_and_audit_maturity_gate() {
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join("tbd.sysml");
+    std::fs::write(&file, TBD_FIXTURE).unwrap();
+
+    // Ledger: JSON and Markdown.
+    let out = Command::new(bin_path())
+        .args(["tbd", "--files"])
+        .arg(&file)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    let val: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(val["tbd_count"], 3);
+    assert_eq!(val["by_kind"]["value"], 1);
+    assert_eq!(val["by_kind"]["channel"], 0);
+    let e0 = &val["entries"][0];
+    assert_eq!(e0["element"], "TbdCli::Pump");
+    assert_eq!(e0["kind"], "element");
+    assert_eq!(e0["owner"], "systems");
+    assert_eq!(e0["resolve_by"], "preliminary");
+    let md = Command::new(bin_path())
+        .args(["tbd", "--format", "markdown", "--files"])
+        .arg(&file)
+        .output()
+        .unwrap();
+    let md = String::from_utf8_lossy(&md.stdout);
+    assert!(md.contains("| `TbdCli::Pump::ratedPower` | value | detailed | — | datasheet pending |"), "{md}");
+
+    // Maturity: TBDs due at or before the phase fail the strict audit.
+    let (code, val) = audit_exit(&file, "concept");
+    assert_eq!(code, Some(0), "{val:#}");
+    assert_eq!(val["tbd_count"], 3);
+    assert_eq!(val["tbd_ledger"].as_array().unwrap().len(), 3);
+    assert_eq!(val["overdue_tbds"].as_array().unwrap().len(), 0);
+    let (code, val) = audit_exit(&file, "preliminary");
+    assert_eq!(code, Some(1));
+    assert_eq!(val["overdue_tbds"].as_array().unwrap().len(), 1);
+    let (code, val) = audit_exit(&file, "detailed");
+    assert_eq!(code, Some(1));
+    assert_eq!(val["overdue_tbds"].as_array().unwrap().len(), 2);
+    let (code, val) = audit_exit(&file, "release");
+    assert_eq!(code, Some(1));
+    assert_eq!(val["overdue_tbds"].as_array().unwrap().len(), 3, "release allows no TBDs");
+    assert!(val["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|f| f["rule"] == "tbd-overdue" && f["severity"] == "error"));
+
+    // Lint reports the count as info only; trace-matrix carries the TBD summary.
+    let out = Command::new(bin_path())
+        .args(["lint", "--strict", "--files"])
+        .arg(&file)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stdout));
+    let val: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(val["summary"]["tbd_count"], 3);
+    let out = Command::new(bin_path())
+        .args(["trace-matrix", "--files"])
+        .arg(&file)
+        .output()
+        .unwrap();
+    let val: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(val["summary"]["tbd_count"], 3);
 }

@@ -39,6 +39,10 @@ pub struct TraceRow {
     /// into the "measured" value).
     #[serde(default)]
     pub hollow_comparisons: Vec<String>,
+    /// TBD markers on the requirement or on / within its satisfying parts
+    /// (`<element> [<kind>, resolve by <phase>]: <reason>`).
+    #[serde(default)]
+    pub tbds: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -64,6 +68,9 @@ pub struct TraceMatrixSummary {
     /// Requirements with at least one hollow comparison (see [`TraceRow::hollow_comparisons`]).
     #[serde(default)]
     pub hollow_requirements: usize,
+    /// All TBD markers of the model (see `rsysdsl tbd`).
+    #[serde(default)]
+    pub tbd_count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -123,6 +130,7 @@ pub fn build_trace_matrix(
     let mut unverified = 0usize;
     let mut placeholder_evidence = 0usize;
     let mut hollow_requirements = 0usize;
+    let ledger = crate::tbd::collect_tbd_ledger(model);
 
     for (pkg_name, rdef) in &req_defs {
         let req_id = rdef
@@ -165,6 +173,30 @@ pub fn build_trace_matrix(
                 }
             }
         }
+
+        // TBDs on the requirement itself or on / within a satisfying part (matched by the
+        // simple names of the requirement and of each satisfier path segment).
+        let mut owners: BTreeSet<String> = BTreeSet::new();
+        owners.insert(rdef.name.clone());
+        for sat in &satisfied_by {
+            for seg in sat.split(['.', ':']).filter(|s| !s.is_empty()) {
+                owners.insert(seg.to_string());
+                owners.insert(upper_first(seg));
+            }
+        }
+        let tbds: Vec<String> = ledger
+            .iter()
+            .filter(|e| e.element.split("::").any(|seg| owners.contains(seg)))
+            .map(|e| {
+                format!(
+                    "{} [{}, resolve by {}]: {}",
+                    e.element,
+                    e.kind.as_str(),
+                    e.resolve_by.as_str(),
+                    e.reason
+                )
+            })
+            .collect();
 
         let verdict = verdicts_by_key
             .get(req_id.as_str())
@@ -238,6 +270,7 @@ pub fn build_trace_matrix(
             evidence_attributes: ev.evidence_attributes,
             evidence_source: evidence_source.to_string(),
             hollow_comparisons: ev.hollow_comparisons,
+            tbds,
         });
     }
 
@@ -273,6 +306,7 @@ pub fn build_trace_matrix(
             total_state_defs: total_states,
             placeholder_evidence,
             hollow_requirements,
+            tbd_count: ledger.len(),
         },
         modeled_calcs,
         rows,
@@ -308,13 +342,20 @@ pub fn render_trace_matrix_markdown(matrix: &TraceMatrix) -> String {
             s.placeholder_evidence, s.hollow_requirements
         );
     }
+    if s.tbd_count > 0 {
+        let _ = writeln!(
+            out,
+            "- **TBDs:** {} open (see the TBDs column and `rsysdsl tbd`)\n",
+            s.tbd_count
+        );
+    }
     let _ = writeln!(
         out,
-        "| Req ID | Requirement | Package | Satisfied By | Allocated Functions | Constraints | Verification |"
+        "| Req ID | Requirement | Package | Satisfied By | Allocated Functions | Constraints | Verification | TBDs |"
     );
     let _ = writeln!(
         out,
-        "| --- | --- | --- | --- | --- | --- | --- |"
+        "| --- | --- | --- | --- | --- | --- | --- | --- |"
     );
     for row in &matrix.rows {
         let sat = if row.satisfied_by.is_empty() {
@@ -357,10 +398,15 @@ pub fn render_trace_matrix_markdown(matrix: &TraceMatrix) -> String {
                 row.hollow_comparisons.join("; ").replace('|', "\\|")
             ));
         }
+        let tbds = if row.tbds.is_empty() {
+            "—".to_string()
+        } else {
+            row.tbds.join("; ").replace('|', "\\|")
+        };
         let _ = writeln!(
             out,
-            "| `{}` | `{}` | `{}` | {} | {} | {} | **{}**{} |",
-            row.req_id, row.req_name, row.package, sat, fns, cons, status, scenario
+            "| `{}` | `{}` | `{}` | {} | {} | {} | **{}**{} | {} |",
+            row.req_id, row.req_name, row.package, sat, fns, cons, status, scenario, tbds
         );
     }
     out
@@ -371,7 +417,7 @@ pub fn render_trace_matrix_csv(matrix: &TraceMatrix) -> String {
     let mut out = String::new();
     let _ = writeln!(
         out,
-        "req_id,req_name,package,satisfied_by,allocated_functions,constraints,refines,verification_status,verification_scenario,evidence_source"
+        "req_id,req_name,package,satisfied_by,allocated_functions,constraints,refines,verification_status,verification_scenario,evidence_source,tbds"
     );
     for row in &matrix.rows {
         let fields = [
@@ -385,6 +431,7 @@ pub fn render_trace_matrix_csv(matrix: &TraceMatrix) -> String {
             row.verification_status.clone(),
             row.verification_scenario.clone().unwrap_or_default(),
             row.evidence_source.clone(),
+            row.tbds.join("; "),
         ];
         let line = fields
             .iter()

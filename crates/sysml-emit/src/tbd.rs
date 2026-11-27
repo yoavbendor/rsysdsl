@@ -198,3 +198,65 @@ fn walk_package(pkg: &Package, prefix: &str, out: &mut Vec<TbdEntry>) {
         }
     }
 }
+
+/// `rsysdsl tbd` output: the ledger plus totals.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TbdLedger {
+    pub model: String,
+    pub tbd_count: usize,
+    /// Count per kind (`unit`, `value`, `element`, `channel`, `custom_unit`), zeros included.
+    pub by_kind: BTreeMap<String, usize>,
+    pub entries: Vec<TbdEntry>,
+}
+
+/// Build the TBD ledger report for `model`.
+pub fn tbd_ledger_report(model_name: impl Into<String>, model: &Model) -> TbdLedger {
+    let entries = collect_tbd_ledger(model);
+    TbdLedger {
+        model: model_name.into(),
+        tbd_count: entries.len(),
+        by_kind: count_by_kind(&entries),
+        entries,
+    }
+}
+
+/// Markdown rendering of a [`TbdLedger`].
+pub fn render_tbd_markdown(l: &TbdLedger) -> String {
+    use std::fmt::Write;
+    let mut out = String::new();
+    let _ = writeln!(out, "# TBD ledger — `{}`\n", l.model);
+    let kinds: Vec<String> = l
+        .by_kind
+        .iter()
+        .filter(|(_, n)| **n > 0)
+        .map(|(k, n)| format!("{n} {k}"))
+        .collect();
+    let _ = writeln!(
+        out,
+        "- **TBDs:** {} open{}\n",
+        l.tbd_count,
+        if kinds.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", kinds.join(", "))
+        }
+    );
+    if l.entries.is_empty() {
+        let _ = writeln!(out, "No TBDs.");
+        return out;
+    }
+    let _ = writeln!(out, "| Element | Kind | Resolve by | Owner | Reason |");
+    let _ = writeln!(out, "| --- | --- | --- | --- | --- |");
+    for e in &l.entries {
+        let _ = writeln!(
+            out,
+            "| `{}` | {} | {} | {} | {} |",
+            e.element,
+            e.kind.as_str(),
+            e.resolve_by.as_str(),
+            e.owner.as_deref().unwrap_or("—"),
+            e.reason.replace('|', "\\|")
+        );
+    }
+    out
+}

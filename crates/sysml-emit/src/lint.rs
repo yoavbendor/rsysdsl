@@ -74,6 +74,10 @@ pub struct LintSummary {
     /// prioritized guards) and never fail `--strict`.
     #[serde(default)]
     pub state_review_count: usize,
+    /// TBD markers (escape hatches) in the model: informational, never a warning; the
+    /// maturity gate is `rsysdsl audit --maturity`, the ratchet `rsysdsl tbd --check`.
+    #[serde(default)]
+    pub tbd_count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -379,6 +383,8 @@ pub fn lint_model(model_name: impl Into<String>, model: &Model) -> LintReport {
         }
     }
 
+    summary.tbd_count = crate::tbd::collect_tbd_ledger(model).len();
+
     LintReport {
         model: model_name.into(),
         clean: summary.warning_count == 0,
@@ -415,6 +421,13 @@ pub fn render_lint_markdown(report: &LintReport) -> String {
         report.summary.inherited_std_default_count,
         report.summary.state_review_count
     );
+    if report.summary.tbd_count > 0 {
+        let _ = writeln!(
+            out,
+            "- **TBDs (info):** {} open escape hatch(es); list them with `rsysdsl tbd`, gate them with `rsysdsl audit --maturity <phase>`\n",
+            report.summary.tbd_count
+        );
+    }
 
     if report.findings.is_empty() {
         let _ = writeln!(out, "No architectural smells detected.");

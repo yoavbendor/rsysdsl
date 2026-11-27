@@ -73,7 +73,7 @@ pub mod tbd_marker_demo {
     #[derive(Debug, Clone, Copy, Default)]
     pub struct System {
         #[sysml::part]
-        #[sysml::tbd(reason = "redundancy not decided", resolve_by = "concept")]
+        #[sysml::tbd(reason = "redundancy not decided", resolve_by = "preliminary")]
         pub sensor: Sensor,
         #[sysml::part]
         pub logger: Logger,
@@ -141,4 +141,18 @@ fn tbd_markers_do_not_change_behaviour() {
         mode.dispatch_event(&tbd_marker_demo::Wake {}),
         StepOutcome::Moved(tbd_marker_demo::SensorMode::Active)
     );
+}
+
+#[test]
+fn trace_matrix_lists_tbds_on_requirement_and_satisfying_part() {
+    let tm = sysml_emit::build_trace_matrix("tbd_markers", &model(), None);
+    assert_eq!(tm.summary.tbd_count, 11);
+    let row = tm.rows.iter().find(|r| r.req_id == "TM-001").unwrap();
+    let joined = row.tbds.join("\n");
+    assert!(joined.contains("TbdMarkerDemo::ReportStatus [element, resolve by release]"), "{joined}");
+    assert!(joined.contains("TbdMarkerDemo::Sensor [element, resolve by detailed]: sensor supplier not selected"), "{joined}");
+    assert!(joined.contains("TbdMarkerDemo::Sensor::sampleRate"), "{joined}");
+    assert!(!joined.contains("StatusLink"), "not within the satisfying part: {joined}");
+    let md = sysml_emit::render_trace_matrix_markdown(&tm);
+    assert!(md.contains("| TBDs |") && md.contains("- **TBDs:** 11 open"), "{md}");
 }

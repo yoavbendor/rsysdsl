@@ -119,9 +119,34 @@ enum Commands {
         #[arg(long)]
         lib: Option<PathBuf>,
 
-        /// Fail with exit code 1 if any Open-MBEE validation warnings are emitted.
+        /// Fail with exit code 1 if any Open-MBEE validation warnings are emitted (and if any
+        /// TBD is overdue at `--maturity`).
         #[arg(long)]
         strict: bool,
+
+        /// Design maturity: every TBD whose `resolve_by` is at or before this phase is overdue
+        /// (an error in `--strict`). `release` therefore allows no TBDs.
+        #[arg(long, value_enum, default_value = "concept")]
+        maturity: CliPhase,
+    },
+
+    /// Print the TBD ledger (every escape hatch with its reason, owner and resolve-by phase).
+    Tbd {
+        /// Built-in model name (ignored when `--files` is provided).
+        #[arg(long, default_value = "apollo11-model")]
+        model: String,
+
+        /// `.sysml` input files to lift (emitted by a model's `emit` binary).
+        #[arg(long, num_args = 1..)]
+        files: Vec<PathBuf>,
+
+        /// Output format: json or markdown.
+        #[arg(long, value_enum, default_value = "json")]
+        format: LintFormat,
+
+        /// Optional file path to write the rendered ledger.
+        #[arg(short, long)]
+        output: Option<PathBuf>,
     },
 
     /// Generate an ASPICE bidirectional traceability matrix (JSON, Markdown, or CSV).
@@ -275,6 +300,25 @@ enum SafetyFormat {
 }
 
 #[derive(Clone, Copy, ValueEnum)]
+enum CliPhase {
+    Concept,
+    Preliminary,
+    Detailed,
+    Release,
+}
+
+impl From<CliPhase> for sysml_ir::TbdPhase {
+    fn from(p: CliPhase) -> Self {
+        match p {
+            CliPhase::Concept => sysml_ir::TbdPhase::Concept,
+            CliPhase::Preliminary => sysml_ir::TbdPhase::Preliminary,
+            CliPhase::Detailed => sysml_ir::TbdPhase::Detailed,
+            CliPhase::Release => sysml_ir::TbdPhase::Release,
+        }
+    }
+}
+
+#[derive(Clone, Copy, ValueEnum)]
 enum LintFormat {
     Json,
     Markdown,
@@ -410,7 +454,14 @@ fn main() -> ExitCode {
             stdlib,
             lib,
             strict,
-        } => cmd_audit(&model, &files, verify, stdlib, lib, strict, cli.pretty),
+            maturity,
+        } => cmd_audit(&model, &files, verify, stdlib, lib, strict, maturity.into(), cli.pretty),
+        Commands::Tbd {
+            model,
+            files,
+            format,
+            output,
+        } => cmd_tbd(&model, &files, format, output, cli.pretty),
         Commands::TraceMatrix {
             model,
             files,
@@ -727,6 +778,74 @@ fn cmd_safety_report(
     ExitCode::SUCCESS
 }
 
+/// Load a model from `--files` (lifted, sysml-std appended when referenced) or a built-in name.
+fn load_model(model_name: &str, files: &[PathBuf]) -> Result<(String, sysml_ir::Model), ExitCode> {
+    if files.is_empty() {
+        return resolve_builtin_model(model_name)
+            .map(|m| (model_name.to_string(), m))
+            .map_err(|e| {
+                eprintln!("error: {e}");
+                ExitCode::from(2)
+            });
+    }
+    let units = read_units_with_std(files).map_err(|e| {
+        eprintln!("error: {e}");
+        ExitCode::from(2)
+    })?;
+    let lifted = lift_sysml_units(&units);
+    if !lifted.parse_errors.is_empty() {
+        for err in &lifted.parse_errors {
+            eprintln!("parse error: {err}");
+        }
+        return Err(ExitCode::from(2));
+    }
+    let label = if files.len() == 1 {
+        files[0].display().to_string()
+    } else {
+        format!("{} files", files.len())
+    };
+    Ok((label, lifted.model))
+}
+
+fn cmd_tbd(
+    model_name: &str,
+    files: &[PathBuf],
+    format: LintFormat,
+    output: Option<PathBuf>,
+    pretty: bool,
+) -> ExitCode {
+    let (label, model) = match load_model(model_name, files) {
+        Ok(v) => v,
+        Err(code) => return code,
+    };
+    let ledger = sysml_emit::tbd_ledger_report(label, &model);
+    let rendered = match format {
+        LintFormat::Json => {
+            let text = if pretty {
+                serde_json::to_string_pretty(&ledger)
+            } else {
+                serde_json::to_string(&ledger)
+            };
+            match text {
+                Ok(s) => format!("{s}\n"),
+                Err(e) => {
+                    eprintln!("error: failed to serialize TBD ledger: {e}");
+                    return ExitCode::from(2);
+                }
+            }
+        }
+        LintFormat::Markdown => sysml_emit::render_tbd_markdown(&ledger),
+    };
+    if let Some(path) = &output {
+        if let Err(e) = fs::write(path, &rendered) {
+            eprintln!("error: failed to write '{}': {e}", path.display());
+            return ExitCode::from(2);
+        }
+    }
+    print!("{rendered}");
+    ExitCode::SUCCESS
+}
+
 fn cmd_lint(
     model_name: &str,
     files: &[PathBuf],
@@ -860,6 +979,7 @@ fn cmd_emit(model_name: &str, output: Option<PathBuf>, raw: bool, pretty: bool) 
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn cmd_audit(
     model_name: &str,
     files: &[PathBuf],
@@ -867,6 +987,7 @@ fn cmd_audit(
     stdlib: bool,
     lib: Option<PathBuf>,
     strict: bool,
+    maturity: sysml_ir::TbdPhase,
     pretty: bool,
 ) -> ExitCode {
     let lib_dir = match resolve_lib_dir(stdlib, lib) {
@@ -876,7 +997,7 @@ fn cmd_audit(
             return ExitCode::from(2);
         }
     };
-    let report = if !files.is_empty() {
+    let mut report = if !files.is_empty() {
         if with_verify {
             eprintln!("error: `--verify` is only supported for executable built-in models, not `--files`");
             return ExitCode::from(2);
@@ -917,10 +1038,18 @@ fn cmd_audit(
             strict,
         )
     };
+    sysml_emit::apply_maturity(&mut report, maturity, strict);
     print_json(&report, pretty);
     if report.ok {
         ExitCode::SUCCESS
     } else {
+        if !report.overdue_tbds.is_empty() && strict {
+            eprintln!(
+                "error: {} TBD(s) due by maturity `{}` are still open (see `overdue_tbds`)",
+                report.overdue_tbds.len(),
+                report.maturity.as_str()
+            );
+        }
         eprintln!(
             "error: audit failed with {} finding(s)",
             report.findings.len()

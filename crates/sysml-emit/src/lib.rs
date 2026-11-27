@@ -17,14 +17,17 @@ pub mod viewer;
 
 #[cfg(feature = "validate")]
 pub use audit::{
-    audit_model, audit_model_with_lib, audit_model_with_stdlib, audit_units_with_lib, AuditFinding,
-    AuditReport,
+    apply_maturity, audit_model, audit_model_with_lib, audit_model_with_stdlib,
+    audit_units_with_lib, AuditFinding, AuditReport,
 };
 pub use emit_cli::{emit_model_split_std, is_sysml_std_package};
 pub use emit::{
     emit_model, emit_package, escape_sysml_name, iso26262_metadata_package, tbd_metadata_package,
 };
-pub use tbd::{collect_tbd_ledger, count_by_kind, model_has_tbd, overdue_at, TbdEntry};
+pub use tbd::{
+    collect_tbd_ledger, count_by_kind, model_has_tbd, overdue_at, render_tbd_markdown, tbd_ledger_report,
+    TbdEntry, TbdLedger,
+};
 pub use resolve::qualify_requirement_refs;
 pub use lint::{
     lint_model, render_lint_markdown, LintFinding, LintReport, LintSeverity, LintSummary,
