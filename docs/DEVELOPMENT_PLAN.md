@@ -58,6 +58,16 @@ one or more self-contained commits on the work branch, gated by
 - Give a Haiku-class model 3 small written specs plus `AGENTS.md`; record first-pass compile rate, iterations to green audit, lint findings and error classes.
 - Output: `docs/HAIKU_TRIAL.md` with the measured results and concrete doc/DSL fixes they imply.
 - Re-run after S1/S4 to measure improvement.
+- **Status: baseline done.** All 3 specs reached clean audit + lint in 8 / 17 / 24 invocations; see [`HAIKU_TRIAL.md`](HAIKU_TRIAL.md). Quick doc/lint fixes landed with the report.
+
+### S6 — Fix authoring friction found by the Haiku trial
+- Cross-package `satisfy`: auto-import or rustc error instead of an audit-only failure.
+- `unclassified_interfaces` lint: workable minimal abstract-interface pattern, documented; also flag untyped connects so removing interfaces is never the "fix".
+- `#[sysml::out_item(redefines)]` and an ERRORS.md entry for duplicate inherited members.
+- sysml-std numeric-default policy (no unstated numbers leaking into models) and an emit option to omit std packages from output.
+- Separate requirement limits from measured/evidence values; tie evidence to verification cases.
+- Document installing the CLI as `rsysdsl`.
+- **Gate:** re-run the 3 trial specs; target ≤ 10 invocations each.
 
 ### Deferred (not scheduled)
 - Bond-graph / acausal connections and FMI 3.0 export (`SIMULATION_VISION.md` Tier 3).

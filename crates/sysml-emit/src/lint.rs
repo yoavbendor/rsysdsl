@@ -210,7 +210,7 @@ pub fn lint_model(model_name: impl Into<String>, model: &Model) -> LintReport {
                 names.len(),
                 names.join(", ")
             ),
-            suggestion: "Specialize a shared abstract interface (e.g. `sysml_std::comms::InfoChannel` or `sysml_std::flows::EnergyLink`) so protocols/channels form a clean taxonomy.".to_string(),
+            suggestion: "Specialize a shared abstract interface (e.g. `sysml_std::comms::InfoChannel` or `sysml_std::flows::ThermalLink` / `ElectricalLink`) so protocols/channels form a clean taxonomy.".to_string(),
         });
     }
 

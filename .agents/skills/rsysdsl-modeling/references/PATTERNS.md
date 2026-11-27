@@ -115,7 +115,10 @@ pub mod requirements {
     }
 }
 
-// Satisfy on the realizing part (compile-time checked ID!):
+// Satisfy on the realizing part (compile-time checked ID!).
+// If the requirement lives in another package, the satisfying package ALSO needs
+// `#[sysml::import("Requirements::*")]` (the SysML package name), otherwise rustc passes
+// but the strict audit fails with `unresolved reference 'MinimumPowerOutput'`.
 // #[sysml::part]
 // #[sysml::satisfy(req = requirements::MinimumPowerOutput, id = "PWR-001")]
 // pub struct PowerSupplyUnit { ... }
@@ -174,6 +177,17 @@ pub enum PlantMode {
     )]
     Operating,
     SafeShutdown,
+}
+
+// Driving it (tests or a separate sim crate). `step_with` takes `&mut self` and returns
+// `Result<PlantMode, NoStdTransitionError>`: `Err` means no transition matched the event.
+#[cfg(test)]
+#[test]
+fn plant_shuts_down_on_overtemp() {
+    let plant = ThermalPlant::default();
+    let mut mode = PlantMode::Operating;
+    let alert = ThermalAlert { measured_temp: 360.0 };
+    assert_eq!(mode.step_with(&alert, &plant), Ok(PlantMode::SafeShutdown));
 }
 ```
 
