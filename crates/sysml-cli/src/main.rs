@@ -14,11 +14,12 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use sysml_emit::{
-    audit_model_with_lib, audit_units_with_lib, build_safety_report, build_trace_matrix,
-    build_viewer_snapshot, discover_omg_stdlib, emit_model, iso26262_metadata_package,
-    lint_model, reconcile_model, render_lint_markdown, render_reconcile_markdown,
-    render_safety_report_markdown, render_standalone_html, render_trace_matrix_csv,
-    render_trace_matrix_markdown, validate_sysml_units, validate_sysml_units_with_lib, KgExport,
+    analyze_budgets, audit_model_with_lib, audit_units_with_lib, build_safety_report,
+    build_trace_matrix, build_viewer_snapshot, discover_omg_stdlib, emit_model,
+    iso26262_metadata_package, lint_model, reconcile_model, render_budget_markdown,
+    render_lint_markdown, render_reconcile_markdown, render_safety_report_markdown,
+    render_standalone_html, render_trace_matrix_csv, render_trace_matrix_markdown,
+    validate_sysml_units, validate_sysml_units_with_lib, BudgetLimits, KgExport,
     ReconcileSeverity, ViewerOptions, ViewerTheme, ViewerView,
 };
 mod scaffold;
@@ -329,6 +330,45 @@ enum Commands {
         #[arg(long)]
         strict: bool,
     },
+
+    /// Compute cross-domain budgets (mass, power, waste heat, cost), DAG critical-path latency, FPS bottleneck, and top-3 hot spots.
+    Budget {
+        /// `.sysml` files to lift and analyze (uses `--model` when empty).
+        #[arg(long)]
+        files: Vec<PathBuf>,
+
+        /// Built-in model name when `--files` is empty.
+        #[arg(long, default_value = "dishwasher")]
+        model: String,
+
+        /// Output format (`json` or `markdown`).
+        #[arg(long, value_enum, default_value = "json")]
+        format: LintFormat,
+
+        /// Maximum allowed critical-path latency [ms].
+        #[arg(long)]
+        max_latency_ms: Option<f64>,
+
+        /// Minimum required pipeline FPS.
+        #[arg(long)]
+        min_fps: Option<f64>,
+
+        /// Maximum allowed total power [W].
+        #[arg(long)]
+        max_power_w: Option<f64>,
+
+        /// Maximum allowed total mass [kg].
+        #[arg(long)]
+        max_mass_kg: Option<f64>,
+
+        /// Maximum allowed BOM cost [USD].
+        #[arg(long)]
+        max_cost_usd: Option<f64>,
+
+        /// Exit with non-zero code if any specified budget limit is exceeded.
+        #[arg(long)]
+        strict: bool,
+    },
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -587,6 +627,30 @@ fn main() -> ExitCode {
             strict,
             cli.pretty,
         ),
+        Commands::Budget {
+            files,
+            model,
+            format,
+            max_latency_ms,
+            min_fps,
+            max_power_w,
+            max_mass_kg,
+            max_cost_usd,
+            strict,
+        } => cmd_budget(
+            &files,
+            &model,
+            format,
+            BudgetLimits {
+                max_latency_ms,
+                min_fps,
+                max_power_w,
+                max_mass_kg,
+                max_cost_usd,
+            },
+            strict,
+            cli.pretty,
+        ),
     }
 }
 
@@ -642,6 +706,45 @@ fn cmd_reconcile(
         .iter()
         .any(|f| f.severity == ReconcileSeverity::Warning);
     if !report.ok || (strict && has_warn) {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    }
+}
+
+fn cmd_budget(
+    files: &[PathBuf],
+    model_name: &str,
+    format: LintFormat,
+    limits: BudgetLimits,
+    strict: bool,
+    pretty: bool,
+) -> ExitCode {
+    let model = if !files.is_empty() {
+        let units = match read_units_with_std(files) {
+            Ok(u) => u,
+            Err(e) => {
+                eprintln!("error: {e}");
+                return ExitCode::FAILURE;
+            }
+        };
+        lift_sysml_units(&units).model
+    } else {
+        match resolve_builtin_model(model_name) {
+            Ok(m) => m,
+            Err(e) => {
+                eprintln!("error: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    };
+
+    let report = analyze_budgets(&model, &limits);
+    match format {
+        LintFormat::Markdown => print!("{}", render_budget_markdown(&report)),
+        LintFormat::Json => print_json(&report, pretty),
+    }
+    if strict && !report.ok {
         ExitCode::FAILURE
     } else {
         ExitCode::SUCCESS
