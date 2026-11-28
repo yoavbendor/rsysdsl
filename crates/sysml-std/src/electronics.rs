@@ -20,11 +20,11 @@ pub mod sysml_std_electronics {
     #[sysml::part(abstract)]
     #[derive(Debug, Clone, Copy)]
     pub struct ElectronicUnit {
-        #[sysml::attr(unit = "kg")]
+        #[sysml::attr(budget = "mass", unit = "kg")]
         pub mass: Quantity<f64>,
         #[sysml::attr(unit = "V")]
         pub supply_voltage: Quantity<f64>,
-        #[sysml::attr(unit = "W")]
+        #[sysml::attr(budget = "power", unit = "W")]
         pub power_draw: Quantity<f64>,
         #[sysml::port]
         pub power_in: Conjugated<ElectricalPowerPort>,

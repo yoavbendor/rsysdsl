@@ -120,6 +120,67 @@ pub const TBD_METADATA_DEF: &str = "TBD";
 /// Name of the auto-included SysML library package that declares non-SI `custom_unit` symbols.
 pub const CUSTOM_UNIT_METADATA_PACKAGE: &str = "CustomUnitMetadata";
 
+/// Name of the auto-included SysML library package that defines the `BudgetRole` metadata.
+/// It carries the `SysmlStd` prefix so it travels with the sysml-std library
+/// (`emit --omit-std` leaves it out; `rsysdsl` re-attaches it when a file references it).
+pub const BUDGET_METADATA_PACKAGE: &str = "SysmlStdBudget";
+/// Name of the `metadata def` inside [`BUDGET_METADATA_PACKAGE`]
+/// (`@SysmlStdBudget::BudgetRole { role = "power"; }`).
+pub const BUDGET_ROLE_DEF: &str = "BudgetRole";
+
+/// What a numeric attribute contributes to `rsysdsl budget` / `trade-study` / `refute`
+/// (`#[sysml::attr(..., budget = "power")]`, or inherited from a sysml-std role attribute
+/// such as `PowerElement::ratedPower`). Operators never match attributes by name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BudgetRole {
+    /// Mass contribution (dimension M, e.g. `kg`).
+    Mass,
+    /// Electrical / rated power draw (dimension W).
+    Power,
+    /// Dissipated heat (dimension W).
+    WasteHeat,
+    /// Unit / BOM cost: a dimensionless amount in the model's single currency (no currency unit
+    /// exists in the SI table), or `unit = "<currency>", custom_unit = "reason"`.
+    Cost,
+    /// Stage latency on the processing path (dimension T, e.g. `s`).
+    Latency,
+    /// Power-conversion efficiency in `0..1` (dimensionless); waste heat of a part with a power
+    /// role and no explicit waste-heat role is derived as `power * (1 - efficiency)`.
+    Efficiency,
+    /// Explicitly not a budget contributor (e.g. a supply capacity or an external actor's mass):
+    /// silences `untracked` for an attribute whose dimension matches a budget domain.
+    None,
+}
+
+impl BudgetRole {
+    pub const ALL: [BudgetRole; 7] = [
+        BudgetRole::Mass,
+        BudgetRole::Power,
+        BudgetRole::WasteHeat,
+        BudgetRole::Cost,
+        BudgetRole::Latency,
+        BudgetRole::Efficiency,
+        BudgetRole::None,
+    ];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            BudgetRole::Mass => "mass",
+            BudgetRole::Power => "power",
+            BudgetRole::WasteHeat => "waste_heat",
+            BudgetRole::Cost => "cost",
+            BudgetRole::Latency => "latency",
+            BudgetRole::Efficiency => "efficiency",
+            BudgetRole::None => "none",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<BudgetRole> {
+        BudgetRole::ALL.into_iter().find(|r| r.as_str() == s.trim())
+    }
+}
+
 /// Design phase by which a TBD must be resolved (`resolve_by`). Ordered:
 /// `Concept < Preliminary < Detailed < Release`.
 #[derive(
@@ -348,6 +409,11 @@ pub struct AttributeUsage {
     /// TBD markers on this element (see [`TbdMark`]).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tbd: Vec<TbdMark>,
+    /// Budget role (`#[sysml::attr(budget = "...")]`), emitted as
+    /// `@SysmlStdBudget::BudgetRole { role = "..."; }`. `None` here means "no explicit tag"; the
+    /// role may still be inherited from the attribute this one redefines.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget_role: Option<BudgetRole>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

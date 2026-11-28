@@ -21,13 +21,13 @@ pub mod sysml_std_power {
     #[sysml::part(abstract)]
     #[derive(Debug, Clone, Copy)]
     pub struct PowerElement {
-        #[sysml::attr(unit = "kg")]
+        #[sysml::attr(budget = "mass", unit = "kg")]
         pub mass: Quantity<f64>,
-        #[sysml::attr(unit = "W")]
+        #[sysml::attr(budget = "power", unit = "W")]
         pub rated_power: Quantity<f64>,
-        #[sysml::attr(dimensionless)]
+        #[sysml::attr(budget = "efficiency", dimensionless)]
         pub efficiency: f64,
-        #[sysml::attr(unit = "W")]
+        #[sysml::attr(budget = "waste_heat", unit = "W")]
         pub waste_heat: Quantity<f64>,
         #[sysml::port]
         pub heat_out: ThermalPort,
@@ -172,7 +172,7 @@ pub mod sysml_std_power {
     pub struct RadiativeEmitterLoad {
         #[sysml::attr(unit = "Hz")]
         pub emission_frequency: Quantity<f64>,
-        #[sysml::attr(unit = "W")]
+        #[sysml::attr(budget = "none", unit = "W")]
         pub radiative_output_power: Quantity<f64>,
         #[sysml::port]
         pub radiation_out: RadiativePort,

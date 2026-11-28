@@ -44,6 +44,10 @@ fn gate1_compile_time_safety() {
     t.compile_fail("tests/ui/bad_unit_symbol.rs");
     // S7.1: every numeric attribute declares its unit; every escape hatch has a reason
     t.compile_fail("tests/ui/bad_missing_unit.rs");
+    // C1.1: budget role tags must match the attribute's dimension
+    t.compile_fail("tests/ui/bad_budget_role_dimension.rs");
+    t.compile_fail("tests/ui/bad_budget_role_latency_unit.rs");
+    t.compile_fail("tests/ui/bad_budget_role_cost_unit.rs");
     t.compile_fail("tests/ui/bad_empty_tbd_reason.rs");
     t.compile_fail("tests/ui/bad_bare_custom_unit.rs");
     // S7.2: `tbd_value` and a default are mutually exclusive

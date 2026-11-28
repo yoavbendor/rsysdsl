@@ -1,0 +1,6 @@
+error: budget role `latency` on attribute `frame_latency` needs a unit of dimension time (e.g. unit = "s"), but it declares unit `Hz`
+       help: fix the unit, or pick the role that matches its dimension (`budget = "none"` opts the attribute out of budgets)
+ --> tests/ui/bad_budget_role_latency_unit.rs:7:28
+  |
+7 |     #[sysml::attr(budget = "latency", default = 60.0, unit = "Hz")]
+  |                            ^^^^^^^^^

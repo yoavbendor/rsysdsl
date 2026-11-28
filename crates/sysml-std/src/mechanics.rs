@@ -21,9 +21,9 @@ pub mod sysml_std_mechanics {
     #[sysml::part(abstract)]
     #[derive(Debug, Clone, Copy)]
     pub struct PhysicalComponent {
-        #[sysml::attr(unit = "kg")]
+        #[sysml::attr(budget = "mass", unit = "kg")]
         pub mass: Quantity<f64>,
-        #[sysml::attr(unit = "W")]
+        #[sysml::attr(budget = "waste_heat", unit = "W")]
         pub heat_dissipation: Quantity<f64>,
         #[sysml::attr(dimensionless)]
         pub noise_level_db: f64,
@@ -75,7 +75,7 @@ pub mod sysml_std_mechanics {
     pub struct FrictionBrake {
         #[sysml::attr(unit = "N")]
         pub max_braking_force: Quantity<f64>,
-        #[sysml::attr(unit = "W")]
+        #[sysml::attr(budget = "none", unit = "W")]
         pub thermal_capacity_power: Quantity<f64>,
         #[sysml::port]
         pub actuation_in: Conjugated<HmiInputPort>,
@@ -110,9 +110,9 @@ pub mod sysml_std_mechanics {
     #[sysml::specializes(PhysicalComponent)]
     #[derive(Debug, Clone, Copy)]
     pub struct ElectricMotor {
-        #[sysml::attr(unit = "W")]
+        #[sysml::attr(budget = "power", unit = "W")]
         pub rated_power: Quantity<f64>,
-        #[sysml::attr(dimensionless)]
+        #[sysml::attr(budget = "efficiency", dimensionless)]
         pub efficiency: f64,
         #[sysml::attr(unit = "Hz")]
         pub rated_rotation_freq: Quantity<f64>,
@@ -140,7 +140,7 @@ pub mod sysml_std_mechanics {
     pub struct MechanicalTransmission {
         #[sysml::attr(dimensionless)]
         pub gear_ratio: f64,
-        #[sysml::attr(dimensionless)]
+        #[sysml::attr(budget = "efficiency", dimensionless)]
         pub efficiency: f64,
         #[sysml::port]
         pub mech_in: Conjugated<MechanicalPowerPort>,
@@ -155,7 +155,7 @@ pub mod sysml_std_mechanics {
     pub struct FluidPump {
         #[sysml::attr(unit = "kg/s")]
         pub flow_rate: Quantity<f64>,
-        #[sysml::attr(unit = "W")]
+        #[sysml::attr(budget = "power", unit = "W")]
         pub rated_power: Quantity<f64>,
         #[sysml::port]
         pub power_in: Conjugated<ElectricalPowerPort>,
@@ -189,7 +189,7 @@ pub mod sysml_std_mechanics {
     pub struct CoolingFan {
         #[sysml::attr(default = 0.03, unit = "kg/s")]
         pub airflow_rate: Quantity<f64>,
-        #[sysml::attr(default = 15.0, unit = "W")]
+        #[sysml::attr(budget = "power", default = 15.0, unit = "W")]
         pub rated_power: Quantity<f64>,
         #[sysml::port]
         pub power_in: Conjugated<ElectricalPowerPort>,
@@ -202,7 +202,7 @@ pub mod sysml_std_mechanics {
     #[sysml::specializes(PhysicalComponent)]
     #[derive(Debug, Clone, Copy)]
     pub struct SafetyInterlockSwitch {
-        #[sysml::attr(default = 0.015, unit = "s")]
+        #[sysml::attr(budget = "latency", default = 0.015, unit = "s")]
         pub cutoff_latency: Quantity<f64>,
         #[sysml::port]
         pub mechanical_actuation: Conjugated<HmiInputPort>,

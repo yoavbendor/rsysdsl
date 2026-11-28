@@ -22,9 +22,9 @@ pub mod sysml_std_hmi {
     #[sysml::part]
     #[derive(Debug, Clone, Copy)]
     pub struct HumanOperator {
-        #[sysml::attr(default = 75.0, unit = "kg")]
+        #[sysml::attr(budget = "none", default = 75.0, unit = "kg")]
         pub mass: Quantity<f64>,
-        #[sysml::attr(default = 200.0, unit = "W")]
+        #[sysml::attr(budget = "none", default = 200.0, unit = "W")]
         pub sustained_mech_power: Quantity<f64>,
         #[sysml::port]
         pub user_input: HmiInputPort,
@@ -47,9 +47,9 @@ pub mod sysml_std_hmi {
     #[sysml::part(abstract)]
     #[derive(Debug, Clone, Copy)]
     pub struct HmiPanel {
-        #[sysml::attr(unit = "kg")]
+        #[sysml::attr(budget = "mass", unit = "kg")]
         pub mass: Quantity<f64>,
-        #[sysml::attr(unit = "W")]
+        #[sysml::attr(budget = "power", unit = "W")]
         pub power_draw: Quantity<f64>,
         #[sysml::attr(dimensionless)]
         pub chime_level_db: f64,

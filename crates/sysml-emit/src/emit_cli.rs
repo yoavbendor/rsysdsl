@@ -26,9 +26,21 @@ pub fn is_sysml_std_package(pkg: &Package) -> bool {
 /// Requirement references are qualified against the full model before splitting.
 pub fn emit_model_split_std(model: &Model) -> (String, String) {
     let full = crate::resolve::qualify_requirement_refs(model);
-    let (std_pkgs, own): (Vec<Package>, Vec<Package>) =
+    let (mut std_pkgs, own): (Vec<Package>, Vec<Package>) =
         full.packages.into_iter().partition(is_sysml_std_package);
-    (emit_model(&Model::new(own)), emit_model(&Model::new(std_pkgs)))
+    // Budget roles reference `SysmlStdBudget`, which travels with the std half.
+    let own_model = Model::new(own);
+    if crate::emit::model_has_budget_roles(&own_model)
+        && !std_pkgs
+            .iter()
+            .any(|p| p.name == sysml_ir::BUDGET_METADATA_PACKAGE)
+    {
+        std_pkgs.push(crate::emit::budget_metadata_package());
+    }
+    (
+        crate::emit::emit_model_with(&own_model, false),
+        emit_model(&Model::new(std_pkgs)),
+    )
 }
 
 fn write_file(path: &Path, text: &str) -> Result<(), String> {

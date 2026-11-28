@@ -144,7 +144,20 @@ fn sanitize_doc(doc: &str) -> String {
 /// get `private import ScalarValues::*;` automatically, and undefined `custom_unit` symbols
 /// are declared in an auto-included `library package CustomUnitMetadata`.
 pub fn emit_model(model: &Model) -> String {
+    emit_model_with(model, true)
+}
+
+/// [`emit_model`]; `auto_budget_pkg = false` leaves the `SysmlStdBudget` metadata package out
+/// even when attributes carry budget roles (used for the model half of an `--omit-std` split,
+/// whose std half carries the package).
+pub(crate) fn emit_model_with(model: &Model, auto_budget_pkg: bool) -> String {
     let mut model = crate::resolve::qualify_requirement_refs(model);
+    if auto_budget_pkg
+        && model_has_budget_roles(&model)
+        && !model.packages.iter().any(|p| p.name == BUDGET_METADATA_PACKAGE)
+    {
+        model.packages.push(budget_metadata_package());
+    }
     crate::resolve::ensure_scalar_values_import(&mut model);
     let custom_units = crate::resolve::resolve_custom_units(&mut model);
     if !custom_units.is_empty()
@@ -403,10 +416,20 @@ fn emit_attribute_usage(a: &AttributeUsage, level: usize, out: &mut String) {
     } else {
         a.doc.clone()
     };
-    if doc.is_some() || !a.nested_attributes.is_empty() || !a.tbd.is_empty() {
+    if doc.is_some() || !a.nested_attributes.is_empty() || !a.tbd.is_empty() || a.budget_role.is_some() {
         let _ = writeln!(out, " {{");
         emit_doc(&doc, level + 1, out);
         emit_tbd(&a.tbd, level + 1, out);
+        if let Some(role) = a.budget_role {
+            let _ = writeln!(
+                out,
+                "{}@{}::{} {{ role = \"{}\"; }}",
+                indent(level + 1),
+                BUDGET_METADATA_PACKAGE,
+                BUDGET_ROLE_DEF,
+                role.as_str()
+            );
+        }
         for sub in &a.nested_attributes {
             emit_attribute_usage(sub, level + 1, out);
         }
@@ -1623,6 +1646,54 @@ pub fn tbd_metadata_package() -> Package {
                     .to_string(),
             ),
             attributes: vec![attr("category"), attr("reason"), attr("owner"), attr("resolveBy")],
+        })],
+    }
+}
+
+/// `true` if any attribute of the model (at any depth) carries a budget role.
+pub fn model_has_budget_roles(model: &Model) -> bool {
+    fn attrs(list: &[AttributeUsage]) -> bool {
+        list.iter()
+            .any(|a| a.budget_role.is_some() || attrs(&a.nested_attributes))
+    }
+    fn pkg(p: &Package) -> bool {
+        p.members.iter().any(|m| match m {
+            PackageMember::Package(sub) => pkg(sub),
+            PackageMember::PartDef(d) => attrs(&d.attributes),
+            PackageMember::ItemDef(d) => attrs(&d.attributes),
+            PackageMember::PortDef(d) => attrs(&d.attributes),
+            PackageMember::RequirementDef(d) => attrs(&d.attributes),
+            PackageMember::AttributeUsage(a) => attrs(std::slice::from_ref(a)),
+            _ => false,
+        })
+    }
+    model.packages.iter().any(pkg)
+}
+
+/// `library package SysmlStdBudget` defining the `BudgetRole` metadata that
+/// `#[sysml::attr(budget = "...")]` and the sysml-std role attributes carry.
+/// [`emit_model`] includes it automatically whenever a model uses a budget role; it is part of
+/// [`sysml_std`]'s package set, so `emit --omit-std` leaves it out of the model file.
+pub fn budget_metadata_package() -> Package {
+    Package {
+        name: BUDGET_METADATA_PACKAGE.to_string(),
+        is_library: true,
+        doc: Some(
+            "Budget roles read by rsysdsl budget, trade-study and refute: an attribute contributes to a budget only through its role (mass, power, waste_heat, cost, latency, efficiency) or opts out with none, never by its name."
+                .to_string(),
+        ),
+        comments: Vec::new(),
+        imports: vec![Import::private_star("ScalarValues")],
+        members: vec![PackageMember::MetadataDef(MetadataDef {
+            name: BUDGET_ROLE_DEF.to_string(),
+            doc: Some(
+                "role: mass | power | waste_heat | cost | latency | efficiency | none.".to_string(),
+            ),
+            attributes: vec![AttributeUsage {
+                name: Some("role".to_string()),
+                type_name: Some("String".to_string()),
+                ..Default::default()
+            }],
         })],
     }
 }

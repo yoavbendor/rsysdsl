@@ -1932,7 +1932,26 @@ fn lift_attribute_usage(u: &ast::Usage) -> AttributeUsage {
         nested_attributes,
         is_evidence,
         tbd: body_tbd_marks(u),
+        budget_role: body_budget_role(u),
     }
+}
+
+/// Lift `@SysmlStdBudget::BudgetRole { role = "..."; }` from an attribute body (C1.1).
+fn body_budget_role(u: &ast::Usage) -> Option<sysml_ir::BudgetRole> {
+    let body = u.body.as_ref()?;
+    body.iter().find_map(|m| match &m.kind {
+        ast::MemberKind::Usage(sub) if sub.kind == ast::UsageKind::Metadata => {
+            let (ty, _) = first_typed_by(&sub.declaration);
+            let simple = ty.as_deref().and_then(|t| t.rsplit("::").next())?;
+            if simple != sysml_ir::BUDGET_ROLE_DEF {
+                return None;
+            }
+            extract_metadata_fields(sub)
+                .get("role")
+                .and_then(|r| sysml_ir::BudgetRole::parse(r))
+        }
+        _ => None,
+    })
 }
 
 fn clean_lifted_unit(raw: &str) -> String {

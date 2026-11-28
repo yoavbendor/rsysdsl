@@ -531,6 +531,13 @@ pub fn build_attr_usage_tokens(
         .or_else(|| kv.get_str("expr"));
     let unit = kv.get_str("unit");
     crate::units_check::validate_unit_kv(&kv)?;
+    let budget_tok = match crate::units_check::budget_role(&kv, field_name_rust, attr_span)? {
+        Some(v) => {
+            let id = syn::Ident::new(v, proc_macro2::Span::call_site());
+            quote!(::std::option::Option::Some(::sysml_dsl::ir::BudgetRole::#id))
+        }
+        None => quote!(::std::option::Option::None),
+    };
 
     let name_tok = quote_opt_str(&attr_name);
     let ty_tok = quote_opt_str(&type_name);
@@ -558,6 +565,7 @@ pub fn build_attr_usage_tokens(
             nested_attributes: ::std::vec![],
             is_evidence: #is_evidence,
             tbd: #tbd_tok,
+            budget_role: #budget_tok,
         }
     })
 }

@@ -17,7 +17,7 @@ pub mod sysml_std_natural {
     #[sysml::part(abstract)]
     #[derive(Debug, Clone, Copy)]
     pub struct NaturalBody {
-        #[sysml::attr(unit = "kg")]
+        #[sysml::attr(budget = "none", unit = "kg")]
         pub mass: Quantity<f64>,
         #[sysml::attr(unit = "m")]
         pub radius: Quantity<f64>,
@@ -30,7 +30,7 @@ pub mod sysml_std_natural {
     #[sysml::specializes(NaturalBody)]
     #[derive(Debug, Clone, Copy)]
     pub struct StarBody {
-        #[sysml::attr(default = 3.828e26, unit = "W")]
+        #[sysml::attr(budget = "none", default = 3.828e26, unit = "W")]
         pub luminosity: Quantity<f64>,
         #[sysml::port]
         pub radiation_out: RadiativePort,
@@ -43,7 +43,7 @@ pub mod sysml_std_natural {
     pub struct PlanetaryBody {
         #[sysml::attr(unit = "m")]
         pub orbital_radius: Quantity<f64>,
-        #[sysml::attr(unit = "s")]
+        #[sysml::attr(budget = "none", unit = "s")]
         pub orbital_period: Quantity<f64>,
         #[sysml::attr(dimensionless)]
         pub bond_albedo: f64,
@@ -81,7 +81,7 @@ pub mod sysml_std_natural {
     #[sysml::part(abstract)]
     #[derive(Debug, Clone, Copy)]
     pub struct FluidReservoir {
-        #[sysml::attr(unit = "kg")]
+        #[sysml::attr(budget = "none", unit = "kg")]
         pub stored_mass: Quantity<f64>,
         #[sysml::attr(unit = "K")]
         pub temperature: Quantity<f64>,
@@ -106,7 +106,7 @@ pub mod sysml_std_natural {
         pub precipitation_rate: Quantity<f64>,
         #[sysml::attr(unit = "kg/s")]
         pub runoff_rate: Quantity<f64>,
-        #[sysml::attr(unit = "W")]
+        #[sysml::attr(budget = "none", unit = "W")]
         pub latent_heat_flux: Quantity<f64>,
     }
 

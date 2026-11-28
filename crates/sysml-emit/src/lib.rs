@@ -32,7 +32,8 @@ pub use budget::{
 };
 pub use emit_cli::{emit_model_split_std, is_sysml_std_package};
 pub use emit::{
-    emit_model, emit_package, escape_sysml_name, iso26262_metadata_package, tbd_metadata_package,
+    budget_metadata_package, emit_model, emit_package, escape_sysml_name, iso26262_metadata_package,
+    model_has_budget_roles, tbd_metadata_package,
 };
 pub use ir_validate::{
     validate_ir, validate_model_ir, IrDiagnostic, IrSeverity, IrValidationReport,

@@ -179,6 +179,78 @@ pub fn require_unit_decl(
     ))
 }
 
+/// C1.1 / D1: `#[sysml::attr(..., budget = "<role>")]`. Returns the role variant name
+/// (`"Power"`, ...) after checking that the declared unit's dimension matches the role:
+/// `mass` => M (`kg`, `g`), `power` / `waste_heat` => W, `latency` => T (`s`, `min`, `h`),
+/// `efficiency` => `dimensionless`, `cost` => `dimensionless` (an amount in the model's single
+/// currency: the SI table has no currency unit) or `unit = "<currency>", custom_unit = "reason"`,
+/// `none` => any unit (explicitly not a budget contributor).
+pub fn budget_role(kv: &KvArgs, field_name: &str, span: Span) -> syn::Result<Option<&'static str>> {
+    let Some(role) = kv.get_str("budget") else {
+        return Ok(None);
+    };
+    let at = kv.get_str_span("budget").unwrap_or(span);
+    let (variant, expect): (&'static str, Option<(&str, &str)>) = match role.trim() {
+        "mass" => ("Mass", Some(("kg", "mass (e.g. unit = \"kg\")"))),
+        "power" => ("Power", Some(("W", "power (e.g. unit = \"W\")"))),
+        "waste_heat" => ("WasteHeat", Some(("W", "power (e.g. unit = \"W\")"))),
+        "latency" => ("Latency", Some(("s", "time (e.g. unit = \"s\")"))),
+        "efficiency" => ("Efficiency", None),
+        "cost" => ("Cost", None),
+        "none" => ("None", None),
+        other => {
+            return Err(syn::Error::new(
+                at,
+                format!(
+                    "unknown budget role `{other}` on attribute `{field_name}`\n\
+                     help: use one of \"mass\", \"power\", \"waste_heat\", \"cost\", \"latency\", \"efficiency\", \"none\""
+                ),
+            ))
+        }
+    };
+    let dimensionless = kv.has_flag("dimensionless");
+    let custom = has_custom_unit(kv);
+    let unit = kv.get_str("unit");
+    let declared = if dimensionless {
+        "dimensionless".to_string()
+    } else if let Some(r) = kv.get_str("tbd_unit") {
+        format!("tbd_unit = \"{r}\"")
+    } else if custom {
+        format!("custom unit `{}`", unit.clone().unwrap_or_default())
+    } else if let Some(u) = &unit {
+        format!("unit `{u}`")
+    } else {
+        "no unit".to_string()
+    };
+    let ok = match (variant, expect) {
+        (_, Some((reference, _))) => match (&unit, dimensionless || custom) {
+            (Some(u), false) => match (units::parse_unit(u), units::parse_unit(reference)) {
+                (Some(d), Some(r)) => d.eq(r),
+                _ => false,
+            },
+            _ => false,
+        },
+        ("Efficiency", None) => dimensionless,
+        ("Cost", None) => dimensionless || (custom && unit.is_some()),
+        _ => true,
+    };
+    if ok {
+        return Ok(Some(variant));
+    }
+    let need = match (variant, expect) {
+        (_, Some((_, dim))) => format!("a unit of dimension {dim}"),
+        ("Efficiency", None) => "`dimensionless` (a 0..1 fraction)".to_string(),
+        _ => "`dimensionless` (an amount in the model's currency) or `unit = \"<currency>\", custom_unit = \"reason\"`".to_string(),
+    };
+    Err(syn::Error::new(
+        at,
+        format!(
+            "budget role `{role}` on attribute `{field_name}` needs {need}, but it declares {declared}\n\
+             help: fix the unit, or pick the role that matches its dimension (`budget = \"none\"` opts the attribute out of budgets)"
+        ),
+    ))
+}
+
 pub fn validate_unit_str(unit: &str, span: Span) -> syn::Result<()> {
     match units::check_unit(unit) {
         UnitCheck::Ok(_) => return Ok(()),

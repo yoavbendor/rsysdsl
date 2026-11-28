@@ -1,0 +1,6 @@
+error: budget role `cost` on attribute `unit_cost` needs `dimensionless` (an amount in the model's currency) or `unit = "<currency>", custom_unit = "reason"`, but it declares unit `kg`
+       help: fix the unit, or pick the role that matches its dimension (`budget = "none"` opts the attribute out of budgets)
+ --> tests/ui/bad_budget_role_cost_unit.rs:8:28
+  |
+8 |     #[sysml::attr(budget = "cost", default = 12.0, unit = "kg")]
+  |                            ^^^^^^
