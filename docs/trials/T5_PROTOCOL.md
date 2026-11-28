@@ -10,7 +10,7 @@ The 16-document PX4 + Pixhawk 6X (FMUv6X) corpus from `scripts/fetch-px4-corpus.
 - `PX4/PX4-user_guide` @ `2fa62338099f18fc3092197e856615eca94d2975`
 - `pixhawk/Pixhawk-Standards` @ `a97a915bfb6e20d6c8a41a86c5673350a3e51ceb`
 
-Fetched over `raw.githubusercontent.com` at those SHAs (the `gh api` route is not available in every environment), with the existing SHA-256 manifest. It contains real PDF standards with tables (DS-012 FMUv6X, DS-010 Autopilot Bus) and Markdown docs whose diagrams are images.
+Fetched over `raw.githubusercontent.com` at those SHAs (the `gh api` route is not available in every environment), with the existing SHA-256 manifest. Known at the pinned SHA: `obstacle_avoidance.md` is a 61-byte redirect stub (`<Redirect to="../computer_vision/path_planning_interface" />`), so the corpus has **15 documents with content**; nothing is expected from that file. It contains real PDF standards with tables (DS-012 FMUv6X, DS-010 Autopilot Bus) and Markdown docs whose diagrams are images.
 
 ## Contamination controls
 This corpus was modelled by hand before (`BROWNFIELD_AB_RESULTS.md`). Trial agents must NOT read:
