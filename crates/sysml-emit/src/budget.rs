@@ -1,14 +1,17 @@
 //! `budget` — cross-domain static budget rollup, DAG critical-path latency (including LLM
 //! "thinking" time), pipeline FPS bottleneck, and top-3 hot-spot attribution over `sysml_ir::Model`.
 //!
-//! Runs in sub-millisecond time directly on the in-memory IR with zero external dependencies.
+//! Contributions come only from budget roles (C1 / D1, see [`crate::roles`]): never from
+//! attribute names. Attributes whose dimension matches a domain but carry no role are reported
+//! as `untracked`, and a limited domain with untracked candidates is `incomplete` (D2), never a
+//! silent pass.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
-use sysml_ir::{AttributeUsage, Model, PackageMember, PartDef};
+use sysml_ir::{BudgetRole, Model, PartDef};
 
-use crate::emit_cli::is_sysml_std_package;
+use crate::roles::{concrete_user_parts, AttrValue, DimClass, EffectiveAttr, RoleIndex};
 
 /// Optional user-specified budget ceilings for `--strict` pass/fail checks.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -28,6 +31,39 @@ pub struct HotSpot {
     pub pct_of_total: f64,
 }
 
+/// Verdict of one budget domain (D2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BudgetStatus {
+    /// Within the limit, every candidate attribute has a role, at least one contributor
+    /// (also reported for a domain without a limit: nothing to check).
+    Pass,
+    /// The tracked total already exceeds the limit.
+    Fail,
+    /// A limit is set but the total cannot be trusted: untracked candidates, role-tagged
+    /// values that cannot be summed (`unresolved`), or zero contributors.
+    Incomplete,
+}
+
+impl BudgetStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            BudgetStatus::Pass => "pass",
+            BudgetStatus::Fail => "fail",
+            BudgetStatus::Incomplete => "incomplete",
+        }
+    }
+}
+
+/// An attribute the rollup could not use (see [`DomainRollup::untracked`] / `unresolved`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UntrackedAttr {
+    pub element: String,
+    pub attribute: String,
+    pub unit: String,
+    pub value: Option<f64>,
+}
+
 /// Additive rollup for one physical/economic domain (mass, power, waste heat, cost).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DomainRollup {
@@ -36,8 +72,19 @@ pub struct DomainRollup {
     pub total: f64,
     pub limit: Option<f64>,
     pub margin: Option<f64>,
+    /// `status == "pass"` (kept for compatibility).
     pub pass: bool,
+    pub status: BudgetStatus,
+    /// Number of attribute values summed into `total`.
+    pub contributors: usize,
     pub hot_spots: Vec<HotSpot>,
+    /// Attributes whose dimension matches this domain but that carry no budget role
+    /// (e.g. an untagged `ratedPowerW [W]`): not summed, and they make a limited domain
+    /// `incomplete`. Tag them (`budget = "..."`) or opt them out (`budget = "none"`).
+    pub untracked: Vec<UntrackedAttr>,
+    /// Role-tagged attributes whose value cannot be summed: `tbd_value`, a non-literal
+    /// expression, or a unit whose scale is unknown. They make a limited domain `incomplete`.
+    pub unresolved: Vec<UntrackedAttr>,
 }
 
 /// End-to-end DAG critical path & pipeline FPS bottleneck summary.
@@ -53,11 +100,18 @@ pub struct TimingBudget {
     pub min_fps_limit: Option<f64>,
     pub fps_pass: bool,
     pub stage_hot_spots: Vec<HotSpot>,
+    /// Verdict over `--max-latency-ms` / `--min-fps` (same rules as [`DomainRollup::status`]).
+    pub status: BudgetStatus,
+    /// Time-dimension attributes (`s`) of parts without a role.
+    pub untracked: Vec<UntrackedAttr>,
+    /// Latency-role attributes whose value cannot be used.
+    pub unresolved: Vec<UntrackedAttr>,
 }
 
 /// Complete cross-domain budget report produced by [`analyze_budgets`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BudgetReport {
+    /// `false` unless every domain with a limit is `pass`.
     pub ok: bool,
     pub mass: DomainRollup,
     pub power: DomainRollup,
@@ -66,63 +120,116 @@ pub struct BudgetReport {
     pub timing: TimingBudget,
 }
 
-/// Analyze cross-domain budgets, DAG critical-path latency (including LLM thinking time),
-/// pipeline FPS bottleneck, and top-3 hot spots on a [`Model`].
-pub fn analyze_budgets(model: &Model, limits: &BudgetLimits) -> BudgetReport {
-    let mut part_defs: BTreeMap<String, &PartDef> = BTreeMap::new();
-    for pkg in &model.packages {
-        if is_sysml_std_package(pkg) {
-            continue;
-        }
-        for m in &pkg.members {
-            if let PackageMember::PartDef(p) = m {
-                part_defs.insert(p.name.clone(), p);
-            }
-        }
-    }
+#[derive(Default)]
+struct DomainAcc {
+    items: Vec<(String, f64)>,
+    untracked: Vec<UntrackedAttr>,
+    unresolved: Vec<UntrackedAttr>,
+}
 
-    let mut mass_items: Vec<(String, f64)> = Vec::new();
-    let mut power_items: Vec<(String, f64)> = Vec::new();
-    let mut heat_items: Vec<(String, f64)> = Vec::new();
-    let mut cost_items: Vec<(String, f64)> = Vec::new();
+fn entry(element: &str, a: &EffectiveAttr) -> UntrackedAttr {
+    UntrackedAttr {
+        element: element.to_string(),
+        attribute: a.key.clone(),
+        unit: a.unit.clone().unwrap_or_default(),
+        value: a.number(),
+    }
+}
+
+/// Analyze cross-domain budgets, DAG critical-path latency, pipeline FPS bottleneck, and top-3
+/// hot spots on a [`Model`].
+///
+/// Contributions come only from budget roles (D1): an attribute that is, or redefines, a
+/// role-tagged attribute (`#[sysml::attr(budget = "...")]` or a sysml-std role attribute such
+/// as `PowerElement::ratedPower`). Every non-abstract part definition of the model's own
+/// packages counts once, with its inherited values. Attributes of requirement definitions,
+/// evidence attributes and `tbd_value` attributes are never contributions nor `untracked`
+/// (role-tagged `tbd_value` ones are listed as `unresolved`).
+pub fn analyze_budgets(model: &Model, limits: &BudgetLimits) -> BudgetReport {
+    let idx = RoleIndex::new(model);
+    let mut mass = DomainAcc::default();
+    let mut power = DomainAcc::default();
+    let mut heat = DomainAcc::default();
+    let mut cost = DomainAcc::default();
+    let mut time = DomainAcc::default();
     let mut stage_latency_ms: BTreeMap<String, f64> = BTreeMap::new();
 
-    // Leaf/component contributions (skip pure container assemblies when summing if they only compose parts)
-    for (name, p) in &part_defs {
-        if p.is_abstract {
-            continue;
-        }
-        if let Some(m) = attr_number(&p.attributes, &["mass", "massKg", "dryMass", "waterMass"]) {
-            if m > 0.0 {
-                mass_items.push((name.clone(), m));
+    for p in concrete_user_parts(model) {
+        let name = p.name.clone();
+        let mut part_power = 0.0;
+        let mut part_heat: Option<f64> = None;
+        let mut part_eff: Option<f64> = None;
+        let mut part_latency: Option<f64> = None;
+        for a in idx.effective_attributes(p) {
+            if a.is_evidence {
+                continue;
             }
-        }
-        if let Some(pw) = attr_number(&p.attributes, &["ratedPower", "powerDraw", "powerW"]) {
-            if pw > 0.0 {
-                power_items.push((name.clone(), pw));
-                if let Some(eta) = attr_number(&p.attributes, &["efficiency"]) {
-                    if (0.0..1.0).contains(&eta) {
-                        heat_items.push((name.clone(), pw * (1.0 - eta)));
+            match a.role {
+                Some(BudgetRole::None) => {}
+                Some(role) => {
+                    let acc = match role {
+                        BudgetRole::Mass => &mut mass,
+                        BudgetRole::Power => &mut power,
+                        BudgetRole::WasteHeat => &mut heat,
+                        BudgetRole::Cost => &mut cost,
+                        BudgetRole::Latency => &mut time,
+                        BudgetRole::Efficiency | BudgetRole::None => {
+                            if let Some(v) = a.number() {
+                                part_eff = Some(v);
+                            }
+                            continue;
+                        }
+                    };
+                    let scaled = match role {
+                        BudgetRole::Cost => a.number(),
+                        _ => a.base_number(),
+                    };
+                    match (&a.value, scaled) {
+                        (AttrValue::Absent, _) => {}
+                        (_, Some(v)) => match role {
+                            BudgetRole::Power => part_power += v,
+                            BudgetRole::WasteHeat => *part_heat.get_or_insert(0.0) += v,
+                            BudgetRole::Latency => *part_latency.get_or_insert(0.0) += v,
+                            _ => acc.items.push((name.clone(), v)),
+                        },
+                        _ => acc.unresolved.push(entry(&name, &a)),
+                    }
+                }
+                None => {
+                    if matches!(a.value, AttrValue::Tbd) {
+                        continue;
+                    }
+                    match a.dim() {
+                        Some(DimClass::Mass) => mass.untracked.push(entry(&name, &a)),
+                        Some(DimClass::Power) => {
+                            power.untracked.push(entry(&name, &a));
+                            heat.untracked.push(entry(&name, &a));
+                        }
+                        Some(DimClass::Time) => time.untracked.push(entry(&name, &a)),
+                        _ => {}
                     }
                 }
             }
         }
-        if let Some(h) = attr_number(&p.attributes, &["heatDissipationW", "wasteHeatW"]) {
-            if h > 0.0 {
-                heat_items.push((name.clone(), h));
-            }
+        if part_power > 0.0 {
+            power.items.push((name.clone(), part_power));
         }
-        if let Some(c) = attr_number(&p.attributes, &["unitCost", "costUsd", "bomCost"]) {
-            if c > 0.0 {
-                cost_items.push((name.clone(), c));
+        match (part_heat, part_eff) {
+            (Some(h), _) => heat.items.push((name.clone(), h)),
+            (None, Some(eta)) if part_power > 0.0 && (0.0..1.0).contains(&eta) => {
+                heat.items.push((name.clone(), part_power * (1.0 - eta)));
             }
+            _ => {}
         }
-
-        // Compute stage latency (ms): explicit latency/wcet OR LLM thinking time formula
-        if let Some(lat) = compute_stage_latency_ms(&p.attributes) {
-            stage_latency_ms.insert(name.clone(), lat);
+        if let Some(lat_s) = part_latency {
+            stage_latency_ms.insert(name.clone(), lat_s * 1000.0);
         }
     }
+
+    let part_defs: BTreeMap<String, &PartDef> = concrete_user_parts(model)
+        .into_iter()
+        .map(|p| (p.name.clone(), p))
+        .collect();
 
     // Build directed stage graph from assembly connections (field.port -> field.port)
     let mut nodes: BTreeSet<String> = BTreeSet::new();
@@ -200,13 +307,28 @@ pub fn analyze_budgets(model: &Model, limits: &BudgetLimits) -> BudgetReport {
         (Some(_), None) => false,
         (None, _) => true,
     };
+    let timing_limited = limits.max_latency_ms.is_some() || limits.min_fps.is_some();
+    let timing_status = if !timing_limited {
+        BudgetStatus::Pass
+    } else if (limits.max_latency_ms.is_some() && !latency_pass)
+        || (limits.min_fps.is_some() && pipeline_fps.is_some() && !fps_pass)
+    {
+        BudgetStatus::Fail
+    } else if !time.untracked.is_empty() || !time.unresolved.is_empty() || node_lat.is_empty() {
+        BudgetStatus::Incomplete
+    } else {
+        BudgetStatus::Pass
+    };
 
-    let mass = build_rollup("mass", "kg", &mass_items, limits.max_mass_kg);
-    let power = build_rollup("power", "W", &power_items, limits.max_power_w);
-    let waste_heat = build_rollup("waste_heat", "W", &heat_items, None);
-    let cost = build_rollup("cost", "USD", &cost_items, limits.max_cost_usd);
+    let mass = build_rollup("mass", "kg", mass, limits.max_mass_kg);
+    let power = build_rollup("power", "W", power, limits.max_power_w);
+    let waste_heat = build_rollup("waste_heat", "W", heat, None);
+    let cost = build_rollup("cost", "USD", cost, limits.max_cost_usd);
 
-    let ok = mass.pass && power.pass && waste_heat.pass && cost.pass && latency_pass && fps_pass;
+    let ok = [&mass, &power, &waste_heat, &cost]
+        .iter()
+        .all(|d| d.limit.is_none() || d.status == BudgetStatus::Pass)
+        && (!timing_limited || timing_status == BudgetStatus::Pass);
 
     BudgetReport {
         ok,
@@ -225,8 +347,27 @@ pub fn analyze_budgets(model: &Model, limits: &BudgetLimits) -> BudgetReport {
             min_fps_limit: limits.min_fps,
             fps_pass,
             stage_hot_spots,
+            status: timing_status,
+            untracked: time.untracked,
+            unresolved: time.unresolved,
         },
     }
+}
+
+fn render_attr_list(label: &str, list: &[UntrackedAttr], out: &mut String) {
+    if list.is_empty() {
+        return;
+    }
+    let items = list
+        .iter()
+        .map(|u| {
+            let v = u.value.map(|v| format!(" = {v}")).unwrap_or_default();
+            let unit = if u.unit.is_empty() { String::new() } else { format!(" [{}]", u.unit) };
+            format!("`{}.{}`{v}{unit}", u.element, u.attribute)
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    out.push_str(&format!("  - {label}: {items}\n"));
 }
 
 /// Render a [`BudgetReport`] as clean Markdown.
@@ -235,10 +376,10 @@ pub fn render_budget_markdown(r: &BudgetReport) -> String {
     out.push_str("# Cross-Domain System Budget & Critical-Path Report\n\n");
     out.push_str(&format!(
         "- **Overall Status:** {}\n",
-        if r.ok { "PASS" } else { "FAIL" }
+        if r.ok { "PASS" } else { "NOT OK" }
     ));
     out.push_str(&format!(
-        "- **Critical Path Latency:** {:.2} ms ({}){}\n",
+        "- **Critical Path Latency:** {:.2} ms ({}){} [{}]\n",
         r.timing.critical_path_ms,
         if r.timing.critical_path_nodes.is_empty() {
             "none".to_string()
@@ -248,7 +389,8 @@ pub fn render_budget_markdown(r: &BudgetReport) -> String {
         r.timing
             .latency_margin_ms
             .map(|m| format!(" | margin: {m:+.2} ms"))
-            .unwrap_or_default()
+            .unwrap_or_default(),
+        r.timing.status.as_str().to_uppercase()
     ));
     if let Some(fps) = r.timing.pipeline_fps {
         out.push_str(&format!(
@@ -257,6 +399,8 @@ pub fn render_budget_markdown(r: &BudgetReport) -> String {
             r.timing.fps_bottleneck_stage.as_deref().unwrap_or("—")
         ));
     }
+    render_attr_list("untracked (no budget role)", &r.timing.untracked, &mut out);
+    render_attr_list("unresolved (role, no usable value)", &r.timing.unresolved, &mut out);
     for d in [&r.mass, &r.power, &r.waste_heat, &r.cost] {
         let lim = d
             .limit
@@ -269,108 +413,47 @@ pub fn render_budget_markdown(r: &BudgetReport) -> String {
             .collect::<Vec<_>>()
             .join(", ");
         out.push_str(&format!(
-            "- **{}:** {:.2} {}{} [{}]{}\n",
+            "- **{}:** {:.2} {}{} [{}] ({} contributors){}\n",
             d.domain,
             d.total,
             d.unit,
             lim,
-            if d.pass { "PASS" } else { "FAIL" },
+            d.status.as_str().to_uppercase(),
+            d.contributors,
             if top.is_empty() {
                 String::new()
             } else {
                 format!(" — hot spots: {top}")
             }
         ));
+        render_attr_list("untracked (no budget role)", &d.untracked, &mut out);
+        render_attr_list("unresolved (role, no usable value)", &d.unresolved, &mut out);
     }
     out
 }
 
-fn compute_stage_latency_ms(attrs: &[AttributeUsage]) -> Option<f64> {
-    // 1. LLM thinking time: ttft + tokens_out / tok_per_s
-    let ttft_ms = attr_time_ms(attrs, &["ttftMs", "ttft"]);
-    let tokens_out = attr_number(attrs, &["tokensOut", "outputTokens"]);
-    let tok_per_s = attr_number(attrs, &["tokPerS", "tokensPerSecond"]);
-    if let (Some(ttft), Some(toks), Some(rate)) = (ttft_ms, tokens_out, tok_per_s) {
-        if rate > 0.0 {
-            return Some(ttft + (toks / rate) * 1000.0);
+fn build_rollup(domain: &str, unit: &str, acc: DomainAcc, limit: Option<f64>) -> DomainRollup {
+    let total: f64 = acc.items.iter().map(|(_, v)| *v).sum();
+    let status = match limit {
+        None => BudgetStatus::Pass,
+        Some(l) if total > l + 1e-9 => BudgetStatus::Fail,
+        Some(_) if !acc.untracked.is_empty() || !acc.unresolved.is_empty() || acc.items.is_empty() => {
+            BudgetStatus::Incomplete
         }
-    }
-    // 2. Direct stage latency / WCET / cutoff latency
-    attr_time_ms(
-        attrs,
-        &["latencyMs", "latency", "wcetMs", "cutoffLatency", "switchingCutoffLatency"],
-    )
-}
-
-fn attr_effective_name(a: &AttributeUsage) -> Option<&str> {
-    a.name
-        .as_deref()
-        .or_else(|| a.redefines.first().map(String::as_str))
-}
-
-fn attr_time_ms(attrs: &[AttributeUsage], names: &[&str]) -> Option<f64> {
-    for a in attrs {
-        let Some(aname) = attr_effective_name(a) else {
-            continue;
-        };
-        if names.iter().any(|n| n.eq_ignore_ascii_case(aname)) {
-            if let Some(v) = parse_f64(a.value.as_deref()) {
-                let unit = a.unit.as_deref().unwrap_or("");
-                if unit == "s"
-                    || (!aname.to_lowercase().ends_with("ms")
-                        && unit != "ms"
-                        && v < 1.0
-                        && aname.to_lowercase().contains("latency"))
-                {
-                    return Some(v * 1000.0);
-                }
-                return Some(v);
-            }
-        }
-    }
-    None
-}
-
-fn attr_number(attrs: &[AttributeUsage], names: &[&str]) -> Option<f64> {
-    for a in attrs {
-        let Some(aname) = attr_effective_name(a) else {
-            continue;
-        };
-        if names.iter().any(|n| n.eq_ignore_ascii_case(aname)) {
-            if let Some(v) = parse_f64(a.value.as_deref()) {
-                return Some(v);
-            }
-        }
-    }
-    None
-}
-
-fn parse_f64(raw: Option<&str>) -> Option<f64> {
-    let s = raw?.trim();
-    // Handle `12.5 [W]` or plain `12.5`
-    let token = s.split_whitespace().next()?;
-    token.parse::<f64>().ok().filter(|v| v.is_finite())
-}
-
-fn build_rollup(
-    domain: &str,
-    unit: &str,
-    items: &[(String, f64)],
-    limit: Option<f64>,
-) -> DomainRollup {
-    let total: f64 = items.iter().map(|(_, v)| *v).sum();
-    let (margin, pass) = match limit {
-        Some(l) => (Some(round2(l - total)), total <= l + 1e-9),
-        None => (None, true),
+        Some(_) => BudgetStatus::Pass,
     };
     DomainRollup {
         domain: domain.to_string(),
         unit: unit.to_string(),
         total: round2(total),
         limit,
-        margin,
-        pass,
-        hot_spots: build_hot_spots(items, total),
+        margin: limit.map(|l| round2(l - total)),
+        pass: status == BudgetStatus::Pass,
+        status,
+        contributors: acc.items.len(),
+        hot_spots: build_hot_spots(&acc.items, total),
+        untracked: acc.untracked,
+        unresolved: acc.unresolved,
     }
 }
 
@@ -449,57 +532,66 @@ fn round2(v: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sysml_ir::{ConnectionKind, ConnectionUsage, Package, PartUsage};
+    use sysml_ir::{
+        AttributeUsage, ConnectionKind, ConnectionUsage, Package, PackageMember, PartUsage,
+    };
 
-    fn attr(name: &str, val: &str, unit: Option<&str>) -> AttributeUsage {
+    fn attr(name: &str, val: &str, unit: Option<&str>, role: Option<BudgetRole>) -> AttributeUsage {
         AttributeUsage {
             name: Some(name.into()),
             value: Some(val.into()),
             unit: unit.map(String::from),
+            budget_role: role,
             ..Default::default()
         }
     }
 
+    fn part(name: &str, attributes: Vec<AttributeUsage>) -> PackageMember {
+        PackageMember::PartDef(PartDef {
+            name: name.into(),
+            attributes,
+            ..Default::default()
+        })
+    }
+
+
     #[test]
-    fn edge_ai_robot_critical_path_llm_thinking_time_fps_and_hot_spots() {
+    fn edge_ai_robot_critical_path_fps_and_hot_spots_from_roles() {
         let mut pkg = Package {
             name: "EdgeAiRobot".into(),
             ..Default::default()
         };
-        pkg.members.push(PackageMember::PartDef(PartDef {
-            name: "Camera".into(),
-            attributes: vec![
-                attr("latencyMs", "16.0", Some("ms")),
-                attr("ratedPower", "3.0", Some("W")),
-                attr("mass", "0.05", Some("kg")),
-                attr("unitCost", "45.0", Some("USD")),
+        pkg.members.push(part(
+            "Camera",
+            vec![
+                attr("frameLatency", "0.016", Some("s"), Some(BudgetRole::Latency)),
+                attr("ratedPower", "3.0", Some("W"), Some(BudgetRole::Power)),
+                attr("mass", "0.05", Some("kg"), Some(BudgetRole::Mass)),
+                attr("unitCost", "45.0", None, Some(BudgetRole::Cost)),
             ],
-            ..Default::default()
-        }));
-        pkg.members.push(PackageMember::PartDef(PartDef {
-            name: "EdgeLlmAccelerator".into(),
-            attributes: vec![
-                // 120 ms TTFT + 40 tokens / 80 tok/s = 620 ms total!
-                attr("ttft", "0.120", Some("s")),
-                attr("tokensOut", "40.0", None),
-                attr("tokPerS", "80.0", Some("Hz")),
-                attr("ratedPower", "25.0", Some("W")),
-                attr("efficiency", "0.75", None),
-                attr("mass", "0.08", Some("kg")),
-                attr("unitCost", "149.0", Some("USD")),
+        ));
+        pkg.members.push(part(
+            "EdgeLlmAccelerator",
+            vec![
+                // LLM thinking time = time-to-first-token + decode time (40 tokens / 80 tok/s),
+                // each a latency-role attribute: 120 ms + 500 ms = 620 ms.
+                attr("ttft", "0.120", Some("s"), Some(BudgetRole::Latency)),
+                attr("decodeTime", "0.5", Some("s"), Some(BudgetRole::Latency)),
+                attr("ratedPower", "25.0", Some("W"), Some(BudgetRole::Power)),
+                attr("eta", "0.75", None, Some(BudgetRole::Efficiency)),
+                attr("mass", "80", Some("g"), Some(BudgetRole::Mass)),
+                attr("unitCost", "149.0", None, Some(BudgetRole::Cost)),
             ],
-            ..Default::default()
-        }));
-        pkg.members.push(PackageMember::PartDef(PartDef {
-            name: "MotorCtrl".into(),
-            attributes: vec![
-                attr("latencyMs", "5.0", Some("ms")),
-                attr("ratedPower", "12.0", Some("W")),
-                attr("mass", "0.12", Some("kg")),
-                attr("unitCost", "35.0", Some("USD")),
+        ));
+        pkg.members.push(part(
+            "MotorCtrl",
+            vec![
+                attr("loopLatency", "0.005", Some("s"), Some(BudgetRole::Latency)),
+                attr("ratedPower", "12.0", Some("W"), Some(BudgetRole::Power)),
+                attr("mass", "0.12", Some("kg"), Some(BudgetRole::Mass)),
+                attr("unitCost", "35.0", None, Some(BudgetRole::Cost)),
             ],
-            ..Default::default()
-        }));
+        ));
         pkg.members.push(PackageMember::PartDef(PartDef {
             name: "SmartRobot".into(),
             parts: vec![
@@ -520,7 +612,7 @@ mod tests {
             min_fps: Some(2.0),          // 1.61 FPS < 2.0 -> FAIL!
             max_power_w: Some(50.0),     // 40 W <= 50 W -> PASS
             max_mass_kg: Some(0.50),     // 0.25 kg <= 0.50 -> PASS
-            max_cost_usd: Some(250.0),   // $229 <= $250 -> PASS
+            max_cost_usd: Some(250.0),   // 229 <= 250 -> PASS
         };
 
         let report = analyze_budgets(&model, &limits);
@@ -528,12 +620,126 @@ mod tests {
         assert!((report.timing.critical_path_ms - 641.0).abs() < 1e-6);
         assert_eq!(report.timing.critical_path_nodes, vec!["cam", "llm", "ctrl"]);
         assert!(!report.timing.latency_pass);
+        assert_eq!(report.timing.status, BudgetStatus::Fail);
         assert_eq!(report.timing.fps_bottleneck_stage.as_deref(), Some("llm"));
         assert!(!report.timing.fps_pass);
         assert_eq!(report.timing.stage_hot_spots[0].element, "llm");
+        assert_eq!(report.power.status, BudgetStatus::Pass);
         assert!(report.power.pass && (report.power.total - 40.0).abs() < 1e-6);
         assert!(report.mass.pass && (report.mass.total - 0.25).abs() < 1e-6);
         assert!(report.cost.pass && (report.cost.total - 229.0).abs() < 1e-6);
         assert!((report.waste_heat.total - 6.25).abs() < 1e-6);
+    }
+
+    /// P2 regression: a 2000 W element named `ratedPowerW` without a role used to be
+    /// invisible (total 0 W, `pass: true`). It is now `untracked` and the limited power domain
+    /// is `incomplete`, so `ok` is false.
+    #[test]
+    fn untagged_watts_are_untracked_and_never_a_silent_pass() {
+        let pkg = Package {
+            name: "WaterHeater".into(),
+            members: vec![part(
+                "HeatingElement",
+                vec![
+                    attr("ratedPowerW", "2000.0", Some("W"), None),
+                    attr("supplyVoltage", "230.0", Some("V"), None),
+                ],
+            )],
+            ..Default::default()
+        };
+        let model = Model::new(vec![pkg]);
+        let r = analyze_budgets(
+            &model,
+            &BudgetLimits {
+                max_power_w: Some(100.0),
+                ..Default::default()
+            },
+        );
+        assert!(!r.ok);
+        assert_eq!(r.power.status, BudgetStatus::Incomplete);
+        assert_eq!(r.power.contributors, 0);
+        assert_eq!(r.power.untracked.len(), 1);
+        assert_eq!(r.power.untracked[0].attribute, "ratedPowerW");
+        assert_eq!(r.power.untracked[0].value, Some(2000.0));
+        // No limit on mass: nothing to check.
+        assert_eq!(r.mass.status, BudgetStatus::Pass);
+
+        // Tagging it makes the budget decidable: 2000 W > 100 W -> fail.
+        let mut tagged = model.clone();
+        if let PackageMember::PartDef(p) = &mut tagged.packages[0].members[0] {
+            p.attributes[0].budget_role = Some(BudgetRole::Power);
+        }
+        let r = analyze_budgets(
+            &tagged,
+            &BudgetLimits {
+                max_power_w: Some(100.0),
+                ..Default::default()
+            },
+        );
+        assert_eq!(r.power.status, BudgetStatus::Fail);
+        assert!((r.power.total - 2000.0).abs() < 1e-9);
+        assert!(r.power.untracked.is_empty());
+    }
+
+    #[test]
+    fn tbd_and_none_roles_and_inherited_std_roles() {
+        let base = PartDef {
+            name: "PowerElement".into(),
+            is_abstract: true,
+            attributes: vec![AttributeUsage {
+                name: Some("ratedPower".into()),
+                unit: Some("W".into()),
+                budget_role: Some(BudgetRole::Power),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let fan = PartDef {
+            name: "Fan".into(),
+            specializes: vec!["PowerElement".into()],
+            attributes: vec![
+                AttributeUsage {
+                    redefines: vec!["ratedPower".into()],
+                    value: Some("170.0".into()),
+                    unit: Some("W".into()),
+                    ..Default::default()
+                },
+                attr("supplyCapacity", "500.0", Some("W"), Some(BudgetRole::None)),
+            ],
+            ..Default::default()
+        };
+        let pump = PartDef {
+            name: "Pump".into(),
+            specializes: vec!["PowerElement".into()],
+            attributes: vec![AttributeUsage {
+                redefines: vec!["ratedPower".into()],
+                unit: Some("W".into()),
+                tbd: vec![sysml_ir::TbdMark::new(sysml_ir::TbdKind::Value, "datasheet pending")],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let model = Model::new(vec![Package {
+            name: "Vent".into(),
+            members: vec![
+                PackageMember::PartDef(base),
+                PackageMember::PartDef(fan),
+                PackageMember::PartDef(pump),
+            ],
+            ..Default::default()
+        }]);
+        let r = analyze_budgets(
+            &model,
+            &BudgetLimits {
+                max_power_w: Some(1000.0),
+                ..Default::default()
+            },
+        );
+        assert!((r.power.total - 170.0).abs() < 1e-9);
+        assert!(r.power.untracked.is_empty(), "{:?}", r.power.untracked);
+        assert_eq!(r.power.unresolved.len(), 1);
+        assert_eq!(r.power.unresolved[0].element, "Pump");
+        assert_eq!(r.power.status, BudgetStatus::Incomplete);
+        assert!(!r.ok);
     }
 }

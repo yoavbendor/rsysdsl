@@ -447,6 +447,14 @@ mod tests {
         }
     }
 
+    fn role(name: &str, val: &str, unit: &str, role: sysml_ir::BudgetRole) -> AttributeUsage {
+        AttributeUsage {
+            unit: Some(unit.into()),
+            budget_role: Some(role),
+            ..attr(name, val)
+        }
+    }
+
     #[test]
     fn trade_study_expands_variations_and_computes_pareto_frontier() {
         let mut pkg = Package {
@@ -461,12 +469,12 @@ mod tests {
         }));
         pkg.members.push(PackageMember::PartDef(PartDef {
             name: "Batt2Ah".into(),
-            attributes: vec![attr("energyCapacity", "129600.0"), attr("mass", "0.40")],
+            attributes: vec![attr("energyCapacity", "129600.0"), role("mass", "0.40", "kg", sysml_ir::BudgetRole::Mass)],
             ..Default::default()
         }));
         pkg.members.push(PackageMember::PartDef(PartDef {
             name: "Batt5Ah".into(),
-            attributes: vec![attr("energyCapacity", "324000.0"), attr("mass", "0.68")],
+            attributes: vec![attr("energyCapacity", "324000.0"), role("mass", "0.68", "kg", sysml_ir::BudgetRole::Mass)],
             ..Default::default()
         }));
         pkg.members.push(PackageMember::PartDef(PartDef {
@@ -480,12 +488,12 @@ mod tests {
         }));
         pkg.members.push(PackageMember::PartDef(PartDef {
             name: "Drill".into(),
-            attributes: vec![attr("ratedPower", "550.0"), attr("mass", "1.95"), attr("maxNoiseDb", "79.0")],
+            attributes: vec![role("ratedPower", "550.0", "W", sysml_ir::BudgetRole::Power), role("mass", "1.95", "kg", sysml_ir::BudgetRole::Mass), attr("maxNoiseDb", "79.0")],
             ..Default::default()
         }));
         pkg.members.push(PackageMember::PartDef(PartDef {
             name: "Saw".into(),
-            attributes: vec![attr("ratedPower", "1100.0"), attr("mass", "3.10"), attr("maxNoiseDb", "90.0")],
+            attributes: vec![role("ratedPower", "1100.0", "W", sysml_ir::BudgetRole::Power), role("mass", "3.10", "kg", sysml_ir::BudgetRole::Mass), attr("maxNoiseDb", "90.0")],
             ..Default::default()
         }));
         pkg.members.push(PackageMember::PartDef(PartDef {

@@ -6,6 +6,7 @@ pub mod audit;
 pub mod budget;
 pub mod emit;
 pub mod emit_cli;
+pub mod roles;
 pub mod evidence;
 pub mod ir_validate;
 pub mod lint;
@@ -27,8 +28,8 @@ pub use audit::{
     audit_units_with_lib, AuditFinding, AuditReport,
 };
 pub use budget::{
-    analyze_budgets, render_budget_markdown, BudgetLimits, BudgetReport, DomainRollup, HotSpot,
-    TimingBudget,
+    analyze_budgets, render_budget_markdown, BudgetLimits, BudgetReport, BudgetStatus,
+    DomainRollup, HotSpot, TimingBudget, UntrackedAttr,
 };
 pub use emit_cli::{emit_model_split_std, is_sysml_std_package};
 pub use emit::{
