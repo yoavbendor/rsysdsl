@@ -109,7 +109,7 @@ rsysdsl verify --scenario dw-nominal --trace target/dw_trace.json
 rsysdsl view --model dishwasher --trace target/dw_trace.json -o target/dw_sim.html
 rsysdsl view --model dishwasher --aspect safety -o target/dw_safety.html
 
-# Brainstorming Compiler operators (sub-millisecond IR analysis)
+# Brainstorming Compiler operators (IR analysis on emitted .sysml; ~10 ms per command on the example models)
 rsysdsl budget --model dishwasher --max-power-w 2200 --format markdown --strict
 rsysdsl trade-study --model power-tools-family --format markdown
 rsysdsl what-if --model power-tools-family --delta-pct 10 --format markdown
@@ -120,7 +120,7 @@ rsysdsl elevate --model dishwasher --format markdown
 rsysdsl slice --model dishwasher --aspect thermal -o target/dw_thermal.sysml
 rsysdsl reconcile --kg target/px4_corpus/kg_export.json --model dishwasher --format markdown
 
-# Shallow-first SW/HW execution examples (sub-ms validate_ir + 0-error OMG stdlib)
+# Shallow-first SW/HW execution examples (validate_ir on builder models + 0-error OMG stdlib)
 cargo run -q -p sysml-emit --example automotive_progressive
 cargo run -q -p sysml-emit --example px4_fmuv6x_brownfield
 

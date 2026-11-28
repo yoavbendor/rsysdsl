@@ -118,5 +118,5 @@ error[E003]: compute node `SafetyMcu` utilization 150.0% exceeds limit 140.0% (2
 ## 3. Architectural Takeaway
 
 1. **Keep `rustc` lightweight:** Plain Rust structs/enums/builders (`SwHwSystem`, `SwPartition`, `SwTask`, `ComputeNode`, `BusChannel`, `SwAllocation`) give instant local type safety without proc-macro bloat or cryptic `assert_interface_connect_core` trait-bound spans.
-2. **Run all graph/timing/safety rules in `validate_ir`:** Sub-millisecond at 500 elements and **< 3 ms** at 2,040 elements, with structured JSON + human-readable `code`, `element`, `source_hint`, `message`, and `suggested_fix`.
+2. **Run all graph/timing/safety rules in `validate_ir`:** Sub-millisecond at 500 elements and **< 3 ms** at 2,040 elements (measured on synthetic `SwHwSystem` builder models in release; this is the validator alone, not the macro authoring loop, which is a `rustc` compile), with structured JSON + human-readable `code`, `element`, `source_hint`, `message`, and `suggested_fix`.
 3. **Keep Open-MBEE + OMG stdlib validation as a CI / release-binary gate:** Emitted `.sysml` is 100% standard OMG SysML v2 and validates with 0 errors, without slowing down the inner edit loop.
