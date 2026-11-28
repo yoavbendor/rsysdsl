@@ -8,6 +8,7 @@ pub mod emit_cli;
 pub mod evidence;
 pub mod ir_validate;
 pub mod lint;
+pub mod reconcile;
 pub mod resolve;
 pub mod safety_report;
 pub mod tbd;
@@ -27,6 +28,10 @@ pub use emit::{
 };
 pub use ir_validate::{
     validate_ir, validate_model_ir, IrDiagnostic, IrSeverity, IrValidationReport,
+};
+pub use reconcile::{
+    reconcile_model, render_reconcile_markdown, KgConflict, KgEntity, KgExport, ReconcileFinding,
+    ReconcileReport, ReconcileSeverity, ReconcileSummary,
 };
 pub use tbd::{
     collect_tbd_ledger, count_by_kind, model_has_tbd, overdue_at, render_tbd_markdown, tbd_ledger_report,
