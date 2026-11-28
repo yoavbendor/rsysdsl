@@ -540,7 +540,9 @@ pub mod power_tools_family_model {
         pub noise_out: AcousticPort,
         #[sysml::part]
         pub chuck_gearbox: DrillChuckGearbox,
-        #[sysml::part]
+        /// The inherited platform, reached as `base.motor` by `connect`: a reference, not a
+        /// second owned platform (the tool *is* a `CordlessToolBase`, so budgets count it once).
+        #[sysml::part(ref)]
         pub base: CordlessToolBase,
     }
 
@@ -568,7 +570,9 @@ pub mod power_tools_family_model {
         pub noise_out: AcousticPort,
         #[sysml::part]
         pub anvil_mechanism: ImpactAnvilMechanism,
-        #[sysml::part]
+        /// The inherited platform, reached as `base.motor` by `connect`: a reference, not a
+        /// second owned platform (the tool *is* a `CordlessToolBase`, so budgets count it once).
+        #[sysml::part(ref)]
         pub base: CordlessToolBase,
     }
 
@@ -599,7 +603,9 @@ pub mod power_tools_family_model {
         pub blade_arbor: CircularBladeArbor,
         #[sysml::part]
         pub guard_interlock: BladeGuardInterlock,
-        #[sysml::part]
+        /// The inherited platform, reached as `base.motor` by `connect`: a reference, not a
+        /// second owned platform (the tool *is* a `CordlessToolBase`, so budgets count it once).
+        #[sysml::part(ref)]
         pub base: CordlessToolBase,
     }
 

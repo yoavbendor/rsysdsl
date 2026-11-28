@@ -29,7 +29,7 @@ pub use audit::{
 };
 pub use budget::{
     analyze_budgets, render_budget_markdown, BudgetLimits, BudgetReport, BudgetStatus,
-    DomainRollup, HotSpot, TimingBudget, UntrackedAttr,
+    DomainRollup, HotSpot, RollupMode, TimingBudget, UntrackedAttr,
 };
 pub use emit_cli::{emit_model_split_std, is_sysml_std_package};
 pub use emit::{

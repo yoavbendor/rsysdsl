@@ -10,7 +10,10 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use serde::{Deserialize, Serialize};
 use sysml_core::units::{parse_unit, Dim};
-use sysml_ir::{AttributeUsage, BudgetRole, Model, Package, PackageMember, PartDef, TbdKind};
+use sysml_ir::{
+    AttributeUsage, BudgetRole, Model, Multiplicity, Package, PackageMember, PartDef, PartUsage,
+    TbdKind,
+};
 
 use crate::emit_cli::is_sysml_std_package;
 
@@ -237,6 +240,126 @@ impl<'a> RoleIndex<'a> {
                 }
             })
             .collect()
+    }
+}
+
+/// One part feature of a definition (own or inherited) after resolving redefinition: the
+/// most-derived usage decides, missing type/multiplicity are filled from the redefined one.
+#[derive(Debug, Clone)]
+pub struct EffectivePart<'a> {
+    /// Usage name (an anonymous `part :>> battery` redefinition is keyed `battery`).
+    pub key: String,
+    pub type_name: Option<String>,
+    pub multiplicity: Option<Multiplicity>,
+    pub is_ref: bool,
+    /// Usage-level attribute redefinitions, most-derived first.
+    pub attributes: Vec<&'a AttributeUsage>,
+    /// Usage-level nested parts, most-derived first.
+    pub nested_parts: Vec<&'a PartUsage>,
+}
+
+/// Feature key of a part usage: its name, or the (simple) name of what it redefines.
+pub fn part_key(p: &PartUsage) -> Option<String> {
+    p.name
+        .as_deref()
+        .or_else(|| p.redefines.first().map(String::as_str))
+        .map(|n| simple(n).to_string())
+}
+
+/// Merge `usages` (less derived than what `out` already holds) into `out` by feature key.
+pub fn merge_part_usages<'a>(out: &mut Vec<EffectivePart<'a>>, usages: impl IntoIterator<Item = &'a PartUsage>) {
+    for u in usages {
+        let Some(key) = part_key(u) else { continue };
+        match out.iter_mut().find(|e| e.key == key) {
+            Some(e) => {
+                if e.type_name.is_none() {
+                    e.type_name = u.type_names.first().cloned();
+                }
+                if e.multiplicity.is_none() {
+                    e.multiplicity = u.multiplicity.clone();
+                }
+                e.attributes.extend(u.attributes.iter());
+                e.nested_parts.extend(u.nested_parts.iter());
+            }
+            None => out.push(EffectivePart {
+                key,
+                type_name: u.type_names.first().cloned(),
+                multiplicity: u.multiplicity.clone(),
+                is_ref: u.is_ref,
+                attributes: u.attributes.iter().collect(),
+                nested_parts: u.nested_parts.iter().collect(),
+            }),
+        }
+    }
+}
+
+impl<'a> RoleIndex<'a> {
+    /// Every part feature of `def`, own and inherited (most-derived usage wins).
+    pub fn effective_parts(&self, def: &'a PartDef) -> Vec<EffectivePart<'a>> {
+        let mut out = Vec::new();
+        for d in self.lineage(def) {
+            merge_part_usages(&mut out, d.parts.iter());
+        }
+        out
+    }
+
+    /// Apply usage-level attribute redefinitions (`part fan : Fan { attribute :>> ratedPower =
+    /// 200 [W]; }`, most-derived first) on top of a definition's effective attributes.
+    pub fn overlay_attributes(
+        &self,
+        mut base: Vec<EffectiveAttr>,
+        overlays: &[&AttributeUsage],
+        owner: &str,
+    ) -> Vec<EffectiveAttr> {
+        // Least-derived first so the most-derived overlay is applied last and wins.
+        for a in overlays.iter().rev() {
+            let Some(key) = attr_key(a) else { continue };
+            let has_value = a.value.is_some() || a.tbd.iter().any(|m| m.kind == TbdKind::Value);
+            let value = match a.value.as_deref() {
+                None => AttrValue::Tbd,
+                Some(raw) => match parse_number(raw) {
+                    Some(n) => AttrValue::Number(n),
+                    None => AttrValue::Expr(raw.trim().to_string()),
+                },
+            };
+            match base.iter_mut().find(|e| e.key == key) {
+                Some(e) => {
+                    if a.budget_role.is_some() {
+                        e.role = a.budget_role;
+                    }
+                    if a.unit.is_some() {
+                        e.unit = a.unit.clone();
+                    }
+                    e.is_evidence |= a.is_evidence;
+                    if has_value {
+                        e.value = value;
+                        e.declared_in = owner.to_string();
+                    }
+                }
+                None => base.push(EffectiveAttr {
+                    key,
+                    role: a.budget_role,
+                    value: if has_value { value } else { AttrValue::Absent },
+                    unit: a.unit.clone(),
+                    is_evidence: a.is_evidence,
+                    declared_in: owner.to_string(),
+                }),
+            }
+        }
+        base
+    }
+}
+
+/// Fixed instance count of a multiplicity: `Ok(n)` for `[n]` / `[n..n]` (no multiplicity = 1),
+/// `Err(lower)` when the count is a range or unbounded (`lower` = its lower bound, `*` = 0).
+pub fn instance_count(m: Option<&Multiplicity>) -> Result<u64, u64> {
+    let Some(m) = m else { return Ok(1) };
+    let num = |s: &str| s.trim().parse::<u64>().ok();
+    match (m.lower.as_deref(), num(&m.upper)) {
+        (None, Some(n)) => Ok(n),
+        (Some(l), Some(u)) if num(l) == Some(u) => Ok(u),
+        (Some(l), _) => Err(num(l).unwrap_or(0)),
+        (None, None) => Err(0),
     }
 }
 

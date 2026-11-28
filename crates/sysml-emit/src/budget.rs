@@ -9,9 +9,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
-use sysml_ir::{BudgetRole, Model, PartDef};
+use sysml_ir::{AttributeUsage, BudgetRole, Model, Package, PackageMember, PartDef, PartUsage};
 
-use crate::roles::{concrete_user_parts, AttrValue, DimClass, EffectiveAttr, RoleIndex};
+use crate::emit_cli::is_sysml_std_package;
+
+use crate::roles::{
+    concrete_user_parts, instance_count, merge_part_usages, part_key, AttrValue, DimClass,
+    EffectiveAttr, RoleIndex,
+};
 
 /// Optional user-specified budget ceilings for `--strict` pass/fail checks.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -85,6 +90,22 @@ pub struct DomainRollup {
     /// Role-tagged attributes whose value cannot be summed: `tbd_value`, a non-literal
     /// expression, or a unit whose scale is unknown. They make a limited domain `incomplete`.
     pub unresolved: Vec<UntrackedAttr>,
+    /// Concrete part definitions of the model with role values in this domain that are never
+    /// instantiated from a top-level context part (C1.6): not summed, and they make a limited
+    /// domain `incomplete`. `value` is in the domain unit (`null` when it cannot be used).
+    pub uninstantiated: Vec<UntrackedAttr>,
+    /// Why a limited domain is (or would be) `incomplete`, in words.
+    pub reasons: Vec<String>,
+}
+
+/// How the additive domains were rolled up (C1.6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RollupMode {
+    /// Over part usages from the top-level context part(s): one count per instance.
+    UsageTree,
+    /// No top-level context part was found: one count per definition (domains `incomplete`).
+    PerDefinition,
 }
 
 /// End-to-end DAG critical path & pipeline FPS bottleneck summary.
@@ -113,6 +134,11 @@ pub struct TimingBudget {
 pub struct BudgetReport {
     /// `false` unless every domain with a limit is `pass`.
     pub ok: bool,
+    /// `usage_tree` (normal) or `per_definition` (fallback without a top-level context part).
+    pub rollup: RollupMode,
+    /// The top-level context parts the usage tree starts from (definition names, or names of
+    /// package-level part usages).
+    pub roots: Vec<String>,
     pub mass: DomainRollup,
     pub power: DomainRollup,
     pub waste_heat: DomainRollup,
@@ -122,9 +148,21 @@ pub struct BudgetReport {
 
 #[derive(Default)]
 struct DomainAcc {
-    items: Vec<(String, f64)>,
+    /// (element, summed value, instance count)
+    items: Vec<(String, f64, usize)>,
     untracked: Vec<UntrackedAttr>,
     unresolved: Vec<UntrackedAttr>,
+    uninstantiated: Vec<UntrackedAttr>,
+    /// Model-level reasons that make a limited domain `incomplete`.
+    reasons: Vec<String>,
+}
+
+impl DomainAcc {
+    fn push_unique(list: &mut Vec<UntrackedAttr>, e: UntrackedAttr) {
+        if !list.iter().any(|x| x.element == e.element && x.attribute == e.attribute) {
+            list.push(e);
+        }
+    }
 }
 
 fn entry(element: &str, a: &EffectiveAttr) -> UntrackedAttr {
@@ -136,94 +174,561 @@ fn entry(element: &str, a: &EffectiveAttr) -> UntrackedAttr {
     }
 }
 
+/// The additive domains of the usage-tree rollup (timing is a critical path, not a sum).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Dom {
+    Mass = 0,
+    Power = 1,
+    Heat = 2,
+    Cost = 3,
+}
+
+const DOMS: [Dom; 4] = [Dom::Mass, Dom::Power, Dom::Heat, Dom::Cost];
+
+fn dom_unit(d: Dom) -> &'static str {
+    match d {
+        Dom::Mass => "kg",
+        Dom::Power | Dom::Heat => "W",
+        Dom::Cost => "USD",
+    }
+}
+
+/// What one instance of a definition contributes by itself (children excluded).
+#[derive(Default)]
+struct PartItems {
+    items: Vec<(Dom, f64)>,
+    unresolved: Vec<(Dom, UntrackedAttr)>,
+    untracked: Vec<(Dom, UntrackedAttr)>,
+    /// Latency-role sum in `s` (per definition; the critical path is not multiplied).
+    latency: Option<f64>,
+    time_unresolved: Vec<UntrackedAttr>,
+    time_untracked: Vec<UntrackedAttr>,
+}
+
+/// Role contributions of one definition (or usage) from its effective attributes.
+fn part_items(name: &str, attrs: &[EffectiveAttr]) -> PartItems {
+    let mut out = PartItems::default();
+    let mut part_power = 0.0;
+    let mut part_heat: Option<f64> = None;
+    let mut part_eff: Option<f64> = None;
+    for a in attrs {
+        if a.is_evidence {
+            continue;
+        }
+        match a.role {
+            Some(BudgetRole::None) => {}
+            Some(BudgetRole::Efficiency) => {
+                if let Some(v) = a.number() {
+                    part_eff = Some(v);
+                }
+            }
+            Some(role) => {
+                let scaled = match role {
+                    BudgetRole::Cost => a.number(),
+                    _ => a.base_number(),
+                };
+                match (&a.value, scaled) {
+                    (AttrValue::Absent, _) => {}
+                    (_, Some(v)) => match role {
+                        BudgetRole::Power => part_power += v,
+                        BudgetRole::WasteHeat => *part_heat.get_or_insert(0.0) += v,
+                        BudgetRole::Latency => *out.latency.get_or_insert(0.0) += v,
+                        BudgetRole::Mass => out.items.push((Dom::Mass, v)),
+                        _ => out.items.push((Dom::Cost, v)),
+                    },
+                    _ => match role {
+                        BudgetRole::Mass => out.unresolved.push((Dom::Mass, entry(name, a))),
+                        BudgetRole::Power => out.unresolved.push((Dom::Power, entry(name, a))),
+                        BudgetRole::WasteHeat => out.unresolved.push((Dom::Heat, entry(name, a))),
+                        BudgetRole::Latency => out.time_unresolved.push(entry(name, a)),
+                        _ => out.unresolved.push((Dom::Cost, entry(name, a))),
+                    },
+                }
+            }
+            None => {
+                if matches!(a.value, AttrValue::Tbd) {
+                    continue;
+                }
+                match a.dim() {
+                    Some(DimClass::Mass) => out.untracked.push((Dom::Mass, entry(name, a))),
+                    Some(DimClass::Power) => {
+                        out.untracked.push((Dom::Power, entry(name, a)));
+                        out.untracked.push((Dom::Heat, entry(name, a)));
+                    }
+                    Some(DimClass::Time) => out.time_untracked.push(entry(name, a)),
+                    _ => {}
+                }
+            }
+        }
+    }
+    if part_power > 0.0 {
+        out.items.push((Dom::Power, part_power));
+    }
+    match (part_heat, part_eff) {
+        (Some(h), _) => out.items.push((Dom::Heat, h)),
+        (None, Some(eta)) if part_power > 0.0 && (0.0..1.0).contains(&eta) => {
+            out.items.push((Dom::Heat, part_power * (1.0 - eta)));
+        }
+        _ => {}
+    }
+    out
+}
+
+/// Contributions of one instance subtree, before it is scaled by its multiplicity.
+#[derive(Default)]
+struct SubTree {
+    items: [Vec<(String, f64, usize)>; 4],
+    unresolved: [Vec<UntrackedAttr>; 4],
+    untracked: [Vec<UntrackedAttr>; 4],
+}
+
+impl SubTree {
+    fn absorb(&mut self, child: SubTree, factor: u64) {
+        for d in 0..4 {
+            for (path, v, k) in child.items[d].iter().cloned() {
+                if factor > 0 {
+                    self.items[d].push((path, v * factor as f64, k * factor as usize));
+                }
+            }
+            for e in child.unresolved[d].iter().cloned() {
+                DomainAcc::push_unique(&mut self.unresolved[d], e);
+            }
+            for e in child.untracked[d].iter().cloned() {
+                DomainAcc::push_unique(&mut self.untracked[d], e);
+            }
+        }
+    }
+}
+
+/// Walks the part-usage tree from the top-level context part(s) (C1.6): a definition's role
+/// values count once per usage instance, times the usage's fixed multiplicity.
+struct UsageWalker<'i, 'a> {
+    idx: &'i RoleIndex<'a>,
+    reached: BTreeSet<String>,
+    /// Structural reasons that make every limited domain `incomplete` (cycles).
+    issues: Vec<String>,
+}
+
+impl<'i, 'a> UsageWalker<'i, 'a> {
+    fn instance(
+        &mut self,
+        def: &'a PartDef,
+        attr_overlays: &[&'a AttributeUsage],
+        extra_parts: &[&'a PartUsage],
+        path: &str,
+        stack: &mut Vec<String>,
+    ) -> SubTree {
+        self.reached.insert(def.name.clone());
+        let attrs = self.idx.overlay_attributes(
+            self.idx.effective_attributes(def),
+            attr_overlays,
+            &def.name,
+        );
+        let own = part_items(&def.name, &attrs);
+        let mut sub = SubTree::default();
+        for (d, v) in own.items {
+            sub.items[d as usize].push((path.to_string(), v, 1));
+        }
+        for (d, e) in own.unresolved {
+            DomainAcc::push_unique(&mut sub.unresolved[d as usize], e);
+        }
+        for (d, e) in own.untracked {
+            DomainAcc::push_unique(&mut sub.untracked[d as usize], e);
+        }
+
+        let mut parts = Vec::new();
+        merge_part_usages(&mut parts, extra_parts.iter().copied());
+        for p in self.idx.effective_parts(def) {
+            match parts.iter_mut().find(|e| e.key == p.key) {
+                Some(e) => {
+                    if e.type_name.is_none() {
+                        e.type_name = p.type_name.clone();
+                    }
+                    if e.multiplicity.is_none() {
+                        e.multiplicity = p.multiplicity.clone();
+                    }
+                    e.attributes.extend(p.attributes.iter().copied());
+                    e.nested_parts.extend(p.nested_parts.iter().copied());
+                }
+                None => parts.push(p),
+            }
+        }
+        for p in parts {
+            if p.is_ref {
+                continue; // a reference is not an owned instance
+            }
+            let Some(child) = p.type_name.as_deref().and_then(|t| self.idx.get(t)) else {
+                continue; // typed by a non-part definition (or untyped)
+            };
+            let child_path = format!("{path}.{}", p.key);
+            if stack.iter().any(|s| s == &child.name) {
+                let lower = match instance_count(p.multiplicity.as_ref()) {
+                    Ok(n) | Err(n) => n,
+                };
+                if lower > 0 {
+                    self.issues.push(format!(
+                        "composition cycle at `{child_path}` (`{}` contains itself at least once): \
+                         instance count is unbounded",
+                        child.name
+                    ));
+                } else {
+                    // Optional recursion (`part subcomponents[*] : Self`): zero instances are
+                    // required; a recursive definition with role values of its own is open.
+                    let own = part_items(&child.name, &self.idx.effective_attributes(child));
+                    let mult = p.multiplicity.as_ref().map(|m| m.render()).unwrap_or_default();
+                    for d in DOMS {
+                        if own.items.iter().any(|(x, _)| *x == d) {
+                            DomainAcc::push_unique(
+                                &mut sub.unresolved[d as usize],
+                                UntrackedAttr {
+                                    element: child_path.clone(),
+                                    attribute: format!("multiplicity {mult} (recursive)"),
+                                    unit: dom_unit(d).to_string(),
+                                    value: None,
+                                },
+                            );
+                        }
+                    }
+                }
+                continue;
+            }
+            let child_sub = self.usage(child, &p.attributes, &p.nested_parts, &child_path, stack);
+            match instance_count(p.multiplicity.as_ref()) {
+                Ok(n) => sub.absorb(child_sub, n),
+                Err(lower) => {
+                    let mult = p.multiplicity.as_ref().map(|m| m.render()).unwrap_or_default();
+                    for d in DOMS {
+                        if !child_sub.items[d as usize].is_empty() {
+                            DomainAcc::push_unique(
+                                &mut sub.unresolved[d as usize],
+                                UntrackedAttr {
+                                    element: child_path.clone(),
+                                    attribute: format!("multiplicity {mult}"),
+                                    unit: dom_unit(d).to_string(),
+                                    value: None,
+                                },
+                            );
+                        }
+                    }
+                    // The lower bound keeps `fail` sound; `unresolved` keeps `pass` impossible.
+                    sub.absorb(child_sub, lower);
+                }
+            }
+        }
+        sub
+    }
+
+    /// One usage typed by `def`: a variation definition is a choice that `budget` does not
+    /// bind (listed as `unresolved`), anything else is walked as an instance.
+    fn usage(
+        &mut self,
+        def: &'a PartDef,
+        attr_overlays: &[&'a AttributeUsage],
+        extra_parts: &[&'a PartUsage],
+        path: &str,
+        stack: &mut Vec<String>,
+    ) -> SubTree {
+        if stack.iter().any(|s| s == &def.name) {
+            self.issues.push(format!(
+                "composition cycle at `{path}` (`{}` contains itself): instance count is unbounded",
+                def.name
+            ));
+            return SubTree::default();
+        }
+        stack.push(def.name.clone());
+        let sub = if def.is_variation {
+            self.reached.insert(def.name.clone());
+            let mut sub = SubTree::default();
+            let mut contributes = [false; 4];
+            for v in &def.variants {
+                if let Some(alt) = self.idx.get(&v.type_name) {
+                    let alt_sub = self.usage(alt, &[], &[], &format!("{path}.{}", v.name), stack);
+                    for d in DOMS {
+                        contributes[d as usize] |= !alt_sub.items[d as usize].is_empty();
+                    }
+                    for d in 0..4 {
+                        for e in alt_sub.untracked[d].iter().cloned() {
+                            DomainAcc::push_unique(&mut sub.untracked[d], e);
+                        }
+                    }
+                }
+            }
+            for d in DOMS {
+                if contributes[d as usize] {
+                    DomainAcc::push_unique(
+                        &mut sub.unresolved[d as usize],
+                        UntrackedAttr {
+                            element: path.to_string(),
+                            attribute: format!("variation {} (variant not bound)", def.name),
+                            unit: dom_unit(d).to_string(),
+                            value: None,
+                        },
+                    );
+                }
+            }
+            sub
+        } else {
+            self.instance(def, attr_overlays, extra_parts, path, stack)
+        };
+        stack.pop();
+        sub
+    }
+}
+
+/// Top-level context parts: concrete part definitions of the model's own packages that are
+/// not the type of an owned part usage (nor a variant) anywhere in those packages, plus
+/// package-level part usages. Returns (root definitions, package-level usages).
+/// Every part definition of the model's own packages (abstract and variation ones included).
+fn user_part_defs(model: &Model) -> Vec<&PartDef> {
+    fn walk<'a>(pkg: &'a Package, out: &mut Vec<&'a PartDef>) {
+        for m in &pkg.members {
+            match m {
+                PackageMember::Package(sub) => walk(sub, out),
+                PackageMember::PartDef(p) => out.push(p),
+                _ => {}
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for pkg in model.packages.iter().filter(|p| !is_sysml_std_package(p)) {
+        walk(pkg, &mut out);
+    }
+    out
+}
+
+fn find_roots(model: &Model) -> (Vec<&PartDef>, Vec<&PartUsage>) {
+    fn collect_usage_types(u: &PartUsage, used: &mut BTreeSet<String>) {
+        if !u.is_ref {
+            for t in &u.type_names {
+                used.insert(t.rsplit("::").next().unwrap_or(t).to_string());
+            }
+        }
+        for n in &u.nested_parts {
+            collect_usage_types(n, used);
+        }
+    }
+    fn walk<'a>(
+        pkg: &'a Package,
+        used: &mut BTreeSet<String>,
+        usages: &mut Vec<&'a PartUsage>,
+    ) {
+        for m in &pkg.members {
+            match m {
+                PackageMember::Package(sub) => walk(sub, used, usages),
+                PackageMember::PartDef(p) => {
+                    for u in &p.parts {
+                        collect_usage_types(u, used);
+                    }
+                    for v in &p.variants {
+                        let t = &v.type_name;
+                        used.insert(t.rsplit("::").next().unwrap_or(t).to_string());
+                    }
+                }
+                PackageMember::PartUsage(u) if !u.is_ref => {
+                    collect_usage_types(u, used);
+                    usages.push(u);
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut used = BTreeSet::new();
+    let mut usages = Vec::new();
+    for pkg in model.packages.iter().filter(|p| !is_sysml_std_package(p)) {
+        walk(pkg, &mut used, &mut usages);
+    }
+    // A concrete definition that another user definition specializes is a base type, not a
+    // context: its values reach the tree through its specializations.
+    let specialized: BTreeSet<String> = user_part_defs(model)
+        .iter()
+        .flat_map(|p| p.specializes.iter())
+        .map(|t| t.rsplit("::").next().unwrap_or(t).to_string())
+        .collect();
+    let candidates: Vec<&PartDef> = concrete_user_parts(model)
+        .into_iter()
+        .filter(|p| !used.contains(&p.name) && !specialized.contains(&p.name))
+        .collect();
+    // An `individual part def` names one specific instance (e.g. the flight article `'LM-5'`
+    // of `ApolloLunarModule`); it is a root only when there is no other context part.
+    let roots = if candidates.iter().any(|p| !p.is_individual) {
+        candidates.into_iter().filter(|p| !p.is_individual).collect()
+    } else {
+        candidates
+    };
+    (roots, usages)
+}
+
 /// Analyze cross-domain budgets, DAG critical-path latency, pipeline FPS bottleneck, and top-3
 /// hot spots on a [`Model`].
 ///
 /// Contributions come only from budget roles (D1): an attribute that is, or redefines, a
 /// role-tagged attribute (`#[sysml::attr(budget = "...")]` or a sysml-std role attribute such
-/// as `PowerElement::ratedPower`). Every non-abstract part definition of the model's own
-/// packages counts once, with its inherited values. Attributes of requirement definitions,
-/// evidence attributes and `tbd_value` attributes are never contributions nor `untracked`
-/// (role-tagged `tbd_value` ones are listed as `unresolved`).
+/// as `PowerElement::ratedPower`). Attributes of requirement definitions, evidence attributes
+/// and `tbd_value` attributes are never contributions nor `untracked` (role-tagged
+/// `tbd_value` ones are listed as `unresolved`).
+///
+/// Mass, power, waste heat and cost roll up over the **usage tree** (C1.6): from the top-level
+/// context part(s) (see [`BudgetReport::roots`]), every owned part usage is an instance, so a
+/// definition used twice counts twice (times a fixed `[n]` multiplicity). Concrete definitions
+/// never reached from a root are listed as `uninstantiated` (not summed). Without any root the
+/// rollup falls back to one count per definition and every limited domain is `incomplete`.
 pub fn analyze_budgets(model: &Model, limits: &BudgetLimits) -> BudgetReport {
     let idx = RoleIndex::new(model);
-    let mut mass = DomainAcc::default();
-    let mut power = DomainAcc::default();
-    let mut heat = DomainAcc::default();
-    let mut cost = DomainAcc::default();
+    let mut accs: [DomainAcc; 4] = Default::default();
     let mut time = DomainAcc::default();
     let mut stage_latency_ms: BTreeMap<String, f64> = BTreeMap::new();
 
-    for p in concrete_user_parts(model) {
-        let name = p.name.clone();
-        let mut part_power = 0.0;
-        let mut part_heat: Option<f64> = None;
-        let mut part_eff: Option<f64> = None;
-        let mut part_latency: Option<f64> = None;
-        for a in idx.effective_attributes(p) {
-            if a.is_evidence {
+    // Timing is a critical path over definitions (not multiplied by instances).
+    let concrete = concrete_user_parts(model);
+    for p in &concrete {
+        let own = part_items(&p.name, &idx.effective_attributes(p));
+        time.untracked.extend(own.time_untracked);
+        time.unresolved.extend(own.time_unresolved);
+        if let Some(lat_s) = own.latency {
+            stage_latency_ms.insert(p.name.clone(), lat_s * 1000.0);
+        }
+    }
+
+    // Mass / power / waste heat / cost: usage-tree rollup.
+    let (root_defs, root_usages) = find_roots(model);
+    let mut walker = UsageWalker {
+        idx: &idx,
+        reached: BTreeSet::new(),
+        issues: Vec::new(),
+    };
+    let mut total = SubTree::default();
+    let mut roots: Vec<String> = Vec::new();
+    for def in &root_defs {
+        roots.push(def.name.clone());
+        let mut stack = Vec::new();
+        let sub = walker.usage(def, &[], &[], &def.name, &mut stack);
+        total.absorb(sub, 1);
+    }
+    for u in &root_usages {
+        let Some(def) = u.type_names.first().and_then(|t| idx.get(t)) else {
+            continue;
+        };
+        let name = part_key(u).unwrap_or_else(|| def.name.clone());
+        roots.push(name.clone());
+        let attrs: Vec<&AttributeUsage> = u.attributes.iter().collect();
+        let nested: Vec<&PartUsage> = u.nested_parts.iter().collect();
+        let mut stack = Vec::new();
+        let sub = walker.usage(def, &attrs, &nested, &name, &mut stack);
+        match instance_count(u.multiplicity.as_ref()) {
+            Ok(n) => total.absorb(sub, n),
+            Err(lower) => {
+                for d in DOMS {
+                    if !sub.items[d as usize].is_empty() {
+                        DomainAcc::push_unique(
+                            &mut total.unresolved[d as usize],
+                            UntrackedAttr {
+                                element: name.clone(),
+                                attribute: format!(
+                                    "multiplicity {}",
+                                    u.multiplicity.as_ref().map(|m| m.render()).unwrap_or_default()
+                                ),
+                                unit: dom_unit(d).to_string(),
+                                value: None,
+                            },
+                        );
+                    }
+                }
+                total.absorb(sub, lower);
+            }
+        }
+    }
+
+    let rollup = if roots.is_empty() && !concrete.is_empty() {
+        // No identifiable root: every definition counts once, and the result is not trusted.
+        for p in &concrete {
+            let own = part_items(&p.name, &idx.effective_attributes(p));
+            for (d, v) in own.items {
+                total.items[d as usize].push((p.name.clone(), v, 1));
+            }
+            for (d, e) in own.unresolved {
+                DomainAcc::push_unique(&mut total.unresolved[d as usize], e);
+            }
+            for (d, e) in own.untracked {
+                DomainAcc::push_unique(&mut total.untracked[d as usize], e);
+            }
+        }
+        for acc in accs.iter_mut() {
+            acc.reasons.push(
+                "no top-level context part (every concrete part definition is used inside \
+                 another): counted once per definition, instance counts unknown"
+                    .to_string(),
+            );
+        }
+        RollupMode::PerDefinition
+    } else {
+        // Ancestors of instantiated definitions are covered through their specializations.
+        let covered: BTreeSet<String> = walker
+            .reached
+            .iter()
+            .filter_map(|n| idx.get(n))
+            .flat_map(|d| idx.lineage(d))
+            .map(|d| d.name.clone())
+            .collect();
+        for p in &concrete {
+            if covered.contains(&p.name) {
                 continue;
             }
-            match a.role {
-                Some(BudgetRole::None) => {}
-                Some(role) => {
-                    let acc = match role {
-                        BudgetRole::Mass => &mut mass,
-                        BudgetRole::Power => &mut power,
-                        BudgetRole::WasteHeat => &mut heat,
-                        BudgetRole::Cost => &mut cost,
-                        BudgetRole::Latency => &mut time,
-                        BudgetRole::Efficiency | BudgetRole::None => {
-                            if let Some(v) = a.number() {
-                                part_eff = Some(v);
-                            }
-                            continue;
-                        }
-                    };
-                    let scaled = match role {
-                        BudgetRole::Cost => a.number(),
-                        _ => a.base_number(),
-                    };
-                    match (&a.value, scaled) {
-                        (AttrValue::Absent, _) => {}
-                        (_, Some(v)) => match role {
-                            BudgetRole::Power => part_power += v,
-                            BudgetRole::WasteHeat => *part_heat.get_or_insert(0.0) += v,
-                            BudgetRole::Latency => *part_latency.get_or_insert(0.0) += v,
-                            _ => acc.items.push((name.clone(), v)),
-                        },
-                        _ => acc.unresolved.push(entry(&name, &a)),
-                    }
+            // Never instantiated from a root: reported, never summed nor dropped.
+            for a in idx.effective_attributes(p) {
+                if a.is_evidence || matches!(a.value, AttrValue::Absent) {
+                    continue;
                 }
-                None => {
-                    if matches!(a.value, AttrValue::Tbd) {
+                let d = match a.role {
+                    Some(BudgetRole::Mass) => Dom::Mass,
+                    Some(BudgetRole::Power) => Dom::Power,
+                    Some(BudgetRole::WasteHeat) => Dom::Heat,
+                    Some(BudgetRole::Cost) => Dom::Cost,
+                    Some(_) => continue,
+                    None => {
+                        if !matches!(a.value, AttrValue::Tbd) {
+                            match a.dim() {
+                                Some(DimClass::Mass) => DomainAcc::push_unique(
+                                    &mut total.untracked[Dom::Mass as usize],
+                                    entry(&p.name, &a),
+                                ),
+                                Some(DimClass::Power) => {
+                                    DomainAcc::push_unique(
+                                        &mut total.untracked[Dom::Power as usize],
+                                        entry(&p.name, &a),
+                                    );
+                                    DomainAcc::push_unique(
+                                        &mut total.untracked[Dom::Heat as usize],
+                                        entry(&p.name, &a),
+                                    );
+                                }
+                                _ => {}
+                            }
+                        }
                         continue;
                     }
-                    match a.dim() {
-                        Some(DimClass::Mass) => mass.untracked.push(entry(&name, &a)),
-                        Some(DimClass::Power) => {
-                            power.untracked.push(entry(&name, &a));
-                            heat.untracked.push(entry(&name, &a));
-                        }
-                        Some(DimClass::Time) => time.untracked.push(entry(&name, &a)),
-                        _ => {}
-                    }
+                };
+                let mut e = entry(&p.name, &a);
+                if !matches!(a.role, Some(BudgetRole::Cost)) {
+                    e.value = a.base_number();
+                    e.unit = dom_unit(d).to_string();
                 }
+                accs[d as usize].uninstantiated.push(e);
             }
         }
-        if part_power > 0.0 {
-            power.items.push((name.clone(), part_power));
-        }
-        match (part_heat, part_eff) {
-            (Some(h), _) => heat.items.push((name.clone(), h)),
-            (None, Some(eta)) if part_power > 0.0 && (0.0..1.0).contains(&eta) => {
-                heat.items.push((name.clone(), part_power * (1.0 - eta)));
+        RollupMode::UsageTree
+    };
+    for issue in &walker.issues {
+        for acc in accs.iter_mut() {
+            if !acc.reasons.contains(issue) {
+                acc.reasons.push(issue.clone());
             }
-            _ => {}
         }
-        if let Some(lat_s) = part_latency {
-            stage_latency_ms.insert(name.clone(), lat_s * 1000.0);
-        }
+    }
+    for d in DOMS {
+        let acc = &mut accs[d as usize];
+        acc.items = std::mem::take(&mut total.items[d as usize]);
+        acc.unresolved = std::mem::take(&mut total.unresolved[d as usize]);
+        acc.untracked = std::mem::take(&mut total.untracked[d as usize]);
     }
 
     let part_defs: BTreeMap<String, &PartDef> = concrete_user_parts(model)
@@ -320,6 +825,7 @@ pub fn analyze_budgets(model: &Model, limits: &BudgetLimits) -> BudgetReport {
         BudgetStatus::Pass
     };
 
+    let [mass, power, heat, cost] = accs;
     let mass = build_rollup("mass", "kg", mass, limits.max_mass_kg);
     let power = build_rollup("power", "W", power, limits.max_power_w);
     let waste_heat = build_rollup("waste_heat", "W", heat, None);
@@ -332,6 +838,8 @@ pub fn analyze_budgets(model: &Model, limits: &BudgetLimits) -> BudgetReport {
 
     BudgetReport {
         ok,
+        rollup,
+        roots,
         mass,
         power,
         waste_heat,
@@ -377,6 +885,18 @@ pub fn render_budget_markdown(r: &BudgetReport) -> String {
     out.push_str(&format!(
         "- **Overall Status:** {}\n",
         if r.ok { "PASS" } else { "NOT OK" }
+    ));
+    out.push_str(&format!(
+        "- **Rollup:** {} from {}\n",
+        match r.rollup {
+            RollupMode::UsageTree => "per usage instance",
+            RollupMode::PerDefinition => "per definition (no top-level context part)",
+        },
+        if r.roots.is_empty() {
+            "—".to_string()
+        } else {
+            r.roots.iter().map(|x| format!("`{x}`")).collect::<Vec<_>>().join(", ")
+        }
     ));
     out.push_str(&format!(
         "- **Critical Path Latency:** {:.2} ms ({}){} [{}]\n",
@@ -428,20 +948,53 @@ pub fn render_budget_markdown(r: &BudgetReport) -> String {
         ));
         render_attr_list("untracked (no budget role)", &d.untracked, &mut out);
         render_attr_list("unresolved (role, no usable value)", &d.unresolved, &mut out);
+        render_attr_list("uninstantiated (not reached from a context part)", &d.uninstantiated, &mut out);
+        if d.limit.is_some() && d.status == BudgetStatus::Incomplete {
+            for reason in &d.reasons {
+                out.push_str(&format!("  - incomplete: {reason}\n"));
+            }
+        }
     }
     out
 }
 
-fn build_rollup(domain: &str, unit: &str, acc: DomainAcc, limit: Option<f64>) -> DomainRollup {
-    let total: f64 = acc.items.iter().map(|(_, v)| *v).sum();
+fn build_rollup(domain: &str, unit: &str, mut acc: DomainAcc, limit: Option<f64>) -> DomainRollup {
+    // One hot-spot row per element (usage path), instances merged.
+    let mut merged: Vec<(String, f64, usize)> = Vec::new();
+    for (el, v, k) in acc.items.drain(..) {
+        match merged.iter_mut().find(|(e, _, _)| *e == el) {
+            Some(m) => {
+                m.1 += v;
+                m.2 += k;
+            }
+            None => merged.push((el, v, k)),
+        }
+    }
+    let total: f64 = merged.iter().map(|(_, v, _)| *v).sum();
+    let contributors: usize = merged.iter().map(|(_, _, k)| *k).sum();
+    let mut reasons = std::mem::take(&mut acc.reasons);
+    if !acc.untracked.is_empty() {
+        reasons.push(format!("{} attribute(s) of this dimension have no budget role (untracked)", acc.untracked.len()));
+    }
+    if !acc.unresolved.is_empty() {
+        reasons.push(format!("{} role value(s) cannot be summed (unresolved)", acc.unresolved.len()));
+    }
+    if !acc.uninstantiated.is_empty() {
+        reasons.push(format!(
+            "{} role value(s) belong to definitions never instantiated from a top-level context part (uninstantiated)",
+            acc.uninstantiated.len()
+        ));
+    }
+    if merged.is_empty() {
+        reasons.push("no contributors".to_string());
+    }
     let status = match limit {
         None => BudgetStatus::Pass,
         Some(l) if total > l + 1e-9 => BudgetStatus::Fail,
-        Some(_) if !acc.untracked.is_empty() || !acc.unresolved.is_empty() || acc.items.is_empty() => {
-            BudgetStatus::Incomplete
-        }
+        Some(_) if !reasons.is_empty() => BudgetStatus::Incomplete,
         Some(_) => BudgetStatus::Pass,
     };
+    let items: Vec<(String, f64)> = merged.into_iter().map(|(e, v, _)| (e, v)).collect();
     DomainRollup {
         domain: domain.to_string(),
         unit: unit.to_string(),
@@ -450,10 +1003,12 @@ fn build_rollup(domain: &str, unit: &str, acc: DomainAcc, limit: Option<f64>) ->
         margin: limit.map(|l| round2(l - total)),
         pass: status == BudgetStatus::Pass,
         status,
-        contributors: acc.items.len(),
-        hot_spots: build_hot_spots(&acc.items, total),
+        contributors,
+        hot_spots: build_hot_spots(&items, total),
         untracked: acc.untracked,
         unresolved: acc.unresolved,
+        uninstantiated: acc.uninstantiated,
+        reasons,
     }
 }
 
@@ -741,5 +1296,178 @@ mod tests {
         assert_eq!(r.power.unresolved[0].element, "Pump");
         assert_eq!(r.power.status, BudgetStatus::Incomplete);
         assert!(!r.ok);
+    }
+
+    fn usage(name: &str, ty: &str) -> PartUsage {
+        PartUsage {
+            name: Some(name.into()),
+            type_names: vec![ty.into()],
+            ..Default::default()
+        }
+    }
+
+    fn fan_model(context_parts: Vec<PartUsage>, extra: Vec<PackageMember>) -> Model {
+        let mut members = vec![
+            part("Fan", vec![attr("ratedPower", "170.0", Some("W"), Some(BudgetRole::Power))]),
+            PackageMember::PartDef(PartDef {
+                name: "VentUnit".into(),
+                parts: context_parts,
+                ..Default::default()
+            }),
+        ];
+        members.extend(extra);
+        Model::new(vec![Package {
+            name: "Vent".into(),
+            members,
+            ..Default::default()
+        }])
+    }
+
+    fn power_limit(w: f64) -> BudgetLimits {
+        BudgetLimits {
+            max_power_w: Some(w),
+            ..Default::default()
+        }
+    }
+
+    /// C1.6: two usages of one fan definition total 2 x 170 W (used to be 170 W).
+    #[test]
+    fn two_usages_of_one_definition_count_twice() {
+        let model = fan_model(vec![usage("supplyFan", "Fan"), usage("exhaustFan", "Fan")], vec![]);
+        let r = analyze_budgets(&model, &power_limit(300.0));
+        assert_eq!(r.rollup, RollupMode::UsageTree);
+        assert_eq!(r.roots, vec!["VentUnit"]);
+        assert!((r.power.total - 340.0).abs() < 1e-9, "{:?}", r.power);
+        assert_eq!(r.power.contributors, 2);
+        assert_eq!(r.power.status, BudgetStatus::Fail);
+        let els: Vec<&str> = r.power.hot_spots.iter().map(|h| h.element.as_str()).collect();
+        assert!(els.contains(&"VentUnit.supplyFan") && els.contains(&"VentUnit.exhaustFan"));
+    }
+
+    #[test]
+    fn fixed_multiplicity_nested_and_inherited_usages_multiply() {
+        // VentUnit { fans[3] : Fan; bank : FanBank }, FanBank :> AbstractBank { (inherited) pair[2] : Fan }
+        let mut fans = usage("fans", "Fan");
+        fans.multiplicity = Some(sysml_ir::Multiplicity::new(None::<String>, "3"));
+        let mut pair = usage("pair", "Fan");
+        pair.multiplicity = Some(sysml_ir::Multiplicity::new(Some("2"), "2"));
+        let bank_base = PackageMember::PartDef(PartDef {
+            name: "AbstractBank".into(),
+            is_abstract: true,
+            parts: vec![pair],
+            ..Default::default()
+        });
+        let bank = PackageMember::PartDef(PartDef {
+            name: "FanBank".into(),
+            specializes: vec!["AbstractBank".into()],
+            ..Default::default()
+        });
+        let model = fan_model(vec![fans, usage("bank", "FanBank")], vec![bank_base, bank]);
+        let r = analyze_budgets(&model, &power_limit(1000.0));
+        assert!((r.power.total - 5.0 * 170.0).abs() < 1e-9, "{:?}", r.power);
+        assert_eq!(r.power.contributors, 5);
+        assert_eq!(r.power.status, BudgetStatus::Pass);
+        assert!(r.ok);
+    }
+
+    #[test]
+    fn open_multiplicity_is_unresolved_lower_bound_never_a_pass() {
+        let mut fans = usage("fans", "Fan");
+        fans.multiplicity = Some(sysml_ir::Multiplicity::new(Some("1"), "*"));
+        let model = fan_model(vec![fans], vec![]);
+        let r = analyze_budgets(&model, &power_limit(1000.0));
+        assert!((r.power.total - 170.0).abs() < 1e-9);
+        assert_eq!(r.power.status, BudgetStatus::Incomplete);
+        assert_eq!(r.power.unresolved[0].element, "VentUnit.fans");
+        assert!(r.power.unresolved[0].attribute.contains("[1..*]"));
+        // The lower bound alone already exceeds a small limit: `fail` is sound.
+        let r = analyze_budgets(&model, &power_limit(100.0));
+        assert_eq!(r.power.status, BudgetStatus::Fail);
+    }
+
+    #[test]
+    fn uninstantiated_definitions_are_listed_and_make_limited_domains_incomplete() {
+        let heater = part("Heater", vec![attr("ratedPower", "2000.0", Some("W"), Some(BudgetRole::Power))]);
+        // `Spare` is only used inside an abstract definition nobody specializes or uses.
+        let orphan_holder = PackageMember::PartDef(PartDef {
+            name: "UnusedAssembly".into(),
+            is_abstract: true,
+            parts: vec![usage("h", "Heater")],
+            ..Default::default()
+        });
+        let model = fan_model(vec![usage("fan", "Fan")], vec![heater, orphan_holder]);
+        let r = analyze_budgets(&model, &power_limit(1000.0));
+        assert!((r.power.total - 170.0).abs() < 1e-9);
+        assert_eq!(r.power.uninstantiated.len(), 1, "{:?}", r.power.uninstantiated);
+        assert_eq!(r.power.uninstantiated[0].element, "Heater");
+        assert_eq!(r.power.uninstantiated[0].value, Some(2000.0));
+        assert_eq!(r.power.status, BudgetStatus::Incomplete);
+        assert!(r.power.reasons.iter().any(|x| x.contains("uninstantiated")));
+        assert!(!r.ok);
+        // No limit on power: nothing to check.
+        let r = analyze_budgets(&model, &BudgetLimits::default());
+        assert_eq!(r.power.status, BudgetStatus::Pass);
+    }
+
+    #[test]
+    fn ref_usages_variations_and_usage_level_redefinitions() {
+        let mut r#ref = usage("observed", "Fan");
+        r#ref.is_ref = true;
+        let mut boosted = usage("boosted", "Fan");
+        boosted.attributes.push(AttributeUsage {
+            redefines: vec!["ratedPower".into()],
+            value: Some("200.0".into()),
+            unit: Some("W".into()),
+            ..Default::default()
+        });
+        let variation = PackageMember::PartDef(PartDef {
+            name: "FanChoice".into(),
+            is_variation: true,
+            variants: vec![sysml_ir::VariantPart {
+                name: "std".into(),
+                type_name: "Fan".into(),
+                doc: None,
+            }],
+            ..Default::default()
+        });
+        let model = fan_model(
+            vec![r#ref, boosted, usage("choice", "FanChoice")],
+            vec![variation],
+        );
+        let r = analyze_budgets(&model, &power_limit(1000.0));
+        // ref: not an owned instance; boosted: usage-level value; variation: unbound choice.
+        assert!((r.power.total - 200.0).abs() < 1e-9, "{:?}", r.power);
+        assert_eq!(r.power.unresolved.len(), 1);
+        assert!(r.power.unresolved[0].attribute.contains("FanChoice"));
+        assert_eq!(r.power.status, BudgetStatus::Incomplete);
+    }
+
+    #[test]
+    fn no_root_falls_back_per_definition_and_is_incomplete() {
+        // A contains B and B contains A: no top-level context part.
+        let model = Model::new(vec![Package {
+            name: "Loop".into(),
+            members: vec![
+                PackageMember::PartDef(PartDef {
+                    name: "A".into(),
+                    attributes: vec![attr("ratedPower", "10.0", Some("W"), Some(BudgetRole::Power))],
+                    parts: vec![usage("b", "B")],
+                    ..Default::default()
+                }),
+                PackageMember::PartDef(PartDef {
+                    name: "B".into(),
+                    attributes: vec![attr("ratedPower", "5.0", Some("W"), Some(BudgetRole::Power))],
+                    parts: vec![usage("a", "A")],
+                    ..Default::default()
+                }),
+            ],
+            ..Default::default()
+        }]);
+        let r = analyze_budgets(&model, &power_limit(1000.0));
+        assert_eq!(r.rollup, RollupMode::PerDefinition);
+        assert!(r.roots.is_empty());
+        assert!((r.power.total - 15.0).abs() < 1e-9);
+        assert_eq!(r.power.status, BudgetStatus::Incomplete);
+        assert!(r.power.reasons.iter().any(|x| x.contains("no top-level context part")));
     }
 }

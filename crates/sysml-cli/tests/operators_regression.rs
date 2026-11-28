@@ -264,3 +264,58 @@ fn budget_on_builtin_dishwasher_still_passes() {
         pretty(&val)
     );
 }
+
+// (h) C1.6: budget rolls up over part usages. One fan definition used twice plus a `[2]`
+// heater bank totals 2 x 170 W + 2 x 50 W = 440 W (it used to count each definition once:
+// 220 W, a silent under-count that passed a 400 W limit).
+#[test]
+fn budget_counts_each_usage_instance_and_multiplicity() {
+    let fixture = workspace_root()
+        .join("tests")
+        .join("fixtures")
+        .join("budget_multiplicity")
+        .join("two_fans.sysml");
+    let (code, val, _stderr) = run_json(&[
+        "budget",
+        "--files",
+        fixture.to_str().unwrap(),
+        "--max-power-w",
+        "400",
+        "--strict",
+    ]);
+    assert_eq!(val["rollup"], "usage_tree", "{}", pretty(&val));
+    assert_eq!(val["roots"], serde_json::json!(["VentilationUnit"]), "{}", pretty(&val));
+    assert_eq!(val["power"]["total"].as_f64(), Some(440.0), "{}", pretty(&val));
+    assert_eq!(val["power"]["contributors"], 4, "{}", pretty(&val));
+    assert_eq!(val["power"]["status"], "fail", "{}", pretty(&val));
+    assert_eq!(val["mass"]["total"].as_f64(), Some(5.0), "{}", pretty(&val));
+    assert!(val["power"]["uninstantiated"].as_array().unwrap().is_empty());
+    assert_eq!(code, Some(1), "--strict must exit 1 on fail");
+
+    let (code, val, _stderr) = run_json(&[
+        "budget",
+        "--files",
+        fixture.to_str().unwrap(),
+        "--max-power-w",
+        "500",
+        "--strict",
+    ]);
+    assert_eq!(val["power"]["status"], "pass", "{}", pretty(&val));
+    assert_eq!(code, Some(0));
+}
+
+// (i) C1.6 on a trial-3 model: ventilation_r2 has supply and exhaust fans of one
+// `EcFanMotor` definition (170 W each): 340 W, not 170 W.
+#[test]
+fn budget_ventilation_two_identical_fans_total_twice() {
+    let fixture = fixture_path("ventilation_r2.sysml");
+    let (_code, val, _stderr) = run_json(&[
+        "budget",
+        "--files",
+        fixture.to_str().unwrap(),
+        "--max-power-w",
+        "300",
+    ]);
+    assert_eq!(val["power"]["total"].as_f64(), Some(340.0), "{}", pretty(&val));
+    assert_eq!(val["power"]["status"], "fail", "{}", pretty(&val));
+}
