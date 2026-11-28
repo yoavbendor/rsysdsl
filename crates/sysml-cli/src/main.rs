@@ -19,6 +19,7 @@ use sysml_emit::{
     iso26262_metadata_package, lint_model, reconcile_model, render_budget_markdown,
     render_lint_markdown, render_reconcile_markdown, render_safety_report_markdown,
     render_standalone_html, render_trace_matrix_csv, render_trace_matrix_markdown,
+    render_trade_study_markdown, render_what_if_markdown, run_trade_study, run_what_if,
     validate_sysml_units, validate_sysml_units_with_lib, BudgetLimits, KgExport,
     ReconcileSeverity, ViewerOptions, ViewerTheme, ViewerView,
 };
@@ -369,6 +370,52 @@ enum Commands {
         #[arg(long)]
         strict: bool,
     },
+
+    /// Expand all `#[sysml::variation]` combinations and compute a Pareto frontier.
+    TradeStudy {
+        /// `.sysml` files to lift and evaluate (uses `--model` when empty).
+        #[arg(long)]
+        files: Vec<PathBuf>,
+
+        /// Built-in model name when `--files` is empty.
+        #[arg(long, default_value = "power-tools-family")]
+        model: String,
+
+        /// Output format (`json` or `markdown`).
+        #[arg(long, value_enum, default_value = "json")]
+        format: LintFormat,
+
+        /// Optional maximum mass [kg].
+        #[arg(long)]
+        max_mass_kg: Option<f64>,
+
+        /// Optional maximum power [W].
+        #[arg(long)]
+        max_power_w: Option<f64>,
+
+        /// Optional maximum BOM cost [USD].
+        #[arg(long)]
+        max_cost_usd: Option<f64>,
+    },
+
+    /// Run a ±delta% Tornado sensitivity sweep ranking which parameters move budgets most.
+    WhatIf {
+        /// `.sysml` files to lift and sweep (uses `--model` when empty).
+        #[arg(long)]
+        files: Vec<PathBuf>,
+
+        /// Built-in model name when `--files` is empty.
+        #[arg(long, default_value = "power-tools-family")]
+        model: String,
+
+        /// Perturbation percentage (±%, default 10.0).
+        #[arg(long, default_value_t = 10.0)]
+        delta_pct: f64,
+
+        /// Output format (`json` or `markdown`).
+        #[arg(long, value_enum, default_value = "json")]
+        format: LintFormat,
+    },
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -651,6 +698,84 @@ fn main() -> ExitCode {
             strict,
             cli.pretty,
         ),
+        Commands::TradeStudy {
+            files,
+            model,
+            format,
+            max_mass_kg,
+            max_power_w,
+            max_cost_usd,
+        } => cmd_trade_study(
+            &files,
+            &model,
+            format,
+            BudgetLimits {
+                max_mass_kg,
+                max_power_w,
+                max_cost_usd,
+                ..Default::default()
+            },
+            cli.pretty,
+        ),
+        Commands::WhatIf {
+            files,
+            model,
+            delta_pct,
+            format,
+        } => cmd_what_if(&files, &model, delta_pct, format, cli.pretty),
+    }
+}
+
+fn cmd_trade_study(
+    files: &[PathBuf],
+    model_name: &str,
+    format: LintFormat,
+    limits: BudgetLimits,
+    pretty: bool,
+) -> ExitCode {
+    let model = match load_files_or_builtin(files, model_name) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let report = run_trade_study(&model, &limits);
+    match format {
+        LintFormat::Markdown => print!("{}", render_trade_study_markdown(&report)),
+        LintFormat::Json => print_json(&report, pretty),
+    }
+    ExitCode::SUCCESS
+}
+
+fn cmd_what_if(
+    files: &[PathBuf],
+    model_name: &str,
+    delta_pct: f64,
+    format: LintFormat,
+    pretty: bool,
+) -> ExitCode {
+    let model = match load_files_or_builtin(files, model_name) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let report = run_what_if(&model, delta_pct, &BudgetLimits::default());
+    match format {
+        LintFormat::Markdown => print!("{}", render_what_if_markdown(&report)),
+        LintFormat::Json => print_json(&report, pretty),
+    }
+    ExitCode::SUCCESS
+}
+
+fn load_files_or_builtin(files: &[PathBuf], model_name: &str) -> Result<sysml_ir::Model, String> {
+    if !files.is_empty() {
+        let units = read_units_with_std(files)?;
+        Ok(lift_sysml_units(&units).model)
+    } else {
+        resolve_builtin_model(model_name)
     }
 }
 
