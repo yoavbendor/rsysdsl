@@ -44,6 +44,14 @@ jobs:
       - name: TBD ratchet against committed baselines
         run: ./scripts/check-tbd-baselines.sh
 
+      - name: Run all registered simulation scenarios (rsysdsl verify --scenario all)
+        run: cargo run -q -p sysml-cli -- verify --scenario all > /dev/null
+
+      - name: Run shallow-first SW/HW & brownfield examples (automotive + PX4 FMUv6X)
+        run: |
+          cargo run -q -p sysml-emit --example automotive_progressive > /dev/null
+          cargo run -q -p sysml-emit --example px4_fmuv6x_brownfield > /dev/null
+
       - name: Build static GitHub Pages showcase
         run: ./scripts/build-pages-site.sh _site
 

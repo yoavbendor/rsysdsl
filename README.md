@@ -101,8 +101,28 @@ rsysdsl roundtrip-check --pretty \
   tests/fixtures/apollo-11-sysml-v2/Technical/TechnicalPortsPackage.sysml \
   tests/fixtures/apollo-11-sysml-v2/Technical/TechnicalComponentsPackage.sysml
 
-# Execute closed-loop Powered Descent verification (nominal + fault injection)
+# Execute closed-loop verification scenarios (Apollo 11, Microwave, Dishwasher, Power Tools)
 rsysdsl verify --scenario all --pretty
+
+# Interactive offline HTML viewer with live simulation trace playback or aspect slicing
+rsysdsl verify --scenario dw-nominal --trace target/dw_trace.json
+rsysdsl view --model dishwasher --trace target/dw_trace.json -o target/dw_sim.html
+rsysdsl view --model dishwasher --aspect safety -o target/dw_safety.html
+
+# Brainstorming Compiler operators (sub-millisecond IR analysis)
+rsysdsl budget --model dishwasher --max-power-w 2200 --format markdown --strict
+rsysdsl trade-study --model power-tools-family --format markdown
+rsysdsl what-if --model power-tools-family --delta-pct 10 --format markdown
+rsysdsl refute --model power-tools-family --max-mass-kg 2.20 --format markdown --strict
+
+# Model Refactoring & Brownfield KG Reconciliation
+rsysdsl elevate --model dishwasher --format markdown
+rsysdsl slice --model dishwasher --aspect thermal -o target/dw_thermal.sysml
+rsysdsl reconcile --kg target/px4_corpus/kg_export.json --model dishwasher --format markdown
+
+# Shallow-first SW/HW execution examples (sub-ms validate_ir + 0-error OMG stdlib)
+cargo run -q -p sysml-emit --example automotive_progressive
+cargo run -q -p sysml-emit --example px4_fmuv6x_brownfield
 
 # Validate any .sysml file with the embedded Open-MBEE sysml-toolkit oracle + OMG stdlib
 rsysdsl validate --stdlib --strict --pretty /tmp/apollo11_model.sysml
