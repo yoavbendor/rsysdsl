@@ -10,15 +10,16 @@ use serde::Serialize;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use sysml_emit::{
     audit_model_with_lib, audit_units_with_lib, build_safety_report, build_trace_matrix,
     build_viewer_snapshot, discover_omg_stdlib, emit_model, iso26262_metadata_package,
-    lint_model, render_lint_markdown, render_safety_report_markdown, render_standalone_html,
-    render_trace_matrix_csv, render_trace_matrix_markdown, validate_sysml_units,
-    validate_sysml_units_with_lib, ViewerOptions, ViewerTheme, ViewerView,
+    lint_model, reconcile_model, render_lint_markdown, render_reconcile_markdown,
+    render_safety_report_markdown, render_standalone_html, render_trace_matrix_csv,
+    render_trace_matrix_markdown, validate_sysml_units, validate_sysml_units_with_lib, KgExport,
+    ReconcileSeverity, ViewerOptions, ViewerTheme, ViewerView,
 };
 mod scaffold;
 
@@ -301,6 +302,33 @@ enum Commands {
         #[arg(long)]
         no_workspace: bool,
     },
+
+    /// Reconcile a SysML v2 model against a cppognee/docmem Knowledge Graph export (`kg_export.json`).
+    Reconcile {
+        /// Path to `kg_export.json` produced by `tools/corpus_kg/`.
+        #[arg(long)]
+        kg: PathBuf,
+
+        /// `.sysml` files to lift and reconcile (uses `--model` when empty).
+        #[arg(long)]
+        files: Vec<PathBuf>,
+
+        /// Built-in model name when `--files` is empty.
+        #[arg(long, default_value = "apollo11-model")]
+        model: String,
+
+        /// Optional corpus directory containing `manifest.json` for stale-document detection.
+        #[arg(long)]
+        corpus_dir: Option<PathBuf>,
+
+        /// Output format (`json` or `markdown`).
+        #[arg(long, value_enum, default_value = "json")]
+        format: LintFormat,
+
+        /// Exit with non-zero code on any error OR warning (alias drift, missing entity, unresolved conflict).
+        #[arg(long)]
+        strict: bool,
+    },
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -543,6 +571,80 @@ fn main() -> ExitCode {
             dir,
             no_workspace,
         } => cmd_new(&name, dir, no_workspace, cli.pretty),
+        Commands::Reconcile {
+            kg,
+            files,
+            model,
+            corpus_dir,
+            format,
+            strict,
+        } => cmd_reconcile(
+            &kg,
+            &files,
+            &model,
+            corpus_dir.as_deref(),
+            format,
+            strict,
+            cli.pretty,
+        ),
+    }
+}
+
+fn cmd_reconcile(
+    kg_path: &Path,
+    files: &[PathBuf],
+    model_name: &str,
+    corpus_dir: Option<&Path>,
+    format: LintFormat,
+    strict: bool,
+    pretty: bool,
+) -> ExitCode {
+    let kg_raw = match fs::read_to_string(kg_path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("error: failed to read KG export '{}': {e}", kg_path.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    let kg: KgExport = match serde_json::from_str(&kg_raw) {
+        Ok(k) => k,
+        Err(e) => {
+            eprintln!("error: invalid KG JSON '{}': {e}", kg_path.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    let model = if !files.is_empty() {
+        let units = match read_units_with_std(files) {
+            Ok(u) => u,
+            Err(e) => {
+                eprintln!("error: {e}");
+                return ExitCode::FAILURE;
+            }
+        };
+        lift_sysml_units(&units).model
+    } else {
+        match resolve_builtin_model(model_name) {
+            Ok(m) => m,
+            Err(e) => {
+                eprintln!("error: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    };
+
+    let report = reconcile_model(&model, &kg, corpus_dir);
+    match format {
+        LintFormat::Markdown => print!("{}", render_reconcile_markdown(&report)),
+        LintFormat::Json => print_json(&report, pretty),
+    }
+    let has_warn = report
+        .findings
+        .iter()
+        .any(|f| f.severity == ReconcileSeverity::Warning);
+    if !report.ok || (strict && has_warn) {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
     }
 }
 
