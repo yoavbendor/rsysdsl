@@ -15,14 +15,14 @@ use std::process::ExitCode;
 
 use sysml_emit::{
     analyze_budgets, audit_model_with_lib, audit_units_with_lib, build_safety_report,
-    build_trace_matrix, build_viewer_snapshot, discover_omg_stdlib, emit_model,
+    build_trace_matrix, build_viewer_snapshot, discover_omg_stdlib, elevate_model, emit_model,
     iso26262_metadata_package, lint_model, reconcile_model, refute_requirements,
-    render_budget_markdown, render_lint_markdown, render_reconcile_markdown,
-    render_refute_markdown, render_safety_report_markdown, render_standalone_html,
-    render_trace_matrix_csv, render_trace_matrix_markdown, render_trade_study_markdown,
-    render_what_if_markdown, run_trade_study, run_what_if, validate_sysml_units,
-    validate_sysml_units_with_lib, BudgetLimits, KgExport, ReconcileSeverity, RefuteLimits,
-    ViewerOptions, ViewerTheme, ViewerView,
+    render_budget_markdown, render_elevate_markdown, render_lint_markdown,
+    render_reconcile_markdown, render_refute_markdown, render_safety_report_markdown,
+    render_standalone_html, render_trace_matrix_csv, render_trace_matrix_markdown,
+    render_trade_study_markdown, render_what_if_markdown, run_trade_study, run_what_if,
+    slice_model, validate_sysml_units, validate_sysml_units_with_lib, BudgetLimits, KgExport,
+    ModelAspect, ReconcileSeverity, RefuteLimits, ViewerOptions, ViewerTheme, ViewerView,
 };
 mod scaffold;
 
@@ -287,6 +287,10 @@ enum Commands {
         #[arg(long)]
         trace: Option<PathBuf>,
 
+        /// Optional domain aspect projection (`thermal`, `power`, `comms`, `safety`, `latency`, `mechanics`, `hmi`).
+        #[arg(long, value_enum)]
+        aspect: Option<CliAspect>,
+
         /// TCP port for `--serve`.
         #[arg(long, default_value_t = 8080)]
         port: u16,
@@ -456,6 +460,65 @@ enum Commands {
         #[arg(long)]
         strict: bool,
     },
+
+    /// Analyze sibling parts for shared structure and propose `#[sysml::part(abstract)]` / `sysml-std` elevations.
+    Elevate {
+        /// `.sysml` files to lift and analyze (uses `--model` when empty).
+        #[arg(long)]
+        files: Vec<PathBuf>,
+
+        /// Built-in model name when `--files` is empty.
+        #[arg(long, default_value = "dishwasher")]
+        model: String,
+
+        /// Output format (`json` or `markdown`).
+        #[arg(long, value_enum, default_value = "json")]
+        format: LintFormat,
+    },
+
+    /// Project a unified multi-domain model onto a single aspect (`thermal`, `power`, `comms`, `safety`, `latency`, `mechanics`, `hmi`) and emit `.sysml`.
+    Slice {
+        /// Domain aspect to project onto.
+        #[arg(long, value_enum)]
+        aspect: CliAspect,
+
+        /// `.sysml` files to lift and slice (uses `--model` when empty).
+        #[arg(long)]
+        files: Vec<PathBuf>,
+
+        /// Built-in model name when `--files` is empty.
+        #[arg(long, default_value = "dishwasher")]
+        model: String,
+
+        /// Optional output `.sysml` file path (prints to stdout when omitted).
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum CliAspect {
+    Thermal,
+    Power,
+    Comms,
+    Safety,
+    Latency,
+    Mechanics,
+    Hmi,
+}
+
+impl From<CliAspect> for ModelAspect {
+    fn from(a: CliAspect) -> Self {
+        match a {
+            CliAspect::Thermal => ModelAspect::Thermal,
+            CliAspect::Power => ModelAspect::Power,
+            CliAspect::Comms => ModelAspect::Comms,
+            CliAspect::Safety => ModelAspect::Safety,
+            CliAspect::Latency => ModelAspect::Latency,
+            CliAspect::Mechanics => ModelAspect::Mechanics,
+            CliAspect::Hmi => ModelAspect::Hmi,
+        }
+    }
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -679,6 +742,7 @@ fn main() -> ExitCode {
             json_snapshot,
             serve,
             trace,
+            aspect,
             port,
         } => cmd_view(
             &files,
@@ -690,6 +754,7 @@ fn main() -> ExitCode {
             json_snapshot,
             serve,
             trace,
+            aspect.map(Into::into),
             port,
             cli.pretty,
         ),
@@ -787,7 +852,76 @@ fn main() -> ExitCode {
             strict,
             cli.pretty,
         ),
+        Commands::Elevate {
+            files,
+            model,
+            format,
+        } => cmd_elevate(&files, &model, format, cli.pretty),
+        Commands::Slice {
+            aspect,
+            files,
+            model,
+            output,
+        } => cmd_slice(aspect.into(), &files, &model, output),
     }
+}
+
+fn cmd_elevate(
+    files: &[PathBuf],
+    model_name: &str,
+    format: LintFormat,
+    pretty: bool,
+) -> ExitCode {
+    let model = match load_files_or_builtin(files, model_name) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let report = elevate_model(&model);
+    match format {
+        LintFormat::Markdown => print!("{}", render_elevate_markdown(&report)),
+        LintFormat::Json => print_json(&report, pretty),
+    }
+    ExitCode::SUCCESS
+}
+
+fn cmd_slice(
+    aspect: ModelAspect,
+    files: &[PathBuf],
+    model_name: &str,
+    output: Option<PathBuf>,
+) -> ExitCode {
+    let model = match load_files_or_builtin(files, model_name) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let sliced = slice_model(&model, aspect);
+    let sysml = emit_model(&sliced);
+    if let Some(out) = output {
+        if let Some(parent) = out.parent() {
+            if !parent.as_os_str().is_empty() {
+                let _ = fs::create_dir_all(parent);
+            }
+        }
+        if let Err(e) = fs::write(&out, &sysml) {
+            eprintln!("error: failed to write '{}': {e}", out.display());
+            return ExitCode::FAILURE;
+        }
+        eprintln!(
+            "wrote {} ({} bytes, aspect={})",
+            out.display(),
+            sysml.len(),
+            aspect.as_str()
+        );
+    } else {
+        print!("{sysml}");
+    }
+    ExitCode::SUCCESS
 }
 
 fn cmd_refute(
@@ -978,10 +1112,11 @@ fn cmd_view(
     json_snapshot: bool,
     serve: bool,
     trace_path: Option<PathBuf>,
+    aspect: Option<ModelAspect>,
     port: u16,
     pretty: bool,
 ) -> ExitCode {
-    let (default_title, default_out, model) = if !files.is_empty() {
+    let (default_title, default_out, raw_model) = if !files.is_empty() {
         let units = match read_units_with_std(files) {
             Ok(u) => u,
             Err(e) => {
@@ -1026,6 +1161,10 @@ fn cmd_view(
         };
         let default_out = PathBuf::from(format!("{model_name}.html"));
         (model_name.to_string(), default_out, model)
+    };
+    let model = match aspect {
+        Some(a) => slice_model(&raw_model, a),
+        None => raw_model,
     };
 
     let title = title_override.unwrap_or(default_title);
