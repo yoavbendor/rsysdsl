@@ -78,7 +78,8 @@ for pdf_path in sorted(out_dir.rglob("*.pdf")):
     reader = PdfReader(str(pdf_path))
     pages = []
     for i, page in enumerate(reader.pages, 1):
-        txt = page.extract_text() or ""
+        # layout mode keeps table rows on one line (plain mode drops cells, e.g. DS-010 p.6 "CAN 2 2 1 3" -> "CAN")
+        txt = page.extract_text(extraction_mode="layout") or ""
         pages.append(f"--- PAGE {i} ---\n{txt}")
     txt_path = pdf_path.with_suffix(".txt")
     txt_path.write_text("\n\n".join(pages), encoding="utf-8")
