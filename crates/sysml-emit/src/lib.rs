@@ -26,7 +26,7 @@ pub mod viewer;
 #[cfg(feature = "validate")]
 pub use audit::{
     apply_maturity, audit_model, audit_model_with_lib, audit_model_with_stdlib,
-    audit_units_with_lib, AuditFinding, AuditReport,
+    audit_units_with_lib, evaluate_requirements, AuditFinding, AuditReport, RequirementEvaluation,
 };
 pub use budget::{
     analyze_budgets, render_budget_markdown, BudgetLimits, BudgetReport, BudgetStatus,

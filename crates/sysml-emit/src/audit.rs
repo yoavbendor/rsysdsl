@@ -61,6 +61,51 @@ pub struct AuditReport {
     /// TBDs due at or before `maturity` (`resolve_by <= maturity`); fail the audit in `--strict`.
     #[serde(default)]
     pub overdue_tbds: Vec<TbdEntry>,
+    /// C2.1: every requirement with `require constraint`s, evaluated by the IR expression
+    /// evaluator (`expr_eval`) on the requirement's own attribute values: `pass` / `fail` when
+    /// every operand has a value, `unknown` (with reasons) when an operand is a TBD, unmeasured
+    /// evidence or has no value, `error` for a dimension mismatch, unresolved reference or
+    /// parse failure. Informational: it does not change `ok` (gating comes later).
+    #[serde(default)]
+    pub requirement_evaluations: Vec<RequirementEvaluation>,
+}
+
+/// IR evaluation of one requirement's constraints (see [`AuditReport::requirement_evaluations`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RequirementEvaluation {
+    /// `"<id> (<name>)"`, as in the other requirement lists.
+    pub requirement: String,
+    pub verdict: crate::expr_eval::Verdict,
+    pub constraints: Vec<crate::expr_eval::ConstraintOutcome>,
+}
+
+/// Evaluate every requirement definition's `require constraint`s on its own values.
+pub fn evaluate_requirements(model: &Model) -> Vec<RequirementEvaluation> {
+    use crate::expr_eval::{combine, evaluate_constraint, Evaluator, RequirementScope};
+    let mut req_defs: BTreeMap<String, &RequirementDef> = BTreeMap::new();
+    let (mut sat, mut calcs) = (BTreeSet::new(), 0usize);
+    for pkg in &model.packages {
+        collect_pkg(pkg, &mut req_defs, &mut sat, &mut calcs);
+    }
+    let ev = Evaluator::new(model);
+    req_defs
+        .iter()
+        .filter(|(_, r)| !r.require_constraints.is_empty())
+        .map(|(name, r)| {
+            let scope = RequirementScope::new(model, r);
+            let constraints: Vec<_> = r
+                .require_constraints
+                .iter()
+                .map(|c| evaluate_constraint(&ev, c, &scope))
+                .collect();
+            let id = r.short_name.as_deref().unwrap_or(name.as_str());
+            RequirementEvaluation {
+                requirement: format!("{id} ({name})"),
+                verdict: combine(&constraints),
+                constraints,
+            }
+        })
+        .collect()
 }
 
 fn default_maturity() -> TbdPhase {
@@ -285,6 +330,7 @@ fn build_audit_report(
         tbd_ledger,
         maturity: TbdPhase::Concept,
         overdue_tbds: Vec::new(),
+        requirement_evaluations: evaluate_requirements(model),
     };
     apply_maturity(&mut report, TbdPhase::Concept, strict);
     report
@@ -347,4 +393,85 @@ fn simple_name(raw: &str) -> String {
         .trim()
         .trim_matches('\'')
         .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::expr_eval::Verdict;
+    use sysml_ir::{AttributeUsage, PackageMember};
+
+    fn attr(name: &str, value: Option<&str>, unit: &str, evidence: bool) -> AttributeUsage {
+        AttributeUsage {
+            name: Some(name.into()),
+            value: value.map(String::from),
+            unit: Some(unit.into()),
+            is_evidence: evidence,
+            ..Default::default()
+        }
+    }
+
+    fn req(name: &str, attributes: Vec<AttributeUsage>, constraint: &str) -> PackageMember {
+        PackageMember::RequirementDef(RequirementDef {
+            name: name.into(),
+            short_name: Some(format!("{name}-ID")),
+            attributes,
+            require_constraints: vec![constraint.into()],
+            ..Default::default()
+        })
+    }
+
+    /// C2.1: requirement constraints are evaluated and reported per requirement, without
+    /// changing the audit's pass/fail gating.
+    #[test]
+    fn audit_reports_requirement_evaluations_without_gating() {
+        let model = Model::new(vec![Package {
+            name: "Reqs".into(),
+            members: vec![
+                req(
+                    "Fits",
+                    vec![attr("limit", Some("100.0"), "W", false), attr("draw", Some("80.0"), "W", false)],
+                    "draw <= limit",
+                ),
+                req(
+                    "Exceeds",
+                    vec![attr("limit", Some("100.0"), "W", false), attr("draw", Some("120.0"), "W", false)],
+                    "draw <= limit",
+                ),
+                req(
+                    "Unmeasured",
+                    vec![attr("limit", Some("100.0"), "W", false), attr("draw", None, "W", true)],
+                    "draw <= limit",
+                ),
+                req(
+                    "Mismatched",
+                    vec![attr("limit", Some("100.0"), "W", false), attr("time", Some("2.0"), "s", false)],
+                    "time <= limit",
+                ),
+            ],
+            ..Default::default()
+        }]);
+        let evals = evaluate_requirements(&model);
+        let verdict = |n: &str| {
+            evals
+                .iter()
+                .find(|e| e.requirement == format!("{n}-ID ({n})"))
+                .map(|e| e.verdict)
+        };
+        assert_eq!(verdict("Fits"), Some(Verdict::Pass));
+        assert_eq!(verdict("Exceeds"), Some(Verdict::Fail));
+        assert_eq!(verdict("Unmeasured"), Some(Verdict::Unknown));
+        assert_eq!(verdict("Mismatched"), Some(Verdict::Error));
+        let unmeasured = evals.iter().find(|e| e.requirement.contains("Unmeasured")).unwrap();
+        assert!(unmeasured.constraints[0].reasons[0].contains("evidence"));
+
+        let report = audit_model("reqs", &model, None);
+        assert_eq!(report.requirement_evaluations, evals);
+        // Gating unchanged: the failing requirement is reported, not (yet) an audit error.
+        // (The only findings on it are the orphan check's: none of these has a `satisfy`.)
+        assert!(!report
+            .findings
+            .iter()
+            .any(|f| f.element.contains("Exceeds") && f.rule != "orphan-requirement"));
+    }
 }

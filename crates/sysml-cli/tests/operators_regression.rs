@@ -319,3 +319,29 @@ fn budget_ventilation_two_identical_fans_total_twice() {
     assert_eq!(val["power"]["total"].as_f64(), Some(340.0), "{}", pretty(&val));
     assert_eq!(val["power"]["status"], "fail", "{}", pretty(&val));
 }
+
+// (j) C2.1: `audit` reports each requirement's constraint evaluated on the IR: trial-3
+// requirements compare unmeasured evidence (or a TBD limit) -> `unknown` with the reason,
+// never a guessed pass; the dishwasher's requirements all evaluate to `pass`.
+#[test]
+fn audit_reports_three_valued_requirement_evaluations() {
+    let fixture = fixture_path("ventilation_r1.sysml");
+    let (_code, val, _stderr) = run_json(&["audit", "--files", fixture.to_str().unwrap()]);
+    let evals = val["requirement_evaluations"].as_array().expect("requirement_evaluations");
+    assert_eq!(evals.len(), 4, "{}", pretty(&val["requirement_evaluations"]));
+    for e in evals {
+        assert_eq!(e["verdict"], "unknown", "{}", pretty(e));
+        let reasons = e["constraints"][0]["reasons"].to_string();
+        assert!(reasons.contains("evidence without a value"), "{}", pretty(e));
+    }
+    let hrv3 = evals
+        .iter()
+        .find(|e| e["requirement"].as_str().unwrap().starts_with("HRV-3"))
+        .unwrap();
+    assert!(hrv3["constraints"][0]["reasons"].to_string().contains("tbd_value"));
+
+    let (_code, val, _stderr) = run_json(&["audit", "--model", "dishwasher"]);
+    let evals = val["requirement_evaluations"].as_array().unwrap();
+    assert_eq!(evals.len(), 4);
+    assert!(evals.iter().all(|e| e["verdict"] == "pass"), "{}", pretty(&val["requirement_evaluations"]));
+}

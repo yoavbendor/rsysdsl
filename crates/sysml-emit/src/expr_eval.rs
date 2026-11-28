@@ -1337,7 +1337,7 @@ pub enum Verdict {
 }
 
 /// Outcome of evaluating one constraint string.
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ConstraintOutcome {
     pub constraint: String,
     pub verdict: Verdict,
