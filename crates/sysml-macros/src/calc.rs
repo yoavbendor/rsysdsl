@@ -307,6 +307,30 @@ fn expand_calc_fn(args: TokenStream, mut func: ItemFn) -> syn::Result<TokenStrea
     });
 
     crate::tbd::reject_tbd(&func.attrs, "calc")?;
+    let probe_impl = if calc_probe_supported(&func) {
+        let arity = func.sig.inputs.len();
+        let args = (0..arity).map(|i| quote!(a[#i] as _));
+        let marker_ident = format_ident!("__sysml_calc_marker_{}", fn_ident);
+        quote! {
+            #rcfg
+            impl #marker_ident {
+                /// IR-agreement probe (tests only): call the compiled calc with `f64` arguments.
+                #[doc(hidden)]
+                pub fn __sysml_calc_probe() -> ::sysml_dsl::ir::CalcProbe {
+                    fn __eval(a: &[f64]) -> f64 {
+                        #fn_ident(#(#args),*) as f64
+                    }
+                    ::sysml_dsl::ir::CalcProbe {
+                        name: #sysml_name,
+                        arity: #arity,
+                        eval: __eval,
+                    }
+                }
+            }
+        }
+    } else {
+        quote!()
+    };
     func.attrs = strip_sysml_attrs(std::mem::take(&mut func.attrs));
     let marker_ident = format_ident!("__sysml_calc_marker_{}", fn_ident);
     let doc_tok = quote_opt_str(&doc);
@@ -317,6 +341,8 @@ fn expand_calc_fn(args: TokenStream, mut func: ItemFn) -> syn::Result<TokenStrea
         #[doc(hidden)]
         #[allow(non_camel_case_types)]
         pub struct #marker_ident;
+
+        #probe_impl
 
         impl ::sysml_dsl::core_contracts::SysmlCalcCore for #marker_ident {
             const SYSML_NAME: &'static str = #sysml_name;
@@ -343,4 +369,28 @@ fn expand_calc_fn(args: TokenStream, mut func: ItemFn) -> syn::Result<TokenStrea
             #(#callee_checks)*
         };
     })
+}
+
+/// `true` when every parameter and the return type of a `#[sysml::calc] fn` is a plain
+/// numeric scalar, so the expansion generates `__sysml_calc_probe` (`f64` in, `f64` out).
+pub fn calc_probe_supported(func: &ItemFn) -> bool {
+    fn numeric(ty: &syn::Type) -> bool {
+        match ty {
+            syn::Type::Path(tp) => tp.path.segments.len() == 1
+                && matches!(
+                    tp.path.segments[0].ident.to_string().as_str(),
+                    "f64" | "f32" | "i64" | "i32" | "u64" | "u32" | "usize"
+                ),
+            _ => false,
+        }
+    }
+    let params_ok = func.sig.inputs.iter().all(|a| match a {
+        FnArg::Typed(pt) => numeric(&pt.ty),
+        FnArg::Receiver(_) => false,
+    });
+    let ret_ok = match &func.sig.output {
+        ReturnType::Type(_, ty) => numeric(ty),
+        ReturnType::Default => false,
+    };
+    params_ok && ret_ok && func.sig.generics.params.is_empty()
 }

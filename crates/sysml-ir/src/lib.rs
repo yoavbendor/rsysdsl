@@ -8,12 +8,14 @@
 //! - `sysml-cli` (agent-native CLI tooling)
 
 pub mod ir;
+pub mod probe;
 pub mod quantity;
 pub mod swhw;
 pub mod traits;
 pub mod verify;
 
 pub use ir::*;
+pub use probe::{CalcProbe, CompiledProbes, RequirementProbe};
 pub use quantity::Quantity;
 pub use swhw::{
     BusChannel, BusFaultMode, ComputeNode, SwAllocation, SwConnection, SwHwSystem, SwPartition,

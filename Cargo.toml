@@ -53,6 +53,10 @@ dishwasher = { path = "examples/dishwasher" }
 dishwasher-sim = { path = "examples/dishwasher_sim" }
 power-tools-family = { path = "examples/power_tools_family" }
 power-tools-family-sim = { path = "examples/power_tools_family_sim" }
+bicycle = { path = "examples/bicycle" }
+earth-water-cycle = { path = "examples/earth_water_cycle" }
+solar-system = { path = "examples/solar_system" }
+starter-model = { path = "examples/starter_model" }
 
 # Primary SysML v2 parser & validation oracle (vendored from Open-MBEE/sysml-toolkit rev c8d256b
 # so Cargo never downloads the 2.1 GB upstream SysML-v2-Release git submodule)

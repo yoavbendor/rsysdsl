@@ -24,5 +24,5 @@ pub use traits::{
     const_str_eq, Conjugated, EvaluableRequirement, NoInterfaceEnds, NoStdTransitionError, Performs, StepOutcome,
     PortConnectable, Satisfies, Specializes, SymmetricPort, SysmlActionCore, SysmlCalcCore,
     SysmlEnumCore, SysmlInterfaceCore, SysmlItemCore, SysmlPartCore, SysmlPortCore,
-    SysmlRequirementCore, SysmlStateCore, ToScalar, Verifies,
+    SysmlRequirementCore, SysmlStateCore, SetScalar, ToScalar, Verifies,
 };

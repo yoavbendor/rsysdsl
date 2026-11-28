@@ -8,6 +8,7 @@ pub mod emit;
 pub mod emit_cli;
 pub mod roles;
 pub mod evidence;
+pub mod expr_eval;
 pub mod ir_validate;
 pub mod lint;
 pub mod reconcile;

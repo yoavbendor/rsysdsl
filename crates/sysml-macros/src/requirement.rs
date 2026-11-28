@@ -40,6 +40,8 @@ pub fn expand_requirement(args: TokenStream, mut item: ItemStruct) -> syn::Resul
     let mut unit_map: BTreeMap<String, String> = BTreeMap::new();
     // Rust field idents marked `#[sysml::attr(..., evidence)]`
     let mut evidence_field_idents: Vec<syn::Ident> = Vec::new();
+    // (Rust field ident, SysML name) of scalar fields the IR-agreement probe can assign.
+    let mut probe_fields: Vec<(syn::Ident, String)> = Vec::new();
     if let Fields::Named(fields) = &item.fields {
         for field in &fields.named {
             let fname_ident = field.ident.as_ref().unwrap();
@@ -59,6 +61,9 @@ pub fn expand_requirement(args: TokenStream, mut item: ItemStruct) -> syn::Resul
                 .or_else(|| fkv.get_str("name"))
                 .unwrap_or_else(|| snake_to_camel(&fname_rust));
             unit_map.insert(fname_rust.clone(), crate::units_check::checked_unit(&fkv));
+            if is_settable_scalar(&field.ty) {
+                probe_fields.push((fname_ident.clone(), fname_sysml.clone()));
+            }
             field_map.insert(fname_rust, fname_sysml);
         }
     }
@@ -67,6 +72,7 @@ pub fn expand_requirement(args: TokenStream, mut item: ItemStruct) -> syn::Resul
     let mut rationale: Option<String> = kv.get_str("rationale");
     let mut require_constraints = Vec::new();
     let mut require_eval_exprs: Vec<TokenStream> = Vec::new();
+    let mut compiled_constraints: Vec<String> = Vec::new();
     let mut assume_constraints = Vec::new();
     let mut subject: Option<(String, String)> = None;
     let mut subject_check = quote!();
@@ -129,6 +135,7 @@ pub fn expand_requirement(args: TokenStream, mut item: ItemStruct) -> syn::Resul
                 let ctx = ExprContext::Requirement { fields: &field_map };
                 let transpiled = transpile_expr(&expr, &ctx)?;
                 check_requirement_dims(&expr, &unit_map)?;
+                compiled_constraints.push(transpiled.sysml.clone());
                 require_constraints.push(transpiled.sysml);
                 require_eval_exprs.push(transpiled.rust);
             }
@@ -196,8 +203,35 @@ pub fn expand_requirement(args: TokenStream, mut item: ItemStruct) -> syn::Resul
         })
         .collect();
 
+    let probe_sets = probe_fields.iter().map(|(fid, sname)| {
+        quote! {
+            if let ::core::option::Option::Some(v) = lookup(#sname) {
+                ::sysml_dsl::core_contracts::SetScalar::set_scalar(&mut __s.#fid, v);
+            }
+        }
+    });
     let eval_impl = if !require_eval_exprs.is_empty() {
         quote! {
+            #rcfg
+            impl #ident {
+                /// IR-agreement probe (tests only): evaluate the compiled constraints on
+                /// attribute values chosen by SysML name.
+                #[doc(hidden)]
+                pub fn __sysml_requirement_probe() -> ::sysml_dsl::ir::RequirementProbe {
+                    fn __eval(lookup: &dyn Fn(&str) -> ::core::option::Option<f64>) -> bool {
+                        #[allow(unused_mut)]
+                        let mut __s: #ident = ::core::default::Default::default();
+                        #(#probe_sets)*
+                        ::sysml_dsl::core_contracts::EvaluableRequirement::evaluate(&__s)
+                    }
+                    ::sysml_dsl::ir::RequirementProbe {
+                        name: #sysml_name,
+                        constraints: &[#(#compiled_constraints),*],
+                        eval: __eval,
+                    }
+                }
+            }
+
             impl ::sysml_dsl::core_contracts::EvaluableRequirement for #ident {
                 fn evaluate(&self) -> bool {
                     true #(&& (#require_eval_exprs))*
@@ -542,4 +576,29 @@ fn lower_first(s: &str) -> String {
         None => String::new(),
         Some(first) => first.to_ascii_lowercase().to_string() + chars.as_str(),
     }
+}
+
+/// Field types the IR-agreement probe can assign through `SetScalar`.
+fn is_settable_scalar(ty: &syn::Type) -> bool {
+    match ty {
+        syn::Type::Path(tp) => tp.path.segments.last().is_some_and(|seg| {
+            matches!(
+                seg.ident.to_string().as_str(),
+                "f64" | "f32" | "i64" | "i32" | "u64" | "u32" | "usize" | "bool" | "Quantity"
+            )
+        }),
+        _ => false,
+    }
+}
+
+/// `true` when `#[sysml::requirement]` attributes carry at least one compiled (non-string)
+/// `#[sysml::require_constraint]`, i.e. the expansion generates `__sysml_requirement_probe`.
+pub fn has_compiled_constraint(attrs: &[syn::Attribute]) -> bool {
+    attrs.iter().any(|a| {
+        is_sysml_attr(a, "require_constraint")
+            && !matches!(
+                a.parse_args::<Expr>(),
+                Ok(Expr::Lit(ExprLit { lit: Lit::Str(_), .. })) | Err(_)
+            )
+    })
 }

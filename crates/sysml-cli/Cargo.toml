@@ -31,3 +31,7 @@ serde_json = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+bicycle = { workspace = true }
+earth-water-cycle = { workspace = true }
+solar-system = { workspace = true }
+starter-model = { workspace = true }

@@ -74,6 +74,7 @@ pub fn expand_package(args: TokenStream, mut item: ItemMod) -> syn::Result<Token
     }
 
     let mut member_tokens = Vec::new();
+    let mut probe_tokens: Vec<TokenStream> = Vec::new();
     if let Some((_, ref mut items)) = item.content {
         for sub in items.iter_mut() {
             match sub {
@@ -136,6 +137,11 @@ pub fn expand_package(args: TokenStream, mut item: ItemMod) -> syn::Result<Token
                             ::sysml_dsl::ir::PackageMember::StateDef(<#id as ::sysml_dsl::ir::SysmlState>::state_def())
                         });
                     } else if s.attrs.iter().any(|a| is_sysml_attr(a, "requirement")) {
+                        if crate::requirement::has_compiled_constraint(&s.attrs) {
+                            probe_tokens.push(quote! {
+                                __probes.requirements.push(#id::__sysml_requirement_probe());
+                            });
+                        }
                         member_tokens.push(quote! {
                             ::sysml_dsl::ir::PackageMember::RequirementDef(<#id as ::sysml_dsl::ir::SysmlRequirement>::requirement_def())
                         });
@@ -189,6 +195,9 @@ pub fn expand_package(args: TokenStream, mut item: ItemMod) -> syn::Result<Token
                 Item::Mod(m) => {
                     let id = &m.ident;
                     if m.attrs.iter().any(|a| is_sysml_attr(a, "package")) {
+                        probe_tokens.push(quote! {
+                            __probes.extend(#id::sysml_compiled_probes());
+                        });
                         member_tokens.push(quote! {
                             ::sysml_dsl::ir::PackageMember::Package(#id::sysml_package())
                         });
@@ -205,6 +214,11 @@ pub fn expand_package(args: TokenStream, mut item: ItemMod) -> syn::Result<Token
                             f.attrs.push(syn::parse_quote!(#[sysml::no_std_reflect]));
                         }
                         let marker = format_ident!("__sysml_calc_marker_{}", f.sig.ident);
+                        if crate::calc::calc_probe_supported(f) {
+                            probe_tokens.push(quote! {
+                                __probes.calcs.push(#marker::__sysml_calc_probe());
+                            });
+                        }
                         member_tokens.push(quote! {
                             ::sysml_dsl::ir::PackageMember::CalcDef(<#marker as ::sysml_dsl::ir::SysmlCalc>::calc_def())
                         });
@@ -246,6 +260,19 @@ pub fn expand_package(args: TokenStream, mut item: ItemMod) -> syn::Result<Token
             }
         })?;
         items.push(builder_fn);
+        let probes_fn: Item = syn::parse2(quote! {
+            /// Compiled-code probes of this package's requirements and calcs (IR-agreement
+            /// tests only; see `sysml_ir::probe`).
+            #[doc(hidden)]
+            #rcfg
+            pub fn sysml_compiled_probes() -> ::sysml_dsl::ir::CompiledProbes {
+                #[allow(unused_mut)]
+                let mut __probes = ::sysml_dsl::ir::CompiledProbes::default();
+                #(#probe_tokens)*
+                __probes
+            }
+        })?;
+        items.push(probes_fn);
     }
 
     item.attrs = strip_sysml_attrs(std::mem::take(&mut item.attrs));

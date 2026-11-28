@@ -263,6 +263,39 @@ impl<T: Copy + ToScalar> ToScalar for &T {
     }
 }
 
+/// Assign a scalar field from an `f64` (the inverse of [`ToScalar`]). Used by the generated
+/// IR-agreement probes (`__sysml_requirement_probe`) that let tests evaluate a compiled
+/// requirement on chosen attribute values; integer fields truncate, `bool` is `v != 0`.
+pub trait SetScalar {
+    fn set_scalar(&mut self, v: f64);
+}
+
+macro_rules! set_scalar_as {
+    ($($t:ty),*) => {$(
+        impl SetScalar for $t {
+            #[inline]
+            fn set_scalar(&mut self, v: f64) {
+                *self = v as $t;
+            }
+        }
+    )*};
+}
+set_scalar_as!(f64, f32, i64, i32, u64, u32, usize);
+
+impl SetScalar for bool {
+    #[inline]
+    fn set_scalar(&mut self, v: f64) {
+        *self = v != 0.0;
+    }
+}
+
+impl SetScalar for Quantity<f64> {
+    #[inline]
+    fn set_scalar(&mut self, v: f64) {
+        self.value = v;
+    }
+}
+
 /// `const`-evaluable string equality check used by `#[sysml::satisfy(..., id = "...")]`.
 pub const fn const_str_eq(a: &str, b: &str) -> bool {
     let a = a.as_bytes();
