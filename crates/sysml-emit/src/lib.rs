@@ -3,6 +3,7 @@
 
 #[cfg(feature = "validate")]
 pub mod audit;
+pub mod budget;
 pub mod emit;
 pub mod emit_cli;
 pub mod evidence;
@@ -21,6 +22,10 @@ pub mod viewer;
 pub use audit::{
     apply_maturity, audit_model, audit_model_with_lib, audit_model_with_stdlib,
     audit_units_with_lib, AuditFinding, AuditReport,
+};
+pub use budget::{
+    analyze_budgets, render_budget_markdown, BudgetLimits, BudgetReport, DomainRollup, HotSpot,
+    TimingBudget,
 };
 pub use emit_cli::{emit_model_split_std, is_sysml_std_package};
 pub use emit::{
