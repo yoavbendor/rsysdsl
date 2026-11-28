@@ -1008,3 +1008,224 @@ fn cli_tbd_ratchet_catches_added_tbds() {
     let val: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(val["resolved_entries"].as_array().unwrap().len(), 1);
 }
+
+#[test]
+fn cli_elevate_slice_and_view_aspect_work_end_to_end() {
+    // 1. rsysdsl elevate on dishwasher detects shared shapes (e.g. SensorBase)
+    let out = Command::new(bin_path())
+        .args(["elevate", "--model", "dishwasher", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    let elev: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(elev["proposal_count"].as_u64().unwrap() >= 1);
+
+    // 2. rsysdsl slice --aspect thermal emits valid trimmed SysML
+    let out = Command::new(bin_path())
+        .args(["slice", "--model", "dishwasher", "--aspect", "thermal"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    let sliced_sysml = String::from_utf8_lossy(&out.stdout);
+    assert!(sliced_sysml.contains("WashHeater"));
+
+    // 3. rsysdsl view --aspect safety reduces relationship count vs full dishwasher view
+    let dir = std::env::temp_dir().join(format!("rsysdsl_aspect_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let full_html = dir.join("full.html");
+    let safe_html = dir.join("safety.html");
+
+    let o_full = Command::new(bin_path())
+        .args(["view", "--model", "dishwasher", "-o", full_html.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(o_full.status.success());
+    let v_full: serde_json::Value = serde_json::from_slice(&o_full.stdout).unwrap();
+
+    let o_safe = Command::new(bin_path())
+        .args([
+            "view",
+            "--model",
+            "dishwasher",
+            "--aspect",
+            "safety",
+            "-o",
+            safe_html.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(o_safe.status.success());
+    let v_safe: serde_json::Value = serde_json::from_slice(&o_safe.stdout).unwrap();
+    assert!(
+        v_safe["relationships"].as_u64().unwrap() < v_full["relationships"].as_u64().unwrap(),
+        "safety slice should have fewer relationships than full model"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn cli_refute_trade_study_what_if_and_budget_end_to_end() {
+    // 1. rsysdsl refute: impossible mass <= 2.20 kg + TOOL-001 runtime >= 300s -> UNSAT (exit 1 under --strict)
+    let out = Command::new(bin_path())
+        .args([
+            "refute",
+            "--model",
+            "power-tools-family",
+            "--max-mass-kg",
+            "2.20",
+            "--format",
+            "json",
+            "--strict",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let ref_unsat: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(ref_unsat["feasible"], false);
+    assert_eq!(ref_unsat["minimal_unsat_core"].as_array().unwrap().len(), 2);
+    assert!(!ref_unsat["relaxations"].as_array().unwrap().is_empty());
+
+    // Relaxing mass to 2.50 kg -> SAT (exit 0 under --strict)
+    let out = Command::new(bin_path())
+        .args([
+            "refute",
+            "--model",
+            "power-tools-family",
+            "--max-mass-kg",
+            "2.50",
+            "--format",
+            "json",
+            "--strict",
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let ref_sat: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(ref_sat["feasible"], true);
+
+    // 2. rsysdsl trade-study: 2 variations -> 6 combinations, 2 feasible, 2 Pareto
+    let out = Command::new(bin_path())
+        .args(["trade-study", "--model", "power-tools-family", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let ts: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(ts["total_combinations"], 6);
+    assert_eq!(ts["feasible_count"], 2);
+    assert_eq!(ts["pareto_count"], 2);
+
+    // 3. rsysdsl what-if: Tornado sensitivity sweep
+    let out = Command::new(bin_path())
+        .args(["what-if", "--model", "power-tools-family", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let wi: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(wi["parameters_evaluated"].as_u64().unwrap() > 10);
+    assert!(!wi["top_drivers"].as_array().unwrap().is_empty());
+
+    // 4. rsysdsl budget: cross-domain rollups & --strict limit enforcement
+    let out = Command::new(bin_path())
+        .args([
+            "budget",
+            "--model",
+            "dishwasher",
+            "--max-power-w",
+            "1000",
+            "--format",
+            "json",
+            "--strict",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let bud: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(bud["ok"], false);
+    assert!(bud["power"]["total"].as_f64().unwrap() > 1000.0);
+    assert!(bud["waste_heat"]["total"].as_f64().unwrap() > 0.0);
+}
+
+#[test]
+fn cli_reconcile_and_sim_trace_playback_end_to_end() {
+    let dir = std::env::temp_dir().join(format!("rsysdsl_rec_sim_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+
+    // 1. rsysdsl reconcile against a synthetic KG export
+    let kg_path = dir.join("kg.json");
+    let kg_json = serde_json::json!({
+        "engine": "docmem-test",
+        "entities": {
+            "WashHeater": {
+                "docs_covered": ["spec.md"],
+                "doc_count": 1,
+                "aliases_observed": {"HeaterElement": 2},
+                "total_passage_hits": 2
+            },
+            "MissingTelemetryGateway": {
+                "docs_covered": ["icd.md"],
+                "doc_count": 1,
+                "aliases_observed": {},
+                "total_passage_hits": 1
+            }
+        },
+        "conflicts_and_gaps": [{
+            "id": "CONFLICT-99",
+            "kind": "value_conflict",
+            "summary": "Spec A says 1800 W, Spec B says 2000 W",
+            "source": "spec.md"
+        }]
+    });
+    std::fs::write(&kg_path, serde_json::to_string_pretty(&kg_json).unwrap()).unwrap();
+
+    let out = Command::new(bin_path())
+        .args([
+            "reconcile",
+            "--kg",
+            kg_path.to_str().unwrap(),
+            "--model",
+            "dishwasher",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    let rec: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(rec["summary"]["matched_entities"], 1);
+    assert_eq!(rec["summary"]["missing_entities"], 1);
+    assert_eq!(rec["summary"]["unresolved_conflicts"], 1);
+
+    // 2. rsysdsl verify --scenario dw-nominal --trace -> rsysdsl view --trace
+    let trace_path = dir.join("dw_trace.json");
+    let html_path = dir.join("dw_sim.html");
+    let v_out = Command::new(bin_path())
+        .args([
+            "verify",
+            "--scenario",
+            "dw-nominal",
+            "--trace",
+            trace_path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(v_out.status.success(), "stderr: {}", String::from_utf8_lossy(&v_out.stderr));
+
+    let view_out = Command::new(bin_path())
+        .args([
+            "view",
+            "--model",
+            "dishwasher",
+            "--trace",
+            trace_path.to_str().unwrap(),
+            "-o",
+            html_path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(view_out.status.success());
+    let html = std::fs::read_to_string(&html_path).unwrap();
+    assert!(html.contains("window.__RSYSDSL_TRACE__"));
+    assert!(html.contains("rsysdsl-trace-drawer"));
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

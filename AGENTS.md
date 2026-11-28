@@ -144,3 +144,28 @@ Keep your context small — only read these files when you need copy-pasteable t
 - **Compiler & Open-MBEE error -> 1-line fix + SI unit table:** [`.agents/skills/rsysdsl-modeling/references/ERRORS.md`](.agents/skills/rsysdsl-modeling/references/ERRORS.md)
 - **Universal Standard Library:** [`crates/sysml-std/`](crates/sysml-std/)
 - **Working reference examples:** [`examples/starter_model/`](examples/starter_model/), [`examples/solar_system/`](examples/solar_system/), [`examples/earth_water_cycle/`](examples/earth_water_cycle/), [`examples/bicycle/`](examples/bicycle/), [`examples/power_tools_family/`](examples/power_tools_family/), [`examples/dishwasher/`](examples/dishwasher/), [`examples/microwave/`](examples/microwave/), [`examples/apollo11_model/`](examples/apollo11_model/), [`examples/embedded_flight_controller/`](examples/embedded_flight_controller/)
+
+---
+
+## 7. Brainstorming Compiler, SW/HW & Brownfield Operators (Newest -> Oldest)
+
+Use these sub-millisecond IR operators during concept exploration, brownfield ingestion, and design reviews (all support `--format json|markdown` and `--files <sysml>` or `--model <builtin>`):
+
+1. **Refactor & Viewpoint Projection (`elevate`, `slice`, `view --aspect`) — Phase C1:**
+   - `rsysdsl elevate --model dishwasher --format markdown`: finds sibling parts sharing ≥ 2 attributes/ports, matches `sysml-std` abstract bases, and prints ready-to-paste `#[sysml::part(abstract)]` + `#[sysml::specializes(...)]` Rust skeletons.
+   - `rsysdsl slice --model dishwasher --aspect thermal -o target/dw_thermal.sysml`: projects a multi-domain model onto one aspect (`thermal`, `power`, `comms`, `safety`, `latency`, `mechanics`, `hmi`).
+   - `rsysdsl view --model dishwasher --aspect safety -o target/dw_safety.html`: renders a focused offline HTML diagram for just that domain.
+2. **Requirement Refutation (`refute`) — Phase B3:**
+   - `rsysdsl refute --model power-tools-family --max-mass-kg 2.20 --format markdown --strict`: proves whether *any* `#[sysml::variation]` combination satisfies all requirements; if **UNSAT**, outputs the **Minimal Unsatisfiable Core (MUC)** and exact **Minimum Relaxations** restoring feasibility.
+3. **Variant Trade Studies & Sensitivity (`trade-study`, `what-if`) — Phase B2:**
+   - `rsysdsl trade-study --model power-tools-family --format markdown`: expands every `#[sysml::variation]` Cartesian product, evaluates requirements/limits, and marks the **Pareto frontier**.
+   - `rsysdsl what-if --model power-tools-family --delta-pct 10 --format markdown`: Tornado sensitivity ranking showing which parameters swing mass, power, waste heat, cost, or latency most.
+4. **Cross-Domain Budgets & Critical Path (`budget`) — Phase B1:**
+   - `rsysdsl budget --model dishwasher --max-power-w 2200 --format markdown --strict`: rolls up mass, power, waste heat (`P*(1-eta)`), BOM cost, DAG critical-path latency (including LLM thinking time `ttft + tokensOut/tokPerS`), pipeline FPS bottleneck, and top-3 hot spots.
+5. **Brownfield KG Reconciliation (`reconcile` + `cppognee/apps/docmem`) — PRs #10–#11:**
+   - Fetch/index a multi-doc corpus with `tools/corpus_kg/px4_docmem_kg.py` (no-AI, 0.55 s, byte-offset + SHA-256 provenance), then run `rsysdsl reconcile --kg kg_export.json --files model.sysml --corpus-dir corpus/ --format markdown` to check entity coverage (`R001`), alias drift (`R002`), provenance % (`R003`), unresolved conflicts → `@TBD` (`R004`), and stale docs (`R005`).
+6. **Shallow-First SW/HW Execution IR & Sub-Millisecond Validator (`SwHwSystem` + `validate_ir`) — PR #9:**
+   - For large SW/HW/AI architectures (500–2,000+ elements), use plain Rust builders (`sysml_ir::{SwHwSystem, SwPartition, SwTask, ComputeNode, BusChannel, SwAllocation}`) + `sysml_emit::validate_ir` (`< 1 ms` in release for 2,040 elements; checks `E001` broken/mismatched ports, `E002` dangling satisfy/verify, `E003` task timing & CPU utilization, `E004` ISO 26262 / ISO/PAS 8800 AI-to-ASIL-C/D guardrail, `W001` unallocated safety partition). See `crates/sysml-emit/examples/automotive_progressive.rs` and `px4_fmuv6x_brownfield.rs`.
+7. **Deterministic Simulation & Live Trace Playback (`verify --trace` + `view --trace`) — PR #8:**
+   - `rsysdsl verify --list` / `rsysdsl verify --scenario dw-nominal --trace target/dw_trace.json` → `rsysdsl view --model dishwasher --trace target/dw_trace.json -o target/dw_sim.html` embeds an interactive Play/Pause timeline scrubber, mode pill, verdict badges, and SVG sparklines.
+- **Architecture & Benchmark Docs:** [`docs/BRAINSTORMING_COMPILER_PLAN.md`](docs/BRAINSTORMING_COMPILER_PLAN.md), [`docs/CORPUS_TO_MODEL_PLAN.md`](docs/CORPUS_TO_MODEL_PLAN.md), [`docs/FAILURE_SPEED_AND_ERRORS.md`](docs/FAILURE_SPEED_AND_ERRORS.md), [`docs/BROWNFIELD_AB_RESULTS.md`](docs/BROWNFIELD_AB_RESULTS.md).
