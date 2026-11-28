@@ -12,25 +12,26 @@ All timings were measured on this Linux devbox (`rustup run 1.97.0`, debug profi
 
 | Pipeline Stage | ~500 Elements (510 IR / 100 macro groups) | ~2,000 Elements (2,040 IR / 400 macro groups) | Status (3 s budget) |
 | --- | --- | --- | --- |
-| **In-memory IR validation (`validate_ir`, clean)** | **0.74 ms** (`737 µs`) | **2.81 ms** | PASS (< 3 ms) |
-| **In-memory IR validation (`validate_ir`, 1 error)** | **0.58 ms** (`584 µs`) | **2.96 ms** | PASS (< 3 ms) |
-| **IR Lowering + `.sysml` emission (`to_sysml_model` + `emit_model`)** | **16.3 ms** (`76.6 KB`) | **59.9 ms** (`306.3 KB`) | PASS (< 60 ms) |
+| **In-memory IR validation (`validate_ir`, clean — debug / release)** | **0.74 ms** / **0.24 ms** | **2.81 ms** / **0.83 ms** | PASS (< 1 ms release) |
+| **In-memory IR validation (`validate_ir`, 1 error — debug / release)** | **0.58 ms** / **0.12 ms** | **2.96 ms** / **0.61 ms** | PASS (< 1 ms release) |
+| **IR Lowering + `.sysml` emission (debug / release)** | **16.3 ms** / **7.1 ms** (`76.6 KB`) | **59.9 ms** / **12.6 ms** (`306.3 KB`) | PASS (< 15 ms release) |
+| **Open-MBEE + OMG Standard Library validation (`--release`)** | **0.77 s** (`770 ms`) | **1.03 s** (`1,031 ms`) | **PASS (~9× faster than debug)** |
+| **Open-MBEE + OMG Standard Library validation (debug)** | **7.02 s** | **8.90 s** | **SLOW (> 3 s in debug only)** |
 | **Macro crate incremental `cargo check` (clean)** | **1.60 s** | **8.14 s** | **SLOW (> 3 s at 2k)** |
 | **Macro crate incremental `cargo check` (`bad_port`)** | **1.58 s** | **6.17 s** | **SLOW (> 3 s at 2k)** |
 | **Macro crate incremental `cargo check` (`missing_req`)** | **2.29 s** | **9.11 s** | **SLOW (> 3 s at 2k)** |
 | **Macro crate incremental `cargo check` (`unit_mismatch`)** | **1.57 s** | **6.37 s** | **SLOW (> 3 s at 2k)** |
-| **Open-MBEE + OMG Standard Library validation (`audit_model_with_stdlib`, debug)** | **7.02 s** | **8.90 s** | **SLOW (> 3 s)** |
 
 ### Key Bottlenecks Flagged (> 3 s)
 
 1. **Monolithic `#[sysml::package]` proc-macro expansion (`6.17 s – 9.11 s` at 2,000 elements):**
    - `#[sysml::package]` parses and re-emits the entire module's token stream in a single proc-macro invocation. Changing a single line inside a 400-part package forces `rustc` to re-expand all 400 `#[sysml::part]`, `#[sysml::requirement]`, and `#[sysml::connect]` macros and re-typecheck every generated `const _: fn()` closure.
    - **Root cause:** Encoding cross-element connections, allocations, and large assemblies in `#[sysml::part]` + `#[sysml::package]` proc-macros scales super-linearly with module size.
-   - **Mitigation:** Keep `rustc` lightweight (plain Rust structs/builders like `SwHwSystem` or smaller per-subsystem modules) and run architectural graph validation in `validate_ir` (**2.8 ms** at 2,040 elements — **~2,200× to 3,100× faster** than incremental `cargo check`).
+   - **Mitigation:** Keep `rustc` lightweight (plain Rust structs/builders like `SwHwSystem` or per-subsystem crates of ~100–300 elements) and run architectural graph validation in `validate_ir` (**0.83 ms** release / **2.81 ms** debug at 2,040 elements — **> 3,000× faster** than incremental `cargo check`).
 
-2. **Open-MBEE + OMG Standard Library loading (`7.02 s` at 510 elements, `8.90 s` at 2,040 elements in debug builds):**
-   - ~6.5 s of that time is a **fixed one-time cost** of parsing the ~90 OMG `sysml.library` files in unoptimized debug mode (growing 4× from 510 to 2,040 elements only added `+1.88 s`).
-   - **Mitigation:** Never run Open-MBEE stdlib validation in the inner edit-check loop; run `validate_ir` (< 3 ms) continuously during editing/testing, and reserve `audit --stdlib --strict` (preferably with a release-built `rsysdsl` binary) for CI / pre-commit gates.
+2. **Open-MBEE + OMG Standard Library loading (`7.02 s – 8.90 s` in debug → `0.77 s – 1.03 s` in `--release`):**
+   - In debug builds, ~6.5 s is a fixed one-time cost of parsing the ~90 OMG `sysml.library` files.
+   - **Verified fix (`--release`):** Compiling with `--release` (which is how `rsysdsl` is installed via `cargo install --path crates/sysml-cli`) cuts full OMG Standard Library validation by **~9×**, down to **0.77 s** at 510 elements and **1.03 s** at 2,040 elements!
 
 ---
 
