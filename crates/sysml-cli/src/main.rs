@@ -16,12 +16,13 @@ use std::process::ExitCode;
 use sysml_emit::{
     analyze_budgets, audit_model_with_lib, audit_units_with_lib, build_safety_report,
     build_trace_matrix, build_viewer_snapshot, discover_omg_stdlib, emit_model,
-    iso26262_metadata_package, lint_model, reconcile_model, render_budget_markdown,
-    render_lint_markdown, render_reconcile_markdown, render_safety_report_markdown,
-    render_standalone_html, render_trace_matrix_csv, render_trace_matrix_markdown,
-    render_trade_study_markdown, render_what_if_markdown, run_trade_study, run_what_if,
-    validate_sysml_units, validate_sysml_units_with_lib, BudgetLimits, KgExport,
-    ReconcileSeverity, ViewerOptions, ViewerTheme, ViewerView,
+    iso26262_metadata_package, lint_model, reconcile_model, refute_requirements,
+    render_budget_markdown, render_lint_markdown, render_reconcile_markdown,
+    render_refute_markdown, render_safety_report_markdown, render_standalone_html,
+    render_trace_matrix_csv, render_trace_matrix_markdown, render_trade_study_markdown,
+    render_what_if_markdown, run_trade_study, run_what_if, validate_sysml_units,
+    validate_sysml_units_with_lib, BudgetLimits, KgExport, ReconcileSeverity, RefuteLimits,
+    ViewerOptions, ViewerTheme, ViewerView,
 };
 mod scaffold;
 
@@ -416,6 +417,45 @@ enum Commands {
         #[arg(long, value_enum, default_value = "json")]
         format: LintFormat,
     },
+
+    /// Prove whether a requirement set is feasible across `#[sysml::variation]` options; if UNSAT, output Minimal Unsatisfiable Core + minimum relaxations.
+    Refute {
+        /// `.sysml` files to lift and check (uses `--model` when empty).
+        #[arg(long)]
+        files: Vec<PathBuf>,
+
+        /// Built-in model name when `--files` is empty.
+        #[arg(long, default_value = "power-tools-family")]
+        model: String,
+
+        /// Candidate minimum runtime [s].
+        #[arg(long)]
+        min_runtime_s: Option<f64>,
+
+        /// Candidate maximum mass [kg].
+        #[arg(long)]
+        max_mass_kg: Option<f64>,
+
+        /// Candidate maximum power [W].
+        #[arg(long)]
+        max_power_w: Option<f64>,
+
+        /// Candidate maximum noise [dB].
+        #[arg(long)]
+        max_noise_db: Option<f64>,
+
+        /// Candidate maximum BOM cost [USD].
+        #[arg(long)]
+        max_cost_usd: Option<f64>,
+
+        /// Output format (`json` or `markdown`).
+        #[arg(long, value_enum, default_value = "json")]
+        format: LintFormat,
+
+        /// Exit with non-zero code if the requirement set is refuted (UNSAT).
+        #[arg(long)]
+        strict: bool,
+    },
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -723,6 +763,57 @@ fn main() -> ExitCode {
             delta_pct,
             format,
         } => cmd_what_if(&files, &model, delta_pct, format, cli.pretty),
+        Commands::Refute {
+            files,
+            model,
+            min_runtime_s,
+            max_mass_kg,
+            max_power_w,
+            max_noise_db,
+            max_cost_usd,
+            format,
+            strict,
+        } => cmd_refute(
+            &files,
+            &model,
+            RefuteLimits {
+                min_runtime_s,
+                max_mass_kg,
+                max_power_w,
+                max_noise_db,
+                max_cost_usd,
+            },
+            format,
+            strict,
+            cli.pretty,
+        ),
+    }
+}
+
+fn cmd_refute(
+    files: &[PathBuf],
+    model_name: &str,
+    limits: RefuteLimits,
+    format: LintFormat,
+    strict: bool,
+    pretty: bool,
+) -> ExitCode {
+    let model = match load_files_or_builtin(files, model_name) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let report = refute_requirements(&model, &limits);
+    match format {
+        LintFormat::Markdown => print!("{}", render_refute_markdown(&report)),
+        LintFormat::Json => print_json(&report, pretty),
+    }
+    if strict && !report.feasible {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
     }
 }
 

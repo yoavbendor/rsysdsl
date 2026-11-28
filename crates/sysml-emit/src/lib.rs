@@ -10,6 +10,7 @@ pub mod evidence;
 pub mod ir_validate;
 pub mod lint;
 pub mod reconcile;
+pub mod refute;
 pub mod resolve;
 pub mod safety_report;
 pub mod tbd;
@@ -38,6 +39,10 @@ pub use ir_validate::{
 pub use reconcile::{
     reconcile_model, render_reconcile_markdown, KgConflict, KgEntity, KgExport, ReconcileFinding,
     ReconcileReport, ReconcileSeverity, ReconcileSummary,
+};
+pub use refute::{
+    refute_requirements, render_refute_markdown, ActiveConstraint, RefuteLimits, RefuteReport,
+    RelaxationSuggestion,
 };
 pub use trade_study::{
     render_trade_study_markdown, render_what_if_markdown, run_trade_study, run_what_if,
