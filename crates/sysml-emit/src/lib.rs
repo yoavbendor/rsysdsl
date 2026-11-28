@@ -14,6 +14,7 @@ pub mod resolve;
 pub mod safety_report;
 pub mod tbd;
 pub mod trace;
+pub mod trade_study;
 #[cfg(feature = "validate")]
 pub mod validate;
 pub mod viewer;
@@ -37,6 +38,10 @@ pub use ir_validate::{
 pub use reconcile::{
     reconcile_model, render_reconcile_markdown, KgConflict, KgEntity, KgExport, ReconcileFinding,
     ReconcileReport, ReconcileSeverity, ReconcileSummary,
+};
+pub use trade_study::{
+    render_trade_study_markdown, render_what_if_markdown, run_trade_study, run_what_if,
+    SensitivityDriver, TradePoint, TradeStudyReport, WhatIfReport,
 };
 pub use tbd::{
     collect_tbd_ledger, count_by_kind, model_has_tbd, overdue_at, render_tbd_markdown, tbd_ledger_report,
