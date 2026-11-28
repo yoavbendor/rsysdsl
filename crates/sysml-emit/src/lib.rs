@@ -44,8 +44,8 @@ pub use reconcile::{
     ReconcileReport, ReconcileSeverity, ReconcileSummary,
 };
 pub use refactor::{
-    elevate_model, render_elevate_markdown, slice_model, ElevateProposal, ElevateReport,
-    ModelAspect,
+    classify_model, elevate_model, render_elevate_markdown, slice_model, slice_model_report,
+    AspectClassification, ElevateProposal, ElevateReport, ModelAspect,
 };
 pub use refute::{
     refute_requirements, render_refute_markdown, ActiveConstraint, RefuteLimits, RefuteReport,

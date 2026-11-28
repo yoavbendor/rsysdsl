@@ -21,7 +21,7 @@ use sysml_emit::{
     render_reconcile_markdown, render_refute_markdown, render_safety_report_markdown,
     render_standalone_html, render_trace_matrix_csv, render_trace_matrix_markdown,
     render_trade_study_markdown, render_what_if_markdown, run_trade_study, run_what_if,
-    slice_model, validate_sysml_units, validate_sysml_units_with_lib, BudgetLimits, KgExport,
+    validate_sysml_units, validate_sysml_units_with_lib, BudgetLimits, KgExport,
     ModelAspect, ReconcileSeverity, RefuteLimits, ViewerOptions, ViewerTheme, ViewerView,
 };
 mod scaffold;
@@ -901,7 +901,8 @@ fn cmd_slice(
             return ExitCode::FAILURE;
         }
     };
-    let sliced = slice_model(&model, aspect);
+    let (sliced, unclassified) = sysml_emit::slice_model_report(&model, aspect);
+    report_unclassified(&unclassified);
     let sysml = emit_model(&sliced);
     if let Some(out) = output {
         if let Some(parent) = out.parent() {
@@ -923,6 +924,17 @@ fn cmd_slice(
         print!("{sysml}");
     }
     ExitCode::SUCCESS
+}
+
+/// `slice` / `view --aspect`: list the elements no structural rule could classify (never guessed).
+fn report_unclassified(unclassified: &[String]) {
+    if !unclassified.is_empty() {
+        eprintln!(
+            "note: {} element(s) match no aspect structurally (no std flow-item port, std base, or classifying unit) and are left out of every slice: {}",
+            unclassified.len(),
+            unclassified.join(", ")
+        );
+    }
 }
 
 fn cmd_refute(
@@ -1164,7 +1176,11 @@ fn cmd_view(
         (model_name.to_string(), default_out, model)
     };
     let model = match aspect {
-        Some(a) => slice_model(&raw_model, a),
+        Some(a) => {
+            let (sliced, unclassified) = sysml_emit::slice_model_report(&raw_model, a);
+            report_unclassified(&unclassified);
+            sliced
+        }
         None => raw_model,
     };
 

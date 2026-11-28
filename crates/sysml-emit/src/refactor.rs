@@ -6,10 +6,10 @@
 //!   (`Thermal`, `Power`, `Comms`, `Safety`, `Latency`, `Mechanics`, `Hmi`) for focused
 //!   `rsysdsl view --aspect <domain>` diagrams and reviews.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
-use sysml_ir::{AttributeUsage, Model, Package, PackageMember, PartDef};
+use sysml_ir::{AttributeUsage, BudgetRole, Model, Package, PackageMember, PartDef};
 
 use crate::emit_cli::is_sysml_std_package;
 
@@ -33,7 +33,7 @@ pub struct ElevateReport {
 }
 
 /// Domain aspect for [`slice_model`] viewpoint projection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ModelAspect {
     Thermal,
@@ -55,38 +55,6 @@ impl ModelAspect {
             ModelAspect::Latency => "latency",
             ModelAspect::Mechanics => "mechanics",
             ModelAspect::Hmi => "hmi",
-        }
-    }
-
-    fn keywords(self) -> &'static [&'static str] {
-        match self {
-            ModelAspect::Thermal => &[
-                "heat", "temp", "thermal", "cool", "fan", "conductance", "radiat", "heater",
-            ],
-            ModelAspect::Power => &[
-                "power", "volt", "current", "batt", "psu", "mains", "energy", "relay", "inverter",
-                "charger", "watt", "hv",
-            ],
-            ModelAspect::Comms => &[
-                "can", "uart", "eth", "mavlink", "dds", "uorb", "spi", "i2c", "bus", "comm",
-                "telemetry", "cmd", "command", "signal", "link",
-            ],
-            ModelAspect::Safety => &[
-                "safety", "safe", "interlock", "asil", "fmea", "fault", "cutoff", "guard",
-                "failsafe", "flood", "abort", "disarm", "monitor", "brake",
-            ],
-            ModelAspect::Latency => &[
-                "latency", "wcet", "period", "deadline", "ttft", "fps", "cutoff", "delay", "rate",
-                "hz",
-            ],
-            ModelAspect::Mechanics => &[
-                "mech", "motor", "pump", "gear", "torque", "mass", "force", "valve", "tub",
-                "blade", "chuck", "anvil", "spindle", "fluid", "water",
-            ],
-            ModelAspect::Hmi => &[
-                "hmi", "panel", "button", "display", "operator", "user", "door", "trigger", "chime",
-                "led", "noise", "acoustic",
-            ],
         }
     }
 }
@@ -239,30 +207,324 @@ pub fn render_elevate_markdown(r: &ElevateReport) -> String {
     out
 }
 
-/// Project a unified multi-domain [`Model`] onto a single [`ModelAspect`] viewpoint.
+/// Structural aspect classification of a model's own elements (C1.4). No English keywords:
+/// an element belongs to an aspect through
+/// - the sysml-std flow items its ports carry (`ThermalEnergy` -> thermal, `ElectricalEnergy`
+///   -> power, `ControlCommand` / `TelemetrySignal` / `InformationFlow` -> comms,
+///   `HumanInputSignal` / `HumanFeedbackSignal` / `AcousticEmission` -> hmi, `MechanicalEnergy`
+///   / `FluidFlow` -> mechanics), for ports declared in the model (ports inherited from generic
+///   sysml-std bases, such as every element's `heatOut`, do not count);
+/// - interface ends (the port types they join);
+/// - the sysml-std base types it specializes (`PowerElement` -> power, `ResistiveHeater` ->
+///   thermal, `ElectricMotor` -> mechanics, `SafetyInterlockSwitch` -> safety, `HmiPanel` -> hmi,
+///   `Microcontroller` -> comms, ...);
+/// - the dimensions of its valued attributes (`K`, `W/K` -> thermal; `V`, `A`, `Ω` -> power;
+///   `N`, `N*m`, `kg/s`, `Pa` -> mechanics; time or a latency role -> latency) and their budget
+///   roles (power -> power, waste heat -> thermal);
+/// - safety metadata (FMEA, ASIL decomposition, safety goals) -> safety;
+/// - for requirements, additionally the aspects of the parts that satisfy them.
 ///
-/// Keeps library packages intact, retains only domain-relevant `PartDef`s, `RequirementDef`s,
-/// `InterfaceDef`s, `StateDef`s, and trims assembly `PartDef`s to only matching child parts
-/// and connections.
-pub fn slice_model(model: &Model, aspect: ModelAspect) -> Model {
-    let kws = aspect.keywords();
-    let mut kept_part_types: BTreeSet<String> = BTreeSet::new();
+/// Elements matching nothing are listed in [`AspectClassification::unclassified`], not guessed.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AspectClassification {
+    pub parts: BTreeMap<String, BTreeSet<ModelAspect>>,
+    pub requirements: BTreeMap<String, BTreeSet<ModelAspect>>,
+    pub interfaces: BTreeMap<String, BTreeSet<ModelAspect>>,
+    /// Leaf part, requirement and interface definitions with no structural aspect.
+    pub unclassified: Vec<String>,
+}
 
-    // Pass 1: identify leaf/domain PartDefs matching the aspect
-    for pkg in &model.packages {
-        if is_sysml_std_package(pkg) {
-            continue;
+fn std_item_aspect(name: &str) -> Option<ModelAspect> {
+    use ModelAspect::*;
+    Some(match name {
+        "ElectricalEnergy" => Power,
+        "ThermalEnergy" | "RadiativeEnergy" => Thermal,
+        "MechanicalEnergy" | "FluidFlow" | "MaterialFlow" => Mechanics,
+        "ControlCommand" | "TelemetrySignal" | "InformationFlow" => Comms,
+        "HumanInputSignal" | "HumanFeedbackSignal" | "AcousticEmission" => Hmi,
+        _ => return None,
+    })
+}
+
+fn std_part_aspects(name: &str) -> &'static [ModelAspect] {
+    use ModelAspect::*;
+    match name {
+        "PowerElement" => &[Power],
+        "ResistiveHeater" | "RadiativeEmitterLoad" => &[Thermal],
+        "ThermalEnclosure" | "AmbientEnvironment" | "DeepSpaceSink" => &[Thermal],
+        "CoolingFan" => &[Thermal, Mechanics],
+        "StructuralFrame" | "ElectricMotor" | "MechanicalTransmission" | "FluidPump"
+        | "FluidValve" | "FluidDistributor" | "RotatingWheel" | "FrictionBrake" => &[Mechanics],
+        "SafetyInterlockSwitch" => &[Safety],
+        "Microcontroller" | "SensorBase" => &[Comms],
+        "TemperatureSensor" => &[Thermal],
+        "HmiPanel" | "HumanOperator" | "MechanicalHmiControl" => &[Hmi],
+        _ => &[],
+    }
+}
+
+fn unit_aspect(unit: &str) -> Option<ModelAspect> {
+    use sysml_core::units::parse_unit;
+    let d = parse_unit(unit.trim())?;
+    let is = |r: &str| parse_unit(r).is_some_and(|x| x.eq(d));
+    if ["K", "W/K", "J/K", "W/(m*K)", "W/m^2", "W/(m^2*K)", "J/(kg*K)"].iter().any(|r| is(r)) {
+        Some(ModelAspect::Thermal)
+    } else if ["V", "A", "Ω", "C", "F", "H", "S"].iter().any(|r| is(r)) {
+        Some(ModelAspect::Power)
+    } else if ["N", "N*m", "kg/s", "m^3/s", "Pa", "m/s", "m/s^2"].iter().any(|r| is(r)) {
+        Some(ModelAspect::Mechanics)
+    } else if is("s") {
+        Some(ModelAspect::Latency)
+    } else {
+        None
+    }
+}
+
+struct TypeIndex<'a> {
+    parts: crate::roles::RoleIndex<'a>,
+    ports: BTreeMap<String, (bool, &'a sysml_ir::PortDef)>,
+    items: BTreeMap<String, (bool, &'a sysml_ir::ItemDef)>,
+    interfaces: BTreeMap<String, (bool, &'a sysml_ir::InterfaceDef)>,
+    std_part_names: BTreeSet<String>,
+}
+
+fn simple(n: &str) -> &str {
+    n.trim().trim_start_matches('~').rsplit("::").next().unwrap_or(n).trim()
+}
+
+impl<'a> TypeIndex<'a> {
+    fn new(model: &'a Model) -> Self {
+        fn walk<'a>(pkg: &'a Package, std: bool, ix: &mut TypeIndex<'a>) {
+            for m in &pkg.members {
+                match m {
+                    PackageMember::Package(sub) => walk(sub, std, ix),
+                    PackageMember::PortDef(p) => {
+                        ix.ports.entry(p.name.clone()).or_insert((std, p));
+                    }
+                    PackageMember::ItemDef(i) => {
+                        ix.items.entry(i.name.clone()).or_insert((std, i));
+                    }
+                    PackageMember::InterfaceDef(i) => {
+                        ix.interfaces.entry(i.name.clone()).or_insert((std, i));
+                    }
+                    _ => {}
+                }
+            }
         }
+        let mut ix = TypeIndex {
+            parts: crate::roles::RoleIndex::new(model),
+            ports: BTreeMap::new(),
+            items: BTreeMap::new(),
+            interfaces: BTreeMap::new(),
+            std_part_names: BTreeSet::new(),
+        };
+        for std in [false, true] {
+            for pkg in model.packages.iter().filter(|p| is_sysml_std_package(p) == std) {
+                walk(pkg, std, &mut ix);
+            }
+        }
+        ix
+    }
+
+    fn item_aspects(&self, ty: &str, depth: usize, out: &mut BTreeSet<ModelAspect>) {
+        let name = simple(ty);
+        match self.items.get(name) {
+            Some((true, _)) | None => {
+                if let Some(a) = std_item_aspect(name) {
+                    out.insert(a);
+                    return;
+                }
+            }
+            _ => {}
+        }
+        if depth > 16 {
+            return;
+        }
+        if let Some((_, def)) = self.items.get(name) {
+            for parent in &def.specializes {
+                self.item_aspects(parent, depth + 1, out);
+            }
+        }
+    }
+
+    fn port_aspects(&self, ty: &str, depth: usize, out: &mut BTreeSet<ModelAspect>) {
+        let Some((_, def)) = self.ports.get(simple(ty)) else {
+            return;
+        };
+        for it in &def.items {
+            self.item_aspects(&it.type_name, 0, out);
+        }
+        if depth < 16 {
+            for parent in &def.specializes {
+                self.port_aspects(parent, depth + 1, out);
+            }
+        }
+    }
+
+    fn interface_aspects(&self, def: &sysml_ir::InterfaceDef, depth: usize) -> BTreeSet<ModelAspect> {
+        let mut out = BTreeSet::new();
+        for end in &def.ends {
+            self.port_aspects(&end.type_name, 0, &mut out);
+        }
+        if depth < 16 {
+            for parent in &def.specializes {
+                if let Some((_, p)) = self.interfaces.get(simple(parent)) {
+                    out.extend(self.interface_aspects(p, depth + 1));
+                }
+            }
+        }
+        out
+    }
+
+    fn part_aspects(&self, p: &'a PartDef) -> BTreeSet<ModelAspect> {
+        let mut out = BTreeSet::new();
+        if !p.fmea.is_empty() || !p.asil_decompositions.is_empty() {
+            out.insert(ModelAspect::Safety);
+        }
+        for d in self.parts.lineage(p) {
+            let from_std = self.is_std_part(&d.name) && !std::ptr::eq(d, p);
+            if from_std {
+                out.extend(std_part_aspects(&d.name).iter().copied());
+                continue;
+            }
+            for pt in &d.ports {
+                self.port_aspects(&pt.type_name, 0, &mut out);
+            }
+        }
+        for a in self.parts.effective_attributes(p) {
+            if matches!(a.value, crate::roles::AttrValue::Absent) {
+                continue;
+            }
+            match a.role {
+                Some(BudgetRole::Power) => {
+                    out.insert(ModelAspect::Power);
+                }
+                Some(BudgetRole::WasteHeat) => {
+                    out.insert(ModelAspect::Thermal);
+                }
+                Some(BudgetRole::Latency) => {
+                    out.insert(ModelAspect::Latency);
+                }
+                _ => {}
+            }
+            if let Some(asp) = a.unit.as_deref().and_then(unit_aspect) {
+                out.insert(asp);
+            }
+        }
+        out
+    }
+
+    fn is_std_part(&self, name: &str) -> bool {
+        self.std_part_names.contains(name)
+    }
+}
+
+/// Classify every user part, requirement and interface definition structurally (see
+/// [`AspectClassification`]).
+pub fn classify_model(model: &Model) -> AspectClassification {
+    let mut ix = TypeIndex::new(model);
+    ix.std_part_names = model
+        .packages
+        .iter()
+        .filter(|p| is_sysml_std_package(p))
+        .flat_map(|p| p.members.iter())
+        .filter_map(|m| match m {
+            PackageMember::PartDef(d) => Some(d.name.clone()),
+            _ => None,
+        })
+        .collect();
+    let mut out = AspectClassification::default();
+    let user_pkgs = || model.packages.iter().filter(|p| !is_sysml_std_package(p));
+
+    let mut safety_reqs: BTreeSet<String> = BTreeSet::new();
+    for pkg in user_pkgs() {
         for m in &pkg.members {
-            if let PackageMember::PartDef(p) = m {
-                if part_matches_aspect(p, kws) {
-                    kept_part_types.insert(p.name.clone());
+            if let PackageMember::RequirementDef(r) = m {
+                if r.safety_goal.is_some() {
+                    safety_reqs.insert(r.name.clone());
                 }
             }
         }
     }
 
-    // Pass 2: propagate upward to any parent assembly composing a kept part (fixed point)
+    let mut satisfied_by: BTreeMap<String, BTreeSet<ModelAspect>> = BTreeMap::new();
+    for pkg in user_pkgs() {
+        for m in &pkg.members {
+            match m {
+                PackageMember::PartDef(p) => {
+                    let mut asp = ix.part_aspects(p);
+                    if p.satisfies.iter().any(|s| safety_reqs.contains(simple(&s.requirement))) {
+                        asp.insert(ModelAspect::Safety);
+                    }
+                    for s in &p.satisfies {
+                        satisfied_by
+                            .entry(simple(&s.requirement).to_string())
+                            .or_default()
+                            .extend(asp.iter().copied());
+                    }
+                    if asp.is_empty() && p.parts.is_empty() && !p.is_variation {
+                        out.unclassified.push(format!("{}::{}", pkg.name, p.name));
+                    }
+                    out.parts.insert(p.name.clone(), asp);
+                }
+                PackageMember::InterfaceDef(i) => {
+                    let asp = ix.interface_aspects(i, 0);
+                    if asp.is_empty() && !i.is_abstract {
+                        out.unclassified.push(format!("{}::{}", pkg.name, i.name));
+                    }
+                    out.interfaces.insert(i.name.clone(), asp);
+                }
+                _ => {}
+            }
+        }
+    }
+    for pkg in user_pkgs() {
+        for m in &pkg.members {
+            if let PackageMember::RequirementDef(r) = m {
+                let mut asp: BTreeSet<ModelAspect> = r
+                    .attributes
+                    .iter()
+                    .filter_map(|a| a.unit.as_deref().and_then(unit_aspect))
+                    .collect();
+                if r.safety_goal.is_some() {
+                    asp.insert(ModelAspect::Safety);
+                }
+                if let Some(by) = satisfied_by.get(&r.name) {
+                    asp.extend(by.iter().copied());
+                }
+                if asp.is_empty() {
+                    out.unclassified.push(format!("{}::{}", pkg.name, r.name));
+                }
+                out.requirements.insert(r.name.clone(), asp);
+            }
+        }
+    }
+    out
+}
+
+/// Project a unified multi-domain [`Model`] onto a single [`ModelAspect`] viewpoint.
+///
+/// Keeps library packages intact, retains only the part, requirement and interface definitions
+/// structurally classified into `aspect` (see [`classify_model`]), and trims assembly
+/// `PartDef`s to matching child parts and connections.
+pub fn slice_model(model: &Model, aspect: ModelAspect) -> Model {
+    slice_model_report(model, aspect).0
+}
+
+/// [`slice_model`] plus the elements that could not be classified into any aspect.
+pub fn slice_model_report(model: &Model, aspect: ModelAspect) -> (Model, Vec<String>) {
+    let cls = classify_model(model);
+    let has = |m: &BTreeMap<String, BTreeSet<ModelAspect>>, n: &str| {
+        m.get(n).is_some_and(|s| s.contains(&aspect))
+    };
+    let mut kept_part_types: BTreeSet<String> = cls
+        .parts
+        .iter()
+        .filter(|(_, a)| a.contains(&aspect))
+        .map(|(n, _)| n.clone())
+        .collect();
+
+    // Propagate upward to any parent assembly composing a kept part (fixed point)
     let mut changed = true;
     while changed {
         changed = false;
@@ -276,7 +538,7 @@ pub fn slice_model(model: &Model, aspect: ModelAspect) -> Model {
                         && p.parts.iter().any(|c| {
                             c.type_names
                                 .iter()
-                                .any(|t| kept_part_types.contains(t))
+                                .any(|t| kept_part_types.contains(simple(t)))
                         })
                     {
                         kept_part_types.insert(p.name.clone());
@@ -287,7 +549,6 @@ pub fn slice_model(model: &Model, aspect: ModelAspect) -> Model {
         }
     }
 
-    // Pass 3: build sliced Model
     let mut new_pkgs: Vec<Package> = Vec::new();
     for pkg in &model.packages {
         if is_sysml_std_package(pkg) {
@@ -308,7 +569,7 @@ pub fn slice_model(model: &Model, aspect: ModelAspect) -> Model {
                         sp.parts.retain(|c| {
                             c.type_names
                                 .iter()
-                                .any(|t| kept_part_types.contains(t))
+                                .any(|t| kept_part_types.contains(simple(t)))
                         });
                         let kept_fields: BTreeSet<&str> = sp
                             .parts
@@ -329,21 +590,12 @@ pub fn slice_model(model: &Model, aspect: ModelAspect) -> Model {
                     sliced_pkg.members.push(PackageMember::PartDef(sp));
                 }
                 PackageMember::RequirementDef(r) => {
-                    let hay = format!(
-                        "{} {} {} {}",
-                        r.name,
-                        r.short_name.as_deref().unwrap_or(""),
-                        r.doc.as_deref().unwrap_or(""),
-                        r.rationale.as_deref().unwrap_or("")
-                    )
-                    .to_lowercase();
-                    if kws.iter().any(|k| hay.contains(k)) || (aspect == ModelAspect::Safety && r.safety_goal.is_some()) {
+                    if has(&cls.requirements, &r.name) {
                         sliced_pkg.members.push(PackageMember::RequirementDef(r.clone()));
                     }
                 }
                 PackageMember::InterfaceDef(i) => {
-                    let hay = format!("{} {}", i.name, i.doc.as_deref().unwrap_or("")).to_lowercase();
-                    if kws.iter().any(|k| hay.contains(k)) || i.is_abstract {
+                    if i.is_abstract || has(&cls.interfaces, &i.name) {
                         sliced_pkg.members.push(PackageMember::InterfaceDef(i.clone()));
                     }
                 }
@@ -354,40 +606,7 @@ pub fn slice_model(model: &Model, aspect: ModelAspect) -> Model {
         new_pkgs.push(sliced_pkg);
     }
 
-    Model::new(new_pkgs)
-}
-
-fn part_matches_aspect(p: &PartDef, kws: &[&str]) -> bool {
-    if !p.fmea.is_empty() || !p.asil_decompositions.is_empty() {
-        if kws.contains(&"safety") {
-            return true;
-        }
-    }
-    let mut hay = String::new();
-    hay.push_str(&p.name);
-    hay.push(' ');
-    if let Some(d) = &p.doc {
-        hay.push_str(d);
-        hay.push(' ');
-    }
-    for s in &p.specializes {
-        hay.push_str(s);
-        hay.push(' ');
-    }
-    for a in &p.attributes {
-        if let Some(n) = attr_effective_name(a) {
-            hay.push_str(n);
-            hay.push(' ');
-        }
-    }
-    for pt in &p.ports {
-        hay.push_str(&pt.name);
-        hay.push(' ');
-        hay.push_str(&pt.type_name);
-        hay.push(' ');
-    }
-    let lower = hay.to_lowercase();
-    kws.iter().any(|k| lower.contains(k))
+    (Model::new(new_pkgs), cls.unclassified)
 }
 
 fn part_feature_set(p: &PartDef) -> BTreeSet<String> {
@@ -506,14 +725,22 @@ mod tests {
             name: "SliceTest".into(),
             ..Default::default()
         };
+        // Names carry no meaning: the heater is thermal because of its temperature attribute,
+        // the transceiver is unclassifiable (a frequency says nothing about the aspect).
         pkg.members.push(PackageMember::PartDef(PartDef {
             name: "WashHeater".into(),
-            attributes: vec![attr("heatOutput")],
+            attributes: vec![AttributeUsage { unit: Some("K".into()), ..attr("maxElementTemp") }],
             ..Default::default()
         }));
         pkg.members.push(PackageMember::PartDef(PartDef {
             name: "CanBusTransceiver".into(),
-            attributes: vec![attr("baudRate")],
+            attributes: vec![AttributeUsage { unit: Some("Hz".into()), ..attr("baudRate") }],
+            ..Default::default()
+        }));
+        // A part named like a heater but with nothing thermal about it is not kept.
+        pkg.members.push(PackageMember::PartDef(PartDef {
+            name: "HeatShieldLabel".into(),
+            attributes: vec![AttributeUsage { unit: Some("m".into()), ..attr("width") }],
             ..Default::default()
         }));
         pkg.members.push(PackageMember::PartDef(PartDef {
@@ -543,5 +770,9 @@ mod tests {
         assert!(kept_names.contains(&"WashHeater".to_string()));
         assert!(kept_names.contains(&"SystemTop".to_string()));
         assert!(!kept_names.contains(&"CanBusTransceiver".to_string()));
+        assert!(!kept_names.contains(&"HeatShieldLabel".to_string()));
+        let (_, unclassified) = slice_model_report(&model, ModelAspect::Thermal);
+        assert!(unclassified.contains(&"SliceTest::CanBusTransceiver".to_string()), "{unclassified:?}");
+        assert!(unclassified.contains(&"SliceTest::HeatShieldLabel".to_string()));
     }
 }
