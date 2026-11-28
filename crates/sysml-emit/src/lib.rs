@@ -6,6 +6,7 @@ pub mod audit;
 pub mod emit;
 pub mod emit_cli;
 pub mod evidence;
+pub mod ir_validate;
 pub mod lint;
 pub mod resolve;
 pub mod safety_report;
@@ -23,6 +24,9 @@ pub use audit::{
 pub use emit_cli::{emit_model_split_std, is_sysml_std_package};
 pub use emit::{
     emit_model, emit_package, escape_sysml_name, iso26262_metadata_package, tbd_metadata_package,
+};
+pub use ir_validate::{
+    validate_ir, validate_model_ir, IrDiagnostic, IrSeverity, IrValidationReport,
 };
 pub use tbd::{
     collect_tbd_ledger, count_by_kind, model_has_tbd, overdue_at, render_tbd_markdown, tbd_ledger_report,
