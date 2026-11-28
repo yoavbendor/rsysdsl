@@ -43,6 +43,17 @@ Order: C1 ∥ C1-T → C2 → C3 → C4 ∥ C5 → T5. C1-T runs in parallel wit
 - `refute`: top-level `"status": "feasible" | "refuted" | "not_applicable"`; `"feasible"` stays as a bool for compatibility but is `null` when `not_applicable`.
 - `trade-study`: `"untracked"` list as above; `"status": "ok" | "not_applicable"` (no variations).
 
+## C1 implementation notes (decisions and deferred items)
+
+- **Roles beyond D1:** besides `mass | power | waste_heat | cost | latency`, two roles exist: `efficiency` (dimensionless; waste heat of a part with a power role and no waste-heat role is `power * (1 - efficiency)`) and `none` (explicit opt-out, silences `untracked`, e.g. supply capacities, aggregates of child loads, consumable loads, external actors, natural bodies).
+- **Cost unit:** the SI table has no currency, so `budget = "cost"` requires `dimensionless` (an amount in the model's single currency; the CLI flag keeps its `_usd` name and the report unit `"USD"`) or `unit = "<currency>", custom_unit = "reason"` (which is TBD debt by design). Cost has no dimension, so it can never be `untracked`.
+- **Metadata package:** roles are emitted as `@SysmlStdBudget::BudgetRole { role = "..."; }`; the package is named with the `SysmlStd` prefix so it travels with the sysml-std half under `--omit-std` and is re-attached by the CLI like the rest of sysml-std.
+- **Exclusions:** only non-abstract, non-variation part definitions of the model's own packages are scanned (with inherited values), so requirement-def attributes never count; `evidence` attributes are skipped entirely; `tbd_value` attributes are never contributions nor `untracked` — when role-tagged they are listed in an extra `unresolved` list (with expression values and units of unknown scale) and make a limited domain `incomplete`. Untagged watts are listed under both `power` and `waste_heat` (same dimension). Unvalued inherited declarations (abstract std bases) are ignored.
+- **Domains without a limit** report `status: "pass"` (nothing to check); `ok` only considers limited domains.
+- **Latency:** a stage's latency is the sum of its latency-role attributes (s). The old LLM formula `ttft + tokensOut / tokPerS` needed names; a decode time must be its own latency attribute until C2 can evaluate `expr = "tokensOut / tokPerS"`.
+- **refute / trade-study (interim until C3):** design-point metrics = mass/power/cost roles, energy = attributes of dimension J, runtime = energy / power. Requirements are mapped structurally (comparison of two requirement attributes; bound dimension mass `<=` / power `<=` / time `>=`); everything else, and any constraint whose metric no point has, is listed under `unevaluated`. Noise has no structural source: `--max-noise-db` is kept for compatibility but reported as `unevaluated`; the noise metric was removed from `TradePoint` and the Pareto dominance.
+- **slice:** a part's aspects come from ports declared in the model (not generic ports inherited from std bases such as every element's `heatOut`), std base types, valued attribute dimensions and roles, and safety metadata. Open question: whether connected ports (connection-level item flows) should also classify parts; not needed for the current e2e expectations.
+
 ## Delegation notes
 
 - Haiku gets tasks with a fixed contract, exact files, and a worked example; Opus gets design-bearing work. Every delegated task: commit per item, push, `cargo test --workspace` green, never force-push.

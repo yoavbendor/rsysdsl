@@ -82,7 +82,7 @@ pub mod flight_controller {
     )]
     #[derive(Debug, Clone, Copy)]
     pub struct PrimaryControlChannel {
-        #[sysml::attr(default = 0.012, unit = "s")]
+        #[sysml::attr(budget = "latency", default = 0.012, unit = "s")]
         pub reaction_time_s: Quantity<f64>,
         #[sysml::port]
         pub cmd_out: ActuatorCommandPort,
@@ -101,7 +101,7 @@ pub mod flight_controller {
     )]
     #[derive(Debug, Clone, Copy)]
     pub struct MonitorChannel {
-        #[sysml::attr(default = 0.006, unit = "s")]
+        #[sysml::attr(budget = "latency", default = 0.006, unit = "s")]
         pub trip_latency_s: Quantity<f64>,
         #[sysml::port]
         pub cutoff_in: Conjugated<ActuatorCommandPort>,
@@ -126,7 +126,8 @@ pub mod flight_controller {
     )]
     #[derive(Debug, Clone, Copy)]
     pub struct FlightControllerAssembly {
-        #[sysml::attr(default = 0.050, unit = "s")]
+        /// A limit (fault-tolerant time interval), not a stage latency.
+        #[sysml::attr(budget = "none", default = 0.050, unit = "s")]
         pub max_allowed_fault_duration_s: Quantity<f64>,
         #[sysml::part]
         pub primary: PrimaryControlChannel,

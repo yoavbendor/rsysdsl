@@ -56,7 +56,7 @@ pub mod cosma_package {
     #[sysml::specializes(HardwareComponent)]
     #[derive(Debug, Clone)]
     pub struct PowerProvider {
-        #[sysml::attr(subsets = "ISQ::power", default = "0", unit = "W")]
+        #[sysml::attr(subsets = "ISQ::power", default = "0", unit = "W", budget = "none")]
         pub power_generated: Quantity<f64>,
     }
 
@@ -375,17 +375,17 @@ pub mod technical_components_package {
     #[sysml::satisfy(req = DPSThrottlingRange, id = "CLR-R057")]
     #[derive(Debug, Clone)]
     pub struct LunarModuleDescentStage {
-        #[sysml::attr(redefines = "dryMass", value = "2100", unit = "kg")]
+        #[sysml::attr(redefines = "dryMass", value = "2100", unit = "kg", budget = "mass")]
         pub dry_mass: Quantity<f64>,
-        #[sysml::attr(redefines = "propellantMass", value = "8250", unit = "kg")]
+        #[sysml::attr(redefines = "propellantMass", value = "8250", unit = "kg", budget = "mass")]
         pub propellant_mass: Quantity<f64>,
         #[sysml::attr(redefines = "maxThrust", value = "45000", unit = "N")]
         pub max_thrust: Quantity<f64>,
-        #[sysml::attr(redefines = "specificImpulse", value = "305", unit = "s")]
+        #[sysml::attr(redefines = "specificImpulse", value = "305", unit = "s", budget = "none")]
         pub specific_impulse: Quantity<f64>,
         #[sysml::attr(redefines = "powerGenerated", value = "1500", unit = "W")]
         pub power_generated: Quantity<f64>,
-        #[sysml::attr(redefines = "powerLoad", value = "1000", unit = "W")]
+        #[sysml::attr(redefines = "powerLoad", value = "1000", unit = "W", budget = "power")]
         pub power_load: Quantity<f64>,
         #[sysml::attr(redefines = "failureRate", value = "3.0E-6", unit = "1/h")]
         pub failure_rate: Quantity<f64>,
@@ -407,17 +407,17 @@ pub mod technical_components_package {
     #[sysml::satisfy(req = LMASBurnDuration, id = "CLR-R058")]
     #[derive(Debug, Clone)]
     pub struct LunarModuleAscentStage {
-        #[sysml::attr(redefines = "dryMass", value = "2220", unit = "kg")]
+        #[sysml::attr(redefines = "dryMass", value = "2220", unit = "kg", budget = "mass")]
         pub dry_mass: Quantity<f64>,
-        #[sysml::attr(redefines = "propellantMass", value = "2370", unit = "kg")]
+        #[sysml::attr(redefines = "propellantMass", value = "2370", unit = "kg", budget = "mass")]
         pub propellant_mass: Quantity<f64>,
         #[sysml::attr(redefines = "maxThrust", value = "16000", unit = "N")]
         pub max_thrust: Quantity<f64>,
-        #[sysml::attr(redefines = "specificImpulse", value = "311", unit = "s")]
+        #[sysml::attr(redefines = "specificImpulse", value = "311", unit = "s", budget = "none")]
         pub specific_impulse: Quantity<f64>,
         #[sysml::attr(redefines = "powerGenerated", value = "1500", unit = "W")]
         pub power_generated: Quantity<f64>,
-        #[sysml::attr(redefines = "powerLoad", value = "1200", unit = "W")]
+        #[sysml::attr(redefines = "powerLoad", value = "1200", unit = "W", budget = "power")]
         pub power_load: Quantity<f64>,
         #[sysml::attr(redefines = "failureRate", value = "2.5E-6", unit = "1/h")]
         pub failure_rate: Quantity<f64>,

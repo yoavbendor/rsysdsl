@@ -132,7 +132,7 @@ pub mod power_tools_family_model {
     pub struct TriggerHmi {
         #[sysml::attr(redefines = "mass", default = 0.08, unit = "kg")]
         pub mass: Quantity<f64>,
-        #[sysml::attr(default = 1.5, unit = "W")]
+        #[sysml::attr(budget = "power", default = 1.5, unit = "W")]
         pub worklight_power: Quantity<f64>,
         #[sysml::attr(default = true)]
         pub forward_direction: bool,

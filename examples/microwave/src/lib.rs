@@ -213,7 +213,7 @@ pub mod microwave_model {
         pub rated_power: Quantity<f64>,
         #[sysml::attr(redefines = "outputVoltage", default = 230.0, unit = "V")]
         pub output_voltage: Quantity<f64>,
-        #[sysml::attr(default = 0.008, unit = "s")]
+        #[sysml::attr(budget = "latency", default = 0.008, unit = "s")]
         pub switching_cutoff_latency: Quantity<f64>,
         #[sysml::port(redefines)]
         pub power_in: Conjugated<ElectricalPowerPort>,
@@ -329,7 +329,8 @@ pub mod microwave_model {
         pub acoustic_attenuation_db: f64,
         #[sysml::attr(dimensionless, default = 0.88)]
         pub rf_coupling_efficiency: f64,
-        #[sysml::attr(default = 0.50, unit = "kg")]
+        /// Food load, not equipment mass.
+        #[sysml::attr(budget = "none", default = 0.50, unit = "kg")]
         pub nominal_food_mass: Quantity<f64>,
         #[sysml::port(redefines)]
         pub heat_out: ThermalPort,

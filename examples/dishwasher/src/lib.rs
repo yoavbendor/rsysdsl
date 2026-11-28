@@ -250,7 +250,8 @@ pub mod dishwasher_model {
     )]
     #[derive(Debug, Clone, Copy)]
     pub struct PowerSubsystem {
-        #[sysml::attr(default = 1920.0, unit = "W")]
+        /// Aggregate of the subsystem's loads: counted through its parts, not again here.
+        #[sysml::attr(budget = "none", default = 1920.0, unit = "W")]
         pub peak_power_draw: Quantity<f64>,
         #[sysml::attr(default = 12.0, unit = "V")]
         pub logic_rail_voltage: Quantity<f64>,
@@ -368,7 +369,8 @@ pub mod dishwasher_model {
         pub acoustic_attenuation_db: f64,
         #[sysml::attr(default = 4.5, unit = "L")]
         pub water_volume: Quantity<f64>,
-        #[sysml::attr(default = 4.5, unit = "kg")]
+        /// Water charge (a consumable load), not equipment mass.
+        #[sysml::attr(budget = "none", default = 4.5, unit = "kg")]
         pub water_mass: Quantity<f64>,
         #[sysml::port(redefines)]
         pub heat_in: Conjugated<ThermalPort>,
@@ -687,7 +689,8 @@ pub mod dishwasher_model {
     pub struct DishwasherControlPanel {
         #[sysml::attr(dimensionless, redefines = "chimeLevelDb", default = 58.0)]
         pub chime_level_db: f64,
-        #[sysml::attr(default = 5400.0, unit = "s")]
+        /// Wash-program duration, not a processing-path latency.
+        #[sysml::attr(budget = "none", default = 5400.0, unit = "s")]
         pub nominal_cycle_duration: Quantity<f64>,
         #[sysml::port(redefines)]
         pub power_in: Conjugated<ElectricalPowerPort>,

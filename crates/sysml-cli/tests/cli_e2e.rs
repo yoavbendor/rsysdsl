@@ -1082,6 +1082,7 @@ fn cli_refute_trade_study_what_if_and_budget_end_to_end() {
     assert_eq!(out.status.code(), Some(1));
     let ref_unsat: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(ref_unsat["feasible"], false);
+    assert_eq!(ref_unsat["status"], "refuted");
     assert_eq!(ref_unsat["minimal_unsat_core"].as_array().unwrap().len(), 2);
     assert!(!ref_unsat["relaxations"].as_array().unwrap().is_empty());
 
@@ -1110,6 +1111,7 @@ fn cli_refute_trade_study_what_if_and_budget_end_to_end() {
         .unwrap();
     assert!(out.status.success());
     let ts: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(ts["status"], "ok");
     assert_eq!(ts["total_combinations"], 6);
     assert_eq!(ts["feasible_count"], 2);
     assert_eq!(ts["pareto_count"], 2);
@@ -1142,6 +1144,8 @@ fn cli_refute_trade_study_what_if_and_budget_end_to_end() {
     let bud: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(bud["ok"], false);
     assert!(bud["power"]["total"].as_f64().unwrap() > 1000.0);
+    assert_eq!(bud["power"]["status"], "fail");
+    assert!(bud["power"]["untracked"].as_array().unwrap().is_empty());
     assert!(bud["waste_heat"]["total"].as_f64().unwrap() > 0.0);
 }
 
