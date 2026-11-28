@@ -9,11 +9,12 @@
 //!    restores feasibility, along with the winning witness variant.
 
 use serde::{Deserialize, Serialize};
-use sysml_ir::{AttributeUsage, Model, PackageMember};
+use sysml_ir::Model;
 
-use crate::budget::BudgetLimits;
-use crate::emit_cli::is_sysml_std_package;
-use crate::trade_study::{run_trade_study, TradePoint};
+pub use crate::trade_study::{ActiveConstraint, UnevaluatedConstraint};
+use crate::trade_study::{
+    design_points, drop_unmeasurable, metric_value, requirement_constraints, satisfies, TradePoint,
+};
 
 /// Candidate stakeholder / requirement bounds to test for feasibility.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -21,17 +22,10 @@ pub struct RefuteLimits {
     pub min_runtime_s: Option<f64>,
     pub max_mass_kg: Option<f64>,
     pub max_power_w: Option<f64>,
+    /// No structural noise source exists until C3 evaluates `require_constraint`s; a bound
+    /// given here is listed under `unevaluated` and never decides feasibility.
     pub max_noise_db: Option<f64>,
     pub max_cost_usd: Option<f64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ActiveConstraint {
-    pub id: String,
-    pub metric: String,
-    pub op: String,
-    pub limit: f64,
-    pub unit: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -45,143 +39,124 @@ pub struct RelaxationSuggestion {
     pub witness_variant: String,
 }
 
+/// Three-valued refutation verdict (D3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RefuteStatus {
+    /// At least one design point satisfies every active constraint.
+    Feasible,
+    /// No design point does: see the minimal unsatisfiable core.
+    Refuted,
+    /// Nothing to decide: the model has no `#[sysml::variation]` design space, or no
+    /// constraint could be applied.
+    NotApplicable,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RefuteReport {
-    /// `true` when at least one feasible variant exists; `false` when the requirement set is REFUTED (UNSAT).
-    pub feasible: bool,
+    pub status: RefuteStatus,
+    /// `true` (feasible) / `false` (refuted, UNSAT); `null` when `not_applicable`.
+    pub feasible: Option<bool>,
     pub total_variants_searched: usize,
     pub witness_variants: Vec<String>,
     pub active_constraints: Vec<ActiveConstraint>,
-    /// Minimal Unsatisfiable Core (non-empty only when `feasible == false`).
+    /// Requirement constraints / CLI bounds that map onto no design-point metric.
+    pub unevaluated: Vec<UnevaluatedConstraint>,
+    /// Minimal Unsatisfiable Core (non-empty only when `status == "refuted"`).
     pub minimal_unsat_core: Vec<ActiveConstraint>,
-    /// Minimum single-constraint relaxations that restore feasibility (non-empty when `feasible == false`).
+    /// Minimum single-constraint relaxations that restore feasibility (when refuted).
     pub relaxations: Vec<RelaxationSuggestion>,
 }
 
-/// Test whether `model` + `extra_limits` has a feasible design; if UNSAT, compute the
+/// Test whether `model` + `extra` limits has a feasible design; if UNSAT, compute the
 /// Minimal Unsatisfiable Core and exact minimum relaxations.
+///
+/// Design points and their metrics come from budget roles (see [`crate::trade_study`]); model
+/// requirements are recognised structurally from their `require_constraint` (a comparison of
+/// two requirement attributes whose bound dimension maps onto a metric), never by name.
 pub fn refute_requirements(model: &Model, extra: &RefuteLimits) -> RefuteReport {
-    // 1. Collect all design points (unconstrained trade-study) + model requirement bounds
-    let base_study = run_trade_study(model, &BudgetLimits::default());
-    let points = &base_study.points;
+    let (_, points, _) = design_points(model);
+    let (model_constraints, mut unevaluated) = requirement_constraints(model);
 
+    let cli = |id: &str, metric: &str, op: &str, limit: f64, unit: &str| ActiveConstraint {
+        id: id.into(),
+        metric: metric.into(),
+        op: op.into(),
+        limit,
+        unit: unit.into(),
+    };
     let mut constraints: Vec<ActiveConstraint> = Vec::new();
-    let mut model_min_rt: Option<(String, f64)> = None;
-    let mut model_max_db: Option<(String, f64)> = None;
-
-    for pkg in &model.packages {
-        if is_sysml_std_package(pkg) {
+    for c in model_constraints {
+        // A CLI runtime bound replaces the model's runtime requirement (candidate what-if).
+        if c.metric == "runtime_s" && extra.min_runtime_s.is_some() {
             continue;
         }
-        for m in &pkg.members {
-            if let PackageMember::RequirementDef(r) = m {
-                let rid = r.short_name.clone().unwrap_or_else(|| r.name.clone());
-                if let Some(v) = attr_number(&r.attributes, &["minRuntimeS", "minRuntime"]) {
-                    if model_min_rt.as_ref().is_none_or(|(_, cur)| v > *cur) {
-                        model_min_rt = Some((rid.clone(), v));
-                    }
-                }
-                if let Some(v) = attr_number(&r.attributes, &["maxNoiseDb"]) {
-                    if model_max_db.as_ref().is_none_or(|(_, cur)| v < *cur) {
-                        model_max_db = Some((rid.clone(), v));
-                    }
-                }
-            }
-        }
+        constraints.push(c);
     }
-
     if let Some(v) = extra.min_runtime_s {
-        constraints.push(ActiveConstraint {
-            id: "CLI-MIN-RUNTIME".into(),
-            metric: "runtime_s".into(),
-            op: ">=".into(),
-            limit: v,
-            unit: "s".into(),
-        });
-    } else if let Some((rid, v)) = model_min_rt {
-        constraints.push(ActiveConstraint {
-            id: rid,
-            metric: "runtime_s".into(),
-            op: ">=".into(),
-            limit: v,
-            unit: "s".into(),
-        });
+        constraints.push(cli("CLI-MIN-RUNTIME", "runtime_s", ">=", v, "s"));
     }
-
-    if let Some(v) = extra.max_noise_db {
-        constraints.push(ActiveConstraint {
-            id: "CLI-MAX-NOISE".into(),
-            metric: "noise_db".into(),
-            op: "<=".into(),
-            limit: v,
-            unit: "dB".into(),
-        });
-    } else if let Some((rid, v)) = model_max_db {
-        constraints.push(ActiveConstraint {
-            id: rid,
-            metric: "noise_db".into(),
-            op: "<=".into(),
-            limit: v,
-            unit: "dB".into(),
-        });
-    }
-
     if let Some(v) = extra.max_mass_kg {
-        constraints.push(ActiveConstraint {
-            id: "CLI-MAX-MASS".into(),
-            metric: "mass_kg".into(),
-            op: "<=".into(),
-            limit: v,
-            unit: "kg".into(),
-        });
+        constraints.push(cli("CLI-MAX-MASS", "mass_kg", "<=", v, "kg"));
     }
     if let Some(v) = extra.max_power_w {
-        constraints.push(ActiveConstraint {
-            id: "CLI-MAX-POWER".into(),
-            metric: "power_w".into(),
-            op: "<=".into(),
-            limit: v,
-            unit: "W".into(),
-        });
+        constraints.push(cli("CLI-MAX-POWER", "power_w", "<=", v, "W"));
     }
     if let Some(v) = extra.max_cost_usd {
-        constraints.push(ActiveConstraint {
-            id: "CLI-MAX-COST".into(),
-            metric: "cost_usd".into(),
-            op: "<=".into(),
-            limit: v,
-            unit: "USD".into(),
+        constraints.push(cli("CLI-MAX-COST", "cost_usd", "<=", v, "USD"));
+    }
+    if let Some(v) = extra.max_noise_db {
+        unevaluated.push(UnevaluatedConstraint {
+            id: "CLI-MAX-NOISE".into(),
+            constraint: format!("noise_db <= {v}"),
+            reason: "no structural noise metric on design points (C3 evaluates require_constraint expressions)".into(),
         });
     }
 
-    let witnesses = feasible_witnesses(points, &constraints);
-    if !witnesses.is_empty() || points.is_empty() {
+    let constraints = drop_unmeasurable(&points, constraints, &mut unevaluated);
+    if points.is_empty() || constraints.is_empty() {
         return RefuteReport {
-            feasible: !witnesses.is_empty(),
+            status: RefuteStatus::NotApplicable,
+            feasible: None,
             total_variants_searched: points.len(),
-            witness_variants: witnesses,
+            witness_variants: Vec::new(),
             active_constraints: constraints,
+            unevaluated,
             minimal_unsat_core: Vec::new(),
             relaxations: Vec::new(),
         };
     }
 
-    // 2. Compute Minimal Unsatisfiable Core (MUC): greedily drop any constraint that
-    //    is not needed to keep the remaining set UNSAT.
+    let witnesses = feasible_witnesses(&points, &constraints);
+    if !witnesses.is_empty() {
+        return RefuteReport {
+            status: RefuteStatus::Feasible,
+            feasible: Some(true),
+            total_variants_searched: points.len(),
+            witness_variants: witnesses,
+            active_constraints: constraints,
+            unevaluated,
+            minimal_unsat_core: Vec::new(),
+            relaxations: Vec::new(),
+        };
+    }
+
+    // Minimal Unsatisfiable Core (MUC): greedily drop any constraint that is not needed to
+    // keep the remaining set UNSAT.
     let mut muc = constraints.clone();
     let mut i = 0;
     while i < muc.len() {
         let mut trial = muc.clone();
         trial.remove(i);
-        if !trial.is_empty() && feasible_witnesses(points, &trial).is_empty() {
+        if !trial.is_empty() && feasible_witnesses(&points, &trial).is_empty() {
             muc = trial;
         } else {
             i += 1;
         }
     }
 
-    // 3. For each constraint in the MUC, compute the exact minimum relaxation that
-    //    restores feasibility (assuming all other constraints remain fixed).
+    // For each constraint in the MUC, the exact minimum relaxation that restores feasibility
+    // (all other constraints fixed).
     let mut relaxations = Vec::new();
     for (idx, c) in muc.iter().enumerate() {
         let others: Vec<ActiveConstraint> = muc
@@ -190,15 +165,13 @@ pub fn refute_requirements(model: &Model, extra: &RefuteLimits) -> RefuteReport 
             .filter(|(j, _)| *j != idx)
             .map(|(_, x)| x.clone())
             .collect();
-
-        let mut best: Option<(f64, f64, String)> = None; // (abs_delta, required_limit, witness_id)
-        for p in points {
-            if !satisfies_all(p, &others) {
+        let mut best: Option<(f64, f64, String)> = None;
+        for p in &points {
+            if !others.iter().all(|o| satisfies(p, o)) {
                 continue;
             }
             if let Some(val) = metric_value(p, &c.metric) {
-                let delta = val - c.limit;
-                let abs_d = delta.abs();
+                let abs_d = (val - c.limit).abs();
                 if best.as_ref().is_none_or(|(bd, _, _)| abs_d < *bd) {
                     best = Some((abs_d, val, p.id.clone()));
                 }
@@ -218,10 +191,12 @@ pub fn refute_requirements(model: &Model, extra: &RefuteLimits) -> RefuteReport 
     }
 
     RefuteReport {
-        feasible: false,
+        status: RefuteStatus::Refuted,
+        feasible: Some(false),
         total_variants_searched: points.len(),
         witness_variants: Vec::new(),
         active_constraints: constraints,
+        unevaluated,
         minimal_unsat_core: muc,
         relaxations,
     }
@@ -233,40 +208,46 @@ pub fn render_refute_markdown(r: &RefuteReport) -> String {
     out.push_str("# Requirement Feasibility & Refutation Report\n\n");
     out.push_str(&format!(
         "- **Status:** {} ({} variants searched)\n",
-        if r.feasible {
-            "FEASIBLE (SAT)"
-        } else {
-            "REFUTED (UNSAT — No Feasible Design)"
+        match r.status {
+            RefuteStatus::Feasible => "FEASIBLE (SAT)",
+            RefuteStatus::Refuted => "REFUTED (UNSAT — No Feasible Design)",
+            RefuteStatus::NotApplicable =>
+                "NOT APPLICABLE (no variation design space or no applicable constraint)",
         },
         r.total_variants_searched
     ));
-    if r.feasible {
-        out.push_str(&format!(
+    for u in &r.unevaluated {
+        out.push_str(&format!("- **Not evaluated `{}`:** `{}` ({})\n", u.id, u.constraint, u.reason));
+    }
+    match r.status {
+        RefuteStatus::Feasible => out.push_str(&format!(
             "- **Feasible Witness Variants:** {}\n",
             r.witness_variants.join(", ")
-        ));
-    } else {
-        out.push_str("\n## Minimal Unsatisfiable Core (Conflicting Requirements)\n\n");
-        for c in &r.minimal_unsat_core {
-            out.push_str(&format!(
-                "- **`{}`**: `{} {} {:.2} {}`\n",
-                c.id, c.metric, c.op, c.limit, c.unit
-            ));
-        }
-        out.push_str("\n## Minimum Relaxations to Restore Feasibility\n\n");
-        for rx in &r.relaxations {
-            out.push_str(&format!(
-                "- Relax **`{}`** (`{}`) from `{:.2} {}` to **`{:.2} {}`** (`{:+.2} {}`) -> feasible via **`{}`**\n",
-                rx.constraint_id,
-                rx.metric,
-                rx.current_limit,
-                rx.unit,
-                rx.required_limit,
-                rx.unit,
-                rx.delta,
-                rx.unit,
-                rx.witness_variant
-            ));
+        )),
+        RefuteStatus::NotApplicable => {}
+        RefuteStatus::Refuted => {
+            out.push_str("\n## Minimal Unsatisfiable Core (Conflicting Requirements)\n\n");
+            for c in &r.minimal_unsat_core {
+                out.push_str(&format!(
+                    "- **`{}`**: `{} {} {:.2} {}`\n",
+                    c.id, c.metric, c.op, c.limit, c.unit
+                ));
+            }
+            out.push_str("\n## Minimum Relaxations to Restore Feasibility\n\n");
+            for rx in &r.relaxations {
+                out.push_str(&format!(
+                    "- Relax **`{}`** (`{}`) from `{:.2} {}` to **`{:.2} {}`** (`{:+.2} {}`) -> feasible via **`{}`**\n",
+                    rx.constraint_id,
+                    rx.metric,
+                    rx.current_limit,
+                    rx.unit,
+                    rx.required_limit,
+                    rx.unit,
+                    rx.delta,
+                    rx.unit,
+                    rx.witness_variant
+                ));
+            }
         }
     }
     out
@@ -275,56 +256,9 @@ pub fn render_refute_markdown(r: &RefuteReport) -> String {
 fn feasible_witnesses(points: &[TradePoint], constraints: &[ActiveConstraint]) -> Vec<String> {
     points
         .iter()
-        .filter(|p| satisfies_all(p, constraints))
+        .filter(|p| constraints.iter().all(|c| satisfies(p, c)))
         .map(|p| p.id.clone())
         .collect()
-}
-
-fn satisfies_all(p: &TradePoint, constraints: &[ActiveConstraint]) -> bool {
-    for c in constraints {
-        let Some(val) = metric_value(p, &c.metric) else {
-            return false;
-        };
-        let ok = match c.op.as_str() {
-            ">=" => val + 1e-9 >= c.limit,
-            "<=" => val <= c.limit + 1e-9,
-            _ => true,
-        };
-        if !ok {
-            return false;
-        }
-    }
-    true
-}
-
-fn metric_value(p: &TradePoint, metric: &str) -> Option<f64> {
-    match metric {
-        "runtime_s" => p.estimated_runtime_s,
-        "mass_kg" => Some(p.mass_kg),
-        "power_w" => Some(p.rated_power_w),
-        "noise_db" => p.max_noise_db,
-        "cost_usd" => Some(p.unit_cost_usd),
-        _ => None,
-    }
-}
-
-fn attr_number(attrs: &[AttributeUsage], names: &[&str]) -> Option<f64> {
-    for a in attrs {
-        let aname = a
-            .name
-            .as_deref()
-            .or_else(|| a.redefines.first().map(String::as_str))?;
-        if names.iter().any(|n| n.eq_ignore_ascii_case(aname)) {
-            let s = a.value.as_deref()?.trim();
-            let tok = s.split_whitespace().next()?;
-            if let Ok(v) = tok.parse::<f64>() {
-                if v.is_finite() {
-                    return Some(v);
-                }
-            }
-        }
-    }
-    None
 }
 
 fn round2(v: f64) -> f64 {
@@ -339,13 +273,23 @@ fn round2(v: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sysml_ir::{Package, PartDef, RequirementDef, VariantPart};
+    use sysml_ir::{
+        AttributeUsage, BudgetRole, Package, PackageMember, PartDef, RequirementDef, VariantPart,
+    };
 
-    fn attr(name: &str, val: &str) -> AttributeUsage {
+    fn attr(name: &str, val: &str, unit: &str) -> AttributeUsage {
         AttributeUsage {
             name: Some(name.into()),
             value: Some(val.into()),
+            unit: (!unit.is_empty()).then(|| unit.into()),
             ..Default::default()
+        }
+    }
+
+    fn role(name: &str, val: &str, unit: &str, r: BudgetRole) -> AttributeUsage {
+        AttributeUsage {
+            budget_role: Some(r),
+            ..attr(name, val, unit)
         }
     }
 
@@ -358,17 +302,21 @@ mod tests {
         pkg.members.push(PackageMember::RequirementDef(RequirementDef {
             name: "RuntimeReq".into(),
             short_name: Some("TOOL-001".into()),
-            attributes: vec![attr("minRuntimeS", "300.0")],
+            attributes: vec![
+                attr("minRuntimeS", "300.0", "s"),
+                attr("actualRuntimeS", "589.0", "s"),
+            ],
+            require_constraints: vec!["actualRuntimeS >= minRuntimeS".into()],
             ..Default::default()
         }));
         pkg.members.push(PackageMember::PartDef(PartDef {
             name: "Batt2Ah".into(),
-            attributes: vec![attr("energyCapacity", "129600.0"), attr("mass", "0.40")],
+            attributes: vec![attr("energyCapacity", "129600.0", "J"), role("mass", "0.40", "kg", BudgetRole::Mass)],
             ..Default::default()
         }));
         pkg.members.push(PackageMember::PartDef(PartDef {
             name: "Batt5Ah".into(),
-            attributes: vec![attr("energyCapacity", "324000.0"), attr("mass", "0.68")],
+            attributes: vec![attr("energyCapacity", "324000.0", "J"), role("mass", "0.68", "kg", BudgetRole::Mass)],
             ..Default::default()
         }));
         pkg.members.push(PackageMember::PartDef(PartDef {
@@ -382,7 +330,7 @@ mod tests {
         }));
         pkg.members.push(PackageMember::PartDef(PartDef {
             name: "Drill".into(),
-            attributes: vec![attr("ratedPower", "550.0"), attr("mass", "1.95"), attr("maxNoiseDb", "79.0")],
+            attributes: vec![role("ratedPower", "550.0", "W", BudgetRole::Power), role("mass", "1.95", "kg", BudgetRole::Mass)],
             ..Default::default()
         }));
         pkg.members.push(PackageMember::PartDef(PartDef {
@@ -402,7 +350,8 @@ mod tests {
                 ..Default::default()
             },
         );
-        assert!(!rep.feasible);
+        assert_eq!(rep.status, RefuteStatus::Refuted);
+        assert_eq!(rep.feasible, Some(false));
         assert_eq!(rep.minimal_unsat_core.len(), 2);
         assert!(rep.relaxations.iter().any(|rx| {
             rx.constraint_id == "CLI-MAX-MASS"
@@ -414,5 +363,35 @@ mod tests {
                 && (rx.required_limit - 235.64).abs() < 0.1
                 && rx.witness_variant == "Compact2Ah + Drill"
         }));
+    }
+
+    /// P3 regression: no variations and no recognised requirement used to report
+    /// `"feasible": false` with an empty core.
+    #[test]
+    fn no_design_space_is_not_applicable_not_infeasible() {
+        let model = Model::new(vec![Package {
+            name: "WaterHeater".into(),
+            members: vec![PackageMember::PartDef(PartDef {
+                name: "Heater".into(),
+                attributes: vec![attr("ratedPowerW", "2000.0", "W")],
+                ..Default::default()
+            })],
+            ..Default::default()
+        }]);
+        for limits in [
+            RefuteLimits::default(),
+            RefuteLimits {
+                max_power_w: Some(100.0),
+                ..Default::default()
+            },
+        ] {
+            let rep = refute_requirements(&model, &limits);
+            assert_eq!(rep.status, RefuteStatus::NotApplicable);
+            assert_eq!(rep.feasible, None);
+            assert!(rep.minimal_unsat_core.is_empty());
+            let json = serde_json::to_value(&rep).unwrap();
+            assert_eq!(json["status"], "not_applicable");
+            assert!(json["feasible"].is_null());
+        }
     }
 }

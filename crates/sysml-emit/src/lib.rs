@@ -49,11 +49,12 @@ pub use refactor::{
 };
 pub use refute::{
     refute_requirements, render_refute_markdown, ActiveConstraint, RefuteLimits, RefuteReport,
-    RelaxationSuggestion,
+    RefuteStatus, RelaxationSuggestion,
 };
 pub use trade_study::{
     render_trade_study_markdown, render_what_if_markdown, run_trade_study, run_what_if,
-    SensitivityDriver, TradePoint, TradeStudyReport, WhatIfReport,
+    SensitivityDriver, TradePoint, TradeStudyReport, TradeStudyStatus, UnevaluatedConstraint,
+    WhatIfReport,
 };
 pub use tbd::{
     collect_tbd_ledger, count_by_kind, model_has_tbd, overdue_at, render_tbd_markdown, tbd_ledger_report,

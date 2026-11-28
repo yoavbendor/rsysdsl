@@ -6,12 +6,18 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
-use sysml_ir::{AttributeUsage, Model, PackageMember, PartDef};
+use sysml_ir::{AttributeUsage, BudgetRole, Model, PackageMember, RequirementDef};
 
-use crate::budget::{analyze_budgets, BudgetLimits};
+use crate::budget::{analyze_budgets, BudgetLimits, UntrackedAttr};
 use crate::emit_cli::is_sysml_std_package;
+use crate::roles::{DimClass, RoleIndex};
 
 /// One concrete combination of `#[sysml::variation]` choices evaluated in a trade study.
+///
+/// Metrics come from budget roles (C1 / D1) of the chosen variant types, never from attribute
+/// names: `mass_kg` (mass role), `rated_power_w` (power role), `unit_cost_usd` (cost role),
+/// `energy_capacity_j` (attributes of dimension energy, `J`), and the derived
+/// `estimated_runtime_s = energy / power`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TradePoint {
     pub id: String,
@@ -21,20 +27,55 @@ pub struct TradePoint {
     pub rated_power_w: f64,
     pub energy_capacity_j: f64,
     pub estimated_runtime_s: Option<f64>,
-    pub max_noise_db: Option<f64>,
     pub unit_cost_usd: f64,
     pub feasible: bool,
     pub pareto_optimal: bool,
     pub failed_checks: Vec<String>,
 }
 
+/// One bound checked on every design point (`metric op limit`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ActiveConstraint {
+    pub id: String,
+    pub metric: String,
+    pub op: String,
+    pub limit: f64,
+    pub unit: String,
+}
+
+/// A requirement constraint (or CLI bound) the operator could not map onto a design-point
+/// metric. Listed, never silently dropped; C2/C3 evaluate `require_constraint` expressions.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UnevaluatedConstraint {
+    pub id: String,
+    pub constraint: String,
+    pub reason: String,
+}
+
+/// `ok` when there is a design space to expand, `not_applicable` when the model has no
+/// `#[sysml::variation]`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TradeStudyStatus {
+    Ok,
+    NotApplicable,
+}
+
 /// Complete trade-study report over all `#[sysml::variation]` combinations.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TradeStudyReport {
+    pub status: TradeStudyStatus,
     pub variation_count: usize,
     pub total_combinations: usize,
     pub feasible_count: usize,
     pub pareto_count: usize,
+    /// Model requirement constraints and CLI limits applied to every point.
+    pub constraints: Vec<ActiveConstraint>,
+    /// Requirement constraints that map onto no metric (e.g. temperature, noise).
+    pub unevaluated: Vec<UnevaluatedConstraint>,
+    /// Attributes of variant types whose dimension is mass or power but that carry no budget
+    /// role: they are not in the metrics.
+    pub untracked: Vec<UntrackedAttr>,
     pub points: Vec<TradePoint>,
 }
 
@@ -59,52 +100,255 @@ pub struct WhatIfReport {
     pub top_drivers: Vec<SensitivityDriver>,
 }
 
-/// Expand all `#[sysml::variation]` enums in `model`, evaluate physical metrics and
-/// model/user limits, and compute the Pareto frontier.
-pub fn run_trade_study(model: &Model, limits: &BudgetLimits) -> TradeStudyReport {
-    let mut part_defs: BTreeMap<String, &PartDef> = BTreeMap::new();
-    let mut variations: Vec<(String, Vec<(String, String)>)> = Vec::new();
-    let mut req_min_runtime_s: Option<f64> = None;
-    let mut req_max_noise_db: Option<f64> = None;
-
-    for pkg in &model.packages {
-        if is_sysml_std_package(pkg) {
-            continue;
-        }
+/// User `#[sysml::variation]` definitions: (variation name, [(variant label, variant type)]).
+pub(crate) fn collect_variations(model: &Model) -> Vec<(String, Vec<(String, String)>)> {
+    let mut out = Vec::new();
+    for pkg in model.packages.iter().filter(|p| !is_sysml_std_package(p)) {
         for m in &pkg.members {
-            match m {
-                PackageMember::PartDef(p) => {
-                    part_defs.insert(p.name.clone(), p);
-                    if p.is_variation && !p.variants.is_empty() {
-                        let opts = p
-                            .variants
-                            .iter()
-                            .map(|v| (v.name.clone(), v.type_name.clone()))
-                            .collect();
-                        variations.push((p.name.clone(), opts));
-                    }
+            if let PackageMember::PartDef(p) = m {
+                if p.is_variation && !p.variants.is_empty() {
+                    let opts = p
+                        .variants
+                        .iter()
+                        .map(|v| (v.name.clone(), v.type_name.clone()))
+                        .collect();
+                    out.push((p.name.clone(), opts));
                 }
-                PackageMember::RequirementDef(r) => {
-                    if let Some(v) = attr_number(&r.attributes, &["minRuntimeS", "minRuntime"]) {
-                        req_min_runtime_s = Some(req_min_runtime_s.map_or(v, |c| c.max(v)));
-                    }
-                    if let Some(v) = attr_number(&r.attributes, &["maxNoiseDb"]) {
-                        req_max_noise_db = Some(req_max_noise_db.map_or(v, |c| c.min(v)));
-                    }
-                }
-                _ => {}
             }
         }
     }
+    out
+}
 
-    if variations.is_empty() {
-        return TradeStudyReport {
-            variation_count: 0,
-            total_combinations: 0,
-            feasible_count: 0,
-            pareto_count: 0,
-            points: Vec::new(),
+fn is_ident(s: &str) -> bool {
+    let mut chars = s.chars();
+    chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Split `lhs OP rhs` for a single comparison of two attribute references.
+fn split_comparison(expr: &str) -> Option<(&str, &'static str, &str)> {
+    for op in [">=", "<=", ">", "<"] {
+        if let Some(i) = expr.find(op) {
+            let (l, r) = (expr[..i].trim(), expr[i + op.len()..].trim());
+            if is_ident(l) && is_ident(r) {
+                return Some((l, op, r));
+            }
+            return None;
+        }
+    }
+    None
+}
+
+fn flip(op: &str) -> &'static str {
+    match op {
+        ">=" => "<=",
+        "<=" => ">=",
+        ">" => "<",
+        _ => ">",
+    }
+}
+
+/// Map the model's requirement constraints onto design-point metrics, structurally.
+///
+/// A constraint is used when it is a single comparison of two attributes of its requirement
+/// (`actual OP bound`). The bound is the side that is not `evidence` (or, when neither is, the
+/// right-hand side, the `measured <= limit` convention of the transpiler subset). The bound's
+/// unit dimension picks the metric: mass with `<=` -> `mass_kg`, power with `<=` -> `power_w`,
+/// time with `>=` -> `runtime_s` (the only time metric a design point has: energy / power).
+/// Everything else is reported in the second list.
+pub(crate) fn requirement_constraints(
+    model: &Model,
+) -> (Vec<ActiveConstraint>, Vec<UnevaluatedConstraint>) {
+    let mut active = Vec::new();
+    let mut unevaluated = Vec::new();
+    let mut reqs: Vec<&RequirementDef> = Vec::new();
+    for pkg in model.packages.iter().filter(|p| !is_sysml_std_package(p)) {
+        for m in &pkg.members {
+            if let PackageMember::RequirementDef(r) = m {
+                reqs.push(r);
+            }
+        }
+    }
+    for r in reqs {
+        let id = r.short_name.clone().unwrap_or_else(|| r.name.clone());
+        let find = |n: &str| -> Option<&AttributeUsage> {
+            r.attributes
+                .iter()
+                .find(|a| crate::roles::attr_key(a).as_deref() == Some(n))
         };
+        for c in &r.require_constraints {
+            let skip = |reason: &str, out: &mut Vec<UnevaluatedConstraint>| {
+                out.push(UnevaluatedConstraint {
+                    id: id.clone(),
+                    constraint: c.clone(),
+                    reason: reason.to_string(),
+                })
+            };
+            let Some((l, op, rhs)) = split_comparison(c) else {
+                skip("not a single comparison of two requirement attributes", &mut unevaluated);
+                continue;
+            };
+            let (Some(la), Some(ra)) = (find(l), find(rhs)) else {
+                skip("operand is not an attribute of the requirement", &mut unevaluated);
+                continue;
+            };
+            // `actual OP bound`; flip when the evidence (measured) side is on the right.
+            let (bound, op) = if ra.is_evidence && !la.is_evidence {
+                (la, flip(op))
+            } else {
+                (ra, op)
+            };
+            let dim = crate::roles::dim_class(bound.unit.as_deref());
+            let metric = match (dim, op) {
+                (Some(DimClass::Mass), "<=" | "<") => ("mass_kg", "kg"),
+                (Some(DimClass::Power), "<=" | "<") => ("power_w", "W"),
+                (Some(DimClass::Time), ">=" | ">") => ("runtime_s", "s"),
+                _ => {
+                    skip(
+                        "bound's dimension/direction maps to no design-point metric (mass <=, power <=, runtime >=)",
+                        &mut unevaluated,
+                    );
+                    continue;
+                }
+            };
+            let value = bound
+                .value
+                .as_deref()
+                .and_then(|v| v.split_whitespace().next()?.parse::<f64>().ok())
+                .zip(crate::roles::base_scale(bound.unit.as_deref()))
+                .map(|(v, k)| v * k);
+            let Some(limit) = value else {
+                skip("bound has no numeric value", &mut unevaluated);
+                continue;
+            };
+            active.push(ActiveConstraint {
+                id: id.clone(),
+                metric: metric.0.to_string(),
+                op: if op.starts_with('>') { ">=" } else { "<=" }.to_string(),
+                limit,
+                unit: metric.1.to_string(),
+            });
+        }
+    }
+    (active, unevaluated)
+}
+
+/// Value of a named metric on a design point.
+pub(crate) fn metric_value(p: &TradePoint, metric: &str) -> Option<f64> {
+    match metric {
+        "runtime_s" => p.estimated_runtime_s,
+        "mass_kg" => Some(p.mass_kg),
+        "power_w" => Some(p.rated_power_w),
+        "cost_usd" => Some(p.unit_cost_usd),
+        _ => None,
+    }
+}
+
+pub(crate) fn satisfies(p: &TradePoint, c: &ActiveConstraint) -> bool {
+    let Some(val) = metric_value(p, &c.metric) else {
+        return false;
+    };
+    match c.op.as_str() {
+        ">=" => val + 1e-9 >= c.limit,
+        "<=" => val <= c.limit + 1e-9,
+        _ => true,
+    }
+}
+
+/// Move constraints whose metric no design point has (e.g. `runtime_s` without any energy or
+/// power role) to `unevaluated`: they can neither pass nor refute anything.
+pub(crate) fn drop_unmeasurable(
+    points: &[TradePoint],
+    constraints: Vec<ActiveConstraint>,
+    unevaluated: &mut Vec<UnevaluatedConstraint>,
+) -> Vec<ActiveConstraint> {
+    if points.is_empty() {
+        return constraints;
+    }
+    constraints
+        .into_iter()
+        .filter(|c| {
+            let measurable = points.iter().any(|p| metric_value(p, &c.metric).is_some());
+            if !measurable {
+                unevaluated.push(UnevaluatedConstraint {
+                    id: c.id.clone(),
+                    constraint: format!("{} {} {}", c.metric, c.op, c.limit),
+                    reason: "no design point has this metric (missing energy / power / mass / cost roles)".into(),
+                });
+            }
+            measurable
+        })
+        .collect()
+}
+
+fn cli_constraints(limits: &BudgetLimits) -> Vec<ActiveConstraint> {
+    let mut out = Vec::new();
+    let mut push = |id: &str, metric: &str, v: Option<f64>, unit: &str| {
+        if let Some(limit) = v {
+            out.push(ActiveConstraint {
+                id: id.into(),
+                metric: metric.into(),
+                op: "<=".into(),
+                limit,
+                unit: unit.into(),
+            });
+        }
+    };
+    push("CLI-MAX-MASS", "mass_kg", limits.max_mass_kg, "kg");
+    push("CLI-MAX-POWER", "power_w", limits.max_power_w, "W");
+    push("CLI-MAX-COST", "cost_usd", limits.max_cost_usd, "USD");
+    out
+}
+
+/// Every design point of the model's variation space with role-derived metrics (no checks).
+/// Also returns the variation count and the untracked attributes of variant types.
+pub(crate) fn design_points(model: &Model) -> (usize, Vec<TradePoint>, Vec<UntrackedAttr>) {
+    let variations = collect_variations(model);
+    let idx = RoleIndex::new(model);
+    let mut untracked: Vec<UntrackedAttr> = Vec::new();
+    // Per variant type: (mass, power, energy, cost)
+    let mut metrics: BTreeMap<String, (f64, f64, f64, f64)> = BTreeMap::new();
+    for (_, opts) in &variations {
+        for (_, ty) in opts {
+            if metrics.contains_key(ty) {
+                continue;
+            }
+            let mut m = (0.0, 0.0, 0.0, 0.0);
+            if let Some(def) = idx.get(ty) {
+                for a in idx.effective_attributes(def) {
+                    if a.is_evidence {
+                        continue;
+                    }
+                    match a.role {
+                        Some(BudgetRole::Mass) => m.0 += a.base_number().unwrap_or(0.0),
+                        Some(BudgetRole::Power) => m.1 += a.base_number().unwrap_or(0.0),
+                        Some(BudgetRole::Cost) => m.3 += a.number().unwrap_or(0.0),
+                        Some(_) => {}
+                        None => match a.dim() {
+                            Some(DimClass::Energy) => m.2 += a.base_number().unwrap_or(0.0),
+                            Some(DimClass::Mass | DimClass::Power)
+                                if !matches!(a.value, crate::roles::AttrValue::Tbd) =>
+                            {
+                                untracked.push(UntrackedAttr {
+                                    element: def.name.clone(),
+                                    attribute: a.key.clone(),
+                                    unit: a.unit.clone().unwrap_or_default(),
+                                    value: a.number(),
+                                });
+                            }
+                            _ => {}
+                        },
+                    }
+                }
+            }
+            metrics.insert(ty.clone(), m);
+        }
+    }
+    if variations.is_empty() {
+        return (0, Vec::new(), untracked);
     }
 
     // Cartesian product of all variation enums
@@ -121,106 +365,86 @@ pub fn run_trade_study(model: &Model, limits: &BudgetLimits) -> TradeStudyReport
         combos = next;
     }
 
-    let mut points = Vec::with_capacity(combos.len());
-    for combo in combos {
-        let id = combo
-            .iter()
-            .map(|(_, label, _)| label.as_str())
-            .collect::<Vec<_>>()
-            .join(" + ");
-        let mut choices = BTreeMap::new();
-        let mut mass_kg = 0.0;
-        let mut rated_power_w = 0.0;
-        let mut energy_capacity_j = 0.0;
-        let mut max_noise_db: Option<f64> = None;
-        let mut unit_cost_usd = 0.0;
-
-        for (var_name, _, ty_name) in &combo {
-            choices.insert(var_name.clone(), ty_name.clone());
-            if let Some(p) = part_defs.get(ty_name) {
-                if let Some(m) = attr_number(&p.attributes, &["mass", "massKg", "dryMass"]) {
-                    mass_kg += m;
-                }
-                if let Some(pw) = attr_number(&p.attributes, &["ratedPower", "powerDraw", "powerW"]) {
-                    rated_power_w += pw;
-                }
-                if let Some(e) = attr_number(&p.attributes, &["energyCapacity", "energyCapacityJ"]) {
-                    energy_capacity_j += e;
-                }
-                if let Some(db) = attr_number(&p.attributes, &["maxNoiseDb", "noiseLevelDb"]) {
-                    max_noise_db = Some(max_noise_db.map_or(db, |cur| cur.max(db)));
-                }
-                if let Some(c) = attr_number(&p.attributes, &["unitCost", "costUsd"]) {
-                    unit_cost_usd += c;
-                }
+    let points = combos
+        .into_iter()
+        .map(|combo| {
+            let id = combo
+                .iter()
+                .map(|(_, label, _)| label.as_str())
+                .collect::<Vec<_>>()
+                .join(" + ");
+            let mut choices = BTreeMap::new();
+            let (mut mass, mut power, mut energy, mut cost) = (0.0, 0.0, 0.0, 0.0);
+            for (var_name, _, ty) in &combo {
+                choices.insert(var_name.clone(), ty.clone());
+                let m = metrics[ty];
+                mass += m.0;
+                power += m.1;
+                energy += m.2;
+                cost += m.3;
             }
-        }
+            TradePoint {
+                id,
+                choices,
+                mass_kg: round2(mass),
+                rated_power_w: round2(power),
+                energy_capacity_j: round2(energy),
+                estimated_runtime_s: (energy > 0.0 && power > 0.0)
+                    .then(|| round2(energy / power)),
+                unit_cost_usd: round2(cost),
+                feasible: true,
+                pareto_optimal: false,
+                failed_checks: Vec::new(),
+            }
+        })
+        .collect();
+    (variations.len(), points, untracked)
+}
 
-        let estimated_runtime_s = if energy_capacity_j > 0.0 && rated_power_w > 0.0 {
-            Some(round2(energy_capacity_j / rated_power_w))
-        } else {
-            None
+/// Expand all `#[sysml::variation]` enums in `model`, evaluate role-derived metrics against
+/// the model's (structurally recognised) requirement constraints and the CLI limits, and
+/// compute the Pareto frontier (minimise mass and cost, maximise runtime).
+pub fn run_trade_study(model: &Model, limits: &BudgetLimits) -> TradeStudyReport {
+    let (variation_count, mut points, untracked) = design_points(model);
+    let (mut constraints, mut unevaluated) = requirement_constraints(model);
+    constraints.extend(cli_constraints(limits));
+    let constraints = drop_unmeasurable(&points, constraints, &mut unevaluated);
+
+    if variation_count == 0 {
+        return TradeStudyReport {
+            status: TradeStudyStatus::NotApplicable,
+            variation_count: 0,
+            total_combinations: 0,
+            feasible_count: 0,
+            pareto_count: 0,
+            constraints,
+            unevaluated,
+            untracked,
+            points: Vec::new(),
         };
-
-        let mut failed_checks = Vec::new();
-        if let (Some(min_rt), Some(rt)) = (req_min_runtime_s, estimated_runtime_s) {
-            if rt < min_rt {
-                failed_checks.push(format!("runtime {rt:.1}s < {min_rt:.1}s"));
-            }
-        }
-        if let (Some(max_db), Some(db)) = (req_max_noise_db, max_noise_db) {
-            if db > max_db {
-                failed_checks.push(format!("noise {db:.1}dB > {max_db:.1}dB"));
-            }
-        }
-        if let Some(max_m) = limits.max_mass_kg {
-            if mass_kg > max_m + 1e-9 {
-                failed_checks.push(format!("mass {mass_kg:.2}kg > {max_m:.2}kg"));
-            }
-        }
-        if let Some(max_p) = limits.max_power_w {
-            if rated_power_w > max_p + 1e-9 {
-                failed_checks.push(format!("power {rated_power_w:.1}W > {max_p:.1}W"));
-            }
-        }
-        if let Some(max_c) = limits.max_cost_usd {
-            if unit_cost_usd > max_c + 1e-9 {
-                failed_checks.push(format!("cost ${unit_cost_usd:.2} > ${max_c:.2}"));
-            }
-        }
-
-        points.push(TradePoint {
-            id,
-            choices,
-            mass_kg: round2(mass_kg),
-            rated_power_w: round2(rated_power_w),
-            energy_capacity_j: round2(energy_capacity_j),
-            estimated_runtime_s,
-            max_noise_db: max_noise_db.map(round2),
-            unit_cost_usd: round2(unit_cost_usd),
-            feasible: failed_checks.is_empty(),
-            pareto_optimal: false,
-            failed_checks,
-        });
     }
 
-    // Mark Pareto-optimal feasible points:
-    // minimize mass_kg, maximize runtime_s, minimize noise_db, minimize cost_usd
+    for p in &mut points {
+        for c in &constraints {
+            if !satisfies(p, c) {
+                let shown = metric_value(p, &c.metric)
+                    .map(|v| format!("{v:.2}"))
+                    .unwrap_or_else(|| "n/a".into());
+                p.failed_checks.push(format!(
+                    "{} {} {shown} {} {:.2} {}",
+                    c.id, c.metric, if c.op == ">=" { "<" } else { ">" }, c.limit, c.unit
+                ));
+            }
+        }
+        p.feasible = p.failed_checks.is_empty();
+    }
+
     let n = points.len();
     for i in 0..n {
         if !points[i].feasible {
             continue;
         }
-        let mut dominated = false;
-        for j in 0..n {
-            if i == j || !points[j].feasible {
-                continue;
-            }
-            if dominates(&points[j], &points[i]) {
-                dominated = true;
-                break;
-            }
-        }
+        let dominated = (0..n).any(|j| j != i && points[j].feasible && dominates(&points[j], &points[i]));
         points[i].pareto_optimal = !dominated;
     }
 
@@ -228,10 +452,14 @@ pub fn run_trade_study(model: &Model, limits: &BudgetLimits) -> TradeStudyReport
     let pareto_count = points.iter().filter(|p| p.pareto_optimal).count();
 
     TradeStudyReport {
-        variation_count: variations.len(),
+        status: TradeStudyStatus::Ok,
+        variation_count,
         total_combinations: points.len(),
         feasible_count,
         pareto_count,
+        constraints,
+        unevaluated,
+        untracked,
         points,
     }
 }
@@ -320,10 +548,23 @@ pub fn run_what_if(model: &Model, delta_pct: f64, limits: &BudgetLimits) -> What
 pub fn render_trade_study_markdown(r: &TradeStudyReport) -> String {
     let mut out = String::new();
     out.push_str("# Product-Line Trade Study & Pareto Frontier\n\n");
+    if r.status == TradeStudyStatus::NotApplicable {
+        out.push_str("- **Status:** NOT APPLICABLE (the model has no `#[sysml::variation]`)\n");
+    }
     out.push_str(&format!(
-        "- **Variations:** {} | **Combinations:** {} | **Feasible:** {} | **Pareto-Optimal:** {}\n\n",
+        "- **Variations:** {} | **Combinations:** {} | **Feasible:** {} | **Pareto-Optimal:** {}\n",
         r.variation_count, r.total_combinations, r.feasible_count, r.pareto_count
     ));
+    for c in &r.constraints {
+        out.push_str(&format!("- **Constraint `{}`:** `{} {} {:.2} {}`\n", c.id, c.metric, c.op, c.limit, c.unit));
+    }
+    for u in &r.unevaluated {
+        out.push_str(&format!("- **Not evaluated `{}`:** `{}` ({})\n", u.id, u.constraint, u.reason));
+    }
+    for u in &r.untracked {
+        out.push_str(&format!("- **Untracked (no budget role):** `{}.{}` [{}]\n", u.element, u.attribute, u.unit));
+    }
+    out.push('\n');
     for p in &r.points {
         let tag = if p.pareto_optimal {
             "PARETO"
@@ -336,18 +577,14 @@ pub fn render_trade_study_markdown(r: &TradeStudyReport) -> String {
             .estimated_runtime_s
             .map(|v| format!("{v:.1} s"))
             .unwrap_or_else(|| "—".into());
-        let db = p
-            .max_noise_db
-            .map(|v| format!("{v:.1} dB"))
-            .unwrap_or_else(|| "—".into());
         let fails = if p.failed_checks.is_empty() {
             String::new()
         } else {
             format!(" — fails: {}", p.failed_checks.join(", "))
         };
         out.push_str(&format!(
-            "- **`[{}]` {}**: mass {:.2} kg, power {:.0} W, runtime {}, noise {}{}\n",
-            tag, p.id, p.mass_kg, p.rated_power_w, rt, db, fails
+            "- **`[{}]` {}**: mass {:.2} kg, power {:.0} W, runtime {}, cost {:.2}{}\n",
+            tag, p.id, p.mass_kg, p.rated_power_w, rt, p.unit_cost_usd, fails
         ));
     }
     out
@@ -377,16 +614,11 @@ pub fn render_what_if_markdown(r: &WhatIfReport) -> String {
 fn dominates(a: &TradePoint, b: &TradePoint) -> bool {
     let a_rt = a.estimated_runtime_s.unwrap_or(0.0);
     let b_rt = b.estimated_runtime_s.unwrap_or(0.0);
-    let a_db = a.max_noise_db.unwrap_or(0.0);
-    let b_db = b.max_noise_db.unwrap_or(0.0);
-
     let no_worse = a.mass_kg <= b.mass_kg + 1e-9
         && a_rt + 1e-9 >= b_rt
-        && a_db <= b_db + 1e-9
         && a.unit_cost_usd <= b.unit_cost_usd + 1e-9;
     let strictly_better = a.mass_kg < b.mass_kg - 1e-9
         || a_rt > b_rt + 1e-9
-        || a_db < b_db - 1e-9
         || a.unit_cost_usd < b.unit_cost_usd - 1e-9;
     no_worse && strictly_better
 }
@@ -403,20 +635,6 @@ fn attr_effective_name(a: &AttributeUsage) -> Option<&str> {
     a.name
         .as_deref()
         .or_else(|| a.redefines.first().map(String::as_str))
-}
-
-fn attr_number(attrs: &[AttributeUsage], names: &[&str]) -> Option<f64> {
-    for a in attrs {
-        let Some(aname) = attr_effective_name(a) else {
-            continue;
-        };
-        if names.iter().any(|n| n.eq_ignore_ascii_case(aname)) {
-            if let Some(v) = parse_f64(a.value.as_deref()) {
-                return Some(v);
-            }
-        }
-    }
-    None
 }
 
 fn parse_f64(raw: Option<&str>) -> Option<f64> {
@@ -437,7 +655,7 @@ fn round2(v: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sysml_ir::{Package, RequirementDef, VariantPart};
+    use sysml_ir::{Package, PartDef, RequirementDef, VariantPart};
 
     fn attr(name: &str, val: &str) -> AttributeUsage {
         AttributeUsage {
@@ -464,17 +682,27 @@ mod tests {
         pkg.members.push(PackageMember::RequirementDef(RequirementDef {
             name: "RuntimeReq".into(),
             short_name: Some("TOOL-001".into()),
-            attributes: vec![attr("minRuntimeS", "300.0")],
+            attributes: vec![
+                AttributeUsage { unit: Some("s".into()), ..attr("minRuntimeS", "300.0") },
+                AttributeUsage { unit: Some("s".into()), ..attr("actualRuntimeS", "0.0") },
+                // Dimensionless (noise): maps to no metric, so it is listed as unevaluated.
+                attr("maxNoiseDb", "85.0"),
+                attr("noiseDb", "80.0"),
+            ],
+            require_constraints: vec![
+                "actualRuntimeS >= minRuntimeS".into(),
+                "noiseDb <= maxNoiseDb".into(),
+            ],
             ..Default::default()
         }));
         pkg.members.push(PackageMember::PartDef(PartDef {
             name: "Batt2Ah".into(),
-            attributes: vec![attr("energyCapacity", "129600.0"), role("mass", "0.40", "kg", sysml_ir::BudgetRole::Mass)],
+            attributes: vec![AttributeUsage { unit: Some("J".into()), ..attr("energyCapacity", "129600.0") }, role("mass", "0.40", "kg", sysml_ir::BudgetRole::Mass)],
             ..Default::default()
         }));
         pkg.members.push(PackageMember::PartDef(PartDef {
             name: "Batt5Ah".into(),
-            attributes: vec![attr("energyCapacity", "324000.0"), role("mass", "0.68", "kg", sysml_ir::BudgetRole::Mass)],
+            attributes: vec![AttributeUsage { unit: Some("J".into()), ..attr("energyCapacity", "324000.0") }, role("mass", "0.68", "kg", sysml_ir::BudgetRole::Mass)],
             ..Default::default()
         }));
         pkg.members.push(PackageMember::PartDef(PartDef {
@@ -488,7 +716,7 @@ mod tests {
         }));
         pkg.members.push(PackageMember::PartDef(PartDef {
             name: "Drill".into(),
-            attributes: vec![role("ratedPower", "550.0", "W", sysml_ir::BudgetRole::Power), role("mass", "1.95", "kg", sysml_ir::BudgetRole::Mass), attr("maxNoiseDb", "79.0")],
+            attributes: vec![role("ratedPower", "550.0", "W", sysml_ir::BudgetRole::Power), role("mass", "1.95", "kg", sysml_ir::BudgetRole::Mass), attr("maxNoiseDb", "79.0"), attr("ratedPowerW", "9.0")],
             ..Default::default()
         }));
         pkg.members.push(PackageMember::PartDef(PartDef {
@@ -508,7 +736,13 @@ mod tests {
 
         let model = Model::new(vec![pkg]);
         let rep = run_trade_study(&model, &BudgetLimits::default());
+        assert_eq!(rep.status, TradeStudyStatus::Ok);
         assert_eq!(rep.variation_count, 2);
+        assert_eq!(rep.constraints.len(), 1);
+        assert_eq!(rep.constraints[0].metric, "runtime_s");
+        assert_eq!(rep.unevaluated.len(), 1);
+        // Untagged attributes without a unit are not candidates; nothing untracked here.
+        assert!(rep.untracked.is_empty(), "{:?}", rep.untracked);
         assert_eq!(rep.total_combinations, 4);
         // Only Pro5Ah + Drill (324000 / 550 = 589.1s >= 300s) is feasible!
         // Compact2Ah + Drill = 235.6s < 300s; Pro5Ah + Saw = 294.5s < 300s; Compact2Ah + Saw = 117.8s < 300s
@@ -523,5 +757,35 @@ mod tests {
         assert!(!wi.top_drivers.is_empty());
         assert_eq!(wi.top_drivers[0].element, "Saw");
         assert_eq!(wi.top_drivers[0].attribute, "ratedPower");
+    }
+}
+
+#[cfg(test)]
+mod status_tests {
+    use super::*;
+    use sysml_ir::{Package, PartDef};
+
+    #[test]
+    fn no_variations_is_not_applicable() {
+        let model = Model::new(vec![Package {
+            name: "Flat".into(),
+            members: vec![PackageMember::PartDef(PartDef {
+                name: "Heater".into(),
+                attributes: vec![AttributeUsage {
+                    name: Some("ratedPowerW".into()),
+                    value: Some("2000.0".into()),
+                    unit: Some("W".into()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })],
+            ..Default::default()
+        }]);
+        let r = run_trade_study(&model, &BudgetLimits::default());
+        assert_eq!(r.status, TradeStudyStatus::NotApplicable);
+        assert!(r.points.is_empty());
+        let json = serde_json::to_value(&r).unwrap();
+        assert_eq!(json["status"], "not_applicable");
+        assert!(json["untracked"].is_array());
     }
 }

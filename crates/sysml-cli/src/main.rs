@@ -371,7 +371,7 @@ enum Commands {
         #[arg(long)]
         max_cost_usd: Option<f64>,
 
-        /// Exit with non-zero code if any specified budget limit is exceeded.
+        /// Exit 1 unless `ok`: every domain with a limit must be `pass` (`fail` or `incomplete` exit 1).
         #[arg(long)]
         strict: bool,
     },
@@ -444,7 +444,8 @@ enum Commands {
         #[arg(long)]
         max_power_w: Option<f64>,
 
-        /// Candidate maximum noise [dB].
+        /// Candidate maximum noise [dB]. Design points carry no structural noise metric yet
+        /// (C3): the bound is listed under `unevaluated` and never decides feasibility.
         #[arg(long)]
         max_noise_db: Option<f64>,
 
@@ -456,7 +457,7 @@ enum Commands {
         #[arg(long, value_enum, default_value = "json")]
         format: LintFormat,
 
-        /// Exit with non-zero code if the requirement set is refuted (UNSAT).
+        /// Exit with non-zero code if the requirement set is refuted (UNSAT; `not_applicable` exits 0).
         #[arg(long)]
         strict: bool,
     },
@@ -944,7 +945,7 @@ fn cmd_refute(
         LintFormat::Markdown => print!("{}", render_refute_markdown(&report)),
         LintFormat::Json => print_json(&report, pretty),
     }
-    if strict && !report.feasible {
+    if strict && report.status == sysml_emit::RefuteStatus::Refuted {
         ExitCode::FAILURE
     } else {
         ExitCode::SUCCESS

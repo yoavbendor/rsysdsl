@@ -486,11 +486,13 @@ pub mod power_tools_family_model {
     #[sysml::connect(interface = ThermalLink, name = "motorToTempSensor", from = motor.heat_out, to = temp_sensor.thermal_sense)]
     #[derive(Debug, Clone, Copy)]
     pub struct CordlessToolBase {
-        #[sysml::attr(default = 500.0, unit = "W")]
+        /// Tool rated power: the power budget role, inherited by every `:>> ratedPower`.
+        #[sysml::attr(budget = "power", default = 500.0, unit = "W")]
         pub rated_power: Quantity<f64>,
         #[sysml::attr(dimensionless, default = 85.0)]
         pub max_noise_db: f64,
-        #[sysml::attr(default = 1.80, unit = "kg")]
+        /// Complete tool mass: the mass budget role, inherited by every `:>> mass`.
+        #[sysml::attr(budget = "mass", default = 1.80, unit = "kg")]
         pub mass: Quantity<f64>,
         #[sysml::port]
         pub user_in: Conjugated<HmiInputPort>,
