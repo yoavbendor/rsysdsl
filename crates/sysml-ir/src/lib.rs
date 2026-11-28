@@ -9,10 +9,15 @@
 
 pub mod ir;
 pub mod quantity;
+pub mod swhw;
 pub mod traits;
 pub mod verify;
 
 pub use ir::*;
 pub use quantity::Quantity;
+pub use swhw::{
+    BusChannel, BusFaultMode, ComputeNode, SwAllocation, SwConnection, SwHwSystem, SwPartition,
+    SwPort, SwPortDirection, SwRequirement, SwTask,
+};
 pub use traits::*;
 pub use verify::*;
