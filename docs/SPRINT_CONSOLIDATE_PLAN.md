@@ -59,5 +59,5 @@ Order: C1 ∥ C1-T → C2 → C3 → C4 ∥ C5 → T5. C1-T runs in parallel wit
 - Haiku gets tasks with a fixed contract, exact files, and a worked example; Opus gets design-bearing work. Every delegated task: commit per item, push, `cargo test --workspace` green, never force-push.
 - Trial agents follow the canonical trial rules in `HAIKU_TRIAL.md` (incl. own-directory-only).
 
-## Open question for the owner (T5)
-Which corpus? It must be shareable in this repo or fetchable by script (like `scripts/fetch-px4-corpus.sh`), contain at least one real PDF table, one block diagram, and at least one requirement conflict.
+## T5 corpus (decided)
+The owner chose the **PX4 + Pixhawk 6X corpus**, pinned to commit SHAs. Protocol, contamination controls, prerequisites and grading: [`trials/T5_PROTOCOL.md`](trials/T5_PROTOCOL.md). Note: docmem lives in the separate `yoavbendor/cppognee` repo and the current driver script embeds a hand-written alias table, which T5 forbids.
