@@ -2,11 +2,30 @@
 # Fetches the pinned 16-document PX4 + Pixhawk 6X (FMUv6X) brownfield corpus
 # across 4 same-type batches into target/px4_corpus/ with a SHA-256 manifest.
 #
-# Requires: gh CLI (authenticated) and python3 (with pypdf for PDF text extraction).
+# Default route: curl over raw.githubusercontent.com at the pinned commits below
+#   (no GitHub API, no auth). Override a pin with PX4_USER_GUIDE_SHA or
+#   PIXHAWK_STANDARDS_SHA.
+# Opt-in route: FETCH_VIA_GH_API=1 resolves each download URL with `gh api`
+#   (default branch, authenticated gh required).
+#
+# Requires: curl, python3 (with pypdf for PDF text extraction).
+# gh is needed only for the FETCH_VIA_GH_API=1 route.
 set -euo pipefail
+
+PX4_USER_GUIDE_SHA="${PX4_USER_GUIDE_SHA:-2fa62338099f18fc3092197e856615eca94d2975}"
+PIXHAWK_STANDARDS_SHA="${PIXHAWK_STANDARDS_SHA:-a97a915bfb6e20d6c8a41a86c5673350a3e51ceb}"
+FETCH_VIA_GH_API="${FETCH_VIA_GH_API:-0}"
 
 OUT_DIR="${1:-target/px4_corpus}"
 mkdir -p "$OUT_DIR/batch_1_hardware" "$OUT_DIR/batch_2_sw_arch" "$OUT_DIR/batch_3_comms" "$OUT_DIR/batch_4_ai_safety"
+
+sha_for_repo() {
+  case "$1" in
+    PX4/PX4-user_guide) echo "$PX4_USER_GUIDE_SHA" ;;
+    pixhawk/Pixhawk-Standards) echo "$PIXHAWK_STANDARDS_SHA" ;;
+    *) echo "unknown repo: $1" >&2; return 1 ;;
+  esac
+}
 
 fetch_raw() {
   local repo="$1"
@@ -14,7 +33,11 @@ fetch_raw() {
   local dest="$3"
   local enc_path url
   enc_path="$(python3 -c "import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1]))" "$path")"
-  url="$(gh api "repos/${repo}/contents/${enc_path}" --jq '.download_url')"
+  if [ "$FETCH_VIA_GH_API" = "1" ]; then
+    url="$(gh api "repos/${repo}/contents/${enc_path}" --jq '.download_url')"
+  else
+    url="https://raw.githubusercontent.com/${repo}/$(sha_for_repo "$repo")/${enc_path}"
+  fi
   curl -fsSL "$url" -o "$dest"
 }
 
@@ -43,8 +66,11 @@ fetch_raw "PX4/PX4-user_guide" "en/computer_vision/path_planning_interface.md" "
 fetch_raw "PX4/PX4-user_guide" "en/concept/pwm_limit.md" "$OUT_DIR/batch_4_ai_safety/pwm_limit.md"
 
 echo "[Extract] Converting PDF standards to plain text..." >&2
+PX4_USER_GUIDE_SHA="$PX4_USER_GUIDE_SHA" \
+PIXHAWK_STANDARDS_SHA="$PIXHAWK_STANDARDS_SHA" \
+FETCH_ROUTE="$([ "$FETCH_VIA_GH_API" = "1" ] && echo gh-api || echo raw-pinned)" \
 python3 - "$OUT_DIR" << 'PY'
-import hashlib, json, pathlib, sys
+import hashlib, json, os, pathlib, sys
 from pypdf import PdfReader
 
 out_dir = pathlib.Path(sys.argv[1])
@@ -71,7 +97,17 @@ for p in sorted(out_dir.rglob("*")):
         })
 
 (out_dir / "manifest.json").write_text(
-    json.dumps({"docs": len(manifest), "total_bytes": total_bytes, "approx_total_tokens": total_bytes // 4, "files": manifest}, indent=2),
+    json.dumps({
+        "docs": len(manifest),
+        "total_bytes": total_bytes,
+        "approx_total_tokens": total_bytes // 4,
+        "sources": {
+            "PX4/PX4-user_guide": os.environ["PX4_USER_GUIDE_SHA"],
+            "pixhawk/Pixhawk-Standards": os.environ["PIXHAWK_STANDARDS_SHA"],
+        },
+        "fetch_route": os.environ["FETCH_ROUTE"],
+        "files": manifest,
+    }, indent=2),
     encoding="utf-8",
 )
 print(f"Frozen {len(manifest)} text/md docs: {total_bytes:,} bytes (~{total_bytes // 4:,} tokens)")
