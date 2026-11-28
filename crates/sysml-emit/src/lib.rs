@@ -10,6 +10,7 @@ pub mod evidence;
 pub mod ir_validate;
 pub mod lint;
 pub mod reconcile;
+pub mod refactor;
 pub mod refute;
 pub mod resolve;
 pub mod safety_report;
@@ -39,6 +40,10 @@ pub use ir_validate::{
 pub use reconcile::{
     reconcile_model, render_reconcile_markdown, KgConflict, KgEntity, KgExport, ReconcileFinding,
     ReconcileReport, ReconcileSeverity, ReconcileSummary,
+};
+pub use refactor::{
+    elevate_model, render_elevate_markdown, slice_model, ElevateProposal, ElevateReport,
+    ModelAspect,
 };
 pub use refute::{
     refute_requirements, render_refute_markdown, ActiveConstraint, RefuteLimits, RefuteReport,
